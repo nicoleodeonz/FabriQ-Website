@@ -1,4 +1,6 @@
-const API_BASE = '/api/inventory';
+import { buildApiUrl } from './apiConfig';
+
+const API_BASE = buildApiUrl('/inventory');
 export const INVENTORY_UPDATED_EVENT = 'inventory:updated';
 
 export interface InventoryItem {

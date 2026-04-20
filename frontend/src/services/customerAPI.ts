@@ -1,7 +1,7 @@
 import type { FavoriteGown } from '../App';
+import { API_BASE_URL } from './apiConfig';
 
 // API service for customer profile operations
-const API_BASE_URL = '/api';
 
 export interface CustomerProfileResponse {
   id?: string;

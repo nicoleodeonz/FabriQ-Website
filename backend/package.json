@@ -1,5 +1,5 @@
 {
-  "name": "fabriQ-backend",
+  "name": "fabriq-backend",
   "version": "1.0.0",
   "description": "FabriQ Backend Server",
   "main": "server.js",

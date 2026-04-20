@@ -31,9 +31,12 @@ async function ensureCustomerPhoneNumberIndex() {
 
 export const connectDB = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/FabriQ', {
+    await mongoose.connect(
+      process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/FabriQ',
+      {
       dbName: process.env.MONGODB_DB_NAME || 'FabriQ'
-    });
+      }
+    );
     await ensureCustomerPhoneNumberIndex();
     console.log(`MongoDB connected successfully (${mongoose.connection.name})`);
   } catch (error) {

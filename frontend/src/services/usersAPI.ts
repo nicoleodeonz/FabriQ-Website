@@ -1,4 +1,6 @@
-const API_BASE = '/api/users';
+import { buildApiUrl } from './apiConfig';
+
+const API_BASE = buildApiUrl('/users');
 
 export type ManagedUserRole = 'Admin' | 'Staff' | 'Customer';
 

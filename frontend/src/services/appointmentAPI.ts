@@ -1,4 +1,4 @@
-const API_BASE_URL = '/api';
+import { API_BASE_URL } from './apiConfig';
 
 async function parseJsonSafe(response: Response): Promise<any | null> {
   const raw = await response.text();

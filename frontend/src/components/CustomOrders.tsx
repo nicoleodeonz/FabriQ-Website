@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, Ruler, ChevronRight, CheckCircle2, Calendar, X } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { customerAPI } from '../services/customerAPI';
+import { buildApiUrl } from '../services/apiConfig';
 import { toast } from 'sonner';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 
@@ -153,7 +154,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
       const imageData = new FormData();
       imageData.append('image', formData.designImage);
       try {
-        const res = await fetch('/api/custom-orders/upload-image', {
+        const res = await fetch(buildApiUrl('/custom-orders/upload-image'), {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
           body: imageData,

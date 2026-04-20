@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { loadEnvironment } from './config/loadEnv.js';
@@ -18,16 +17,23 @@ loadEnvironment();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 5000;
-const frontendBuildDir = path.resolve(__dirname, '../frontend/build');
-const frontendIndexPath = path.join(frontendBuildDir, 'index.html');
-const hasFrontendBuild = fs.existsSync(frontendIndexPath);
 
 // Parse CORS origins from environment variable
-const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://[::1]:3000,http://[::1]:3001').split(',').map(origin => origin.trim());
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://[::1]:3000,http://[::1]:3001')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 // Middleware
 app.use(cors({
-  origin: corsOrigins,
+  origin(origin, callback) {
+    if (!origin || corsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Origin ${origin} is not allowed by CORS`));
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -50,18 +56,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'Server is running' });
 });
 
-if (hasFrontendBuild) {
-  app.use(express.static(frontendBuildDir));
-
-  app.get(/^(?!\/api|\/uploads).*/, (req, res) => {
-    res.sendFile(frontendIndexPath);
-  });
-} else {
-  // Keep a plain root response available when the frontend build is not present.
-  app.get('/', (req, res) => {
-    res.send('FabriQ backend is running');
-  });
-}
+app.get('/', (req, res) => {
+  res.send('FabriQ backend is running');
+});
 
 // Start server
 app.listen(PORT, () => {
