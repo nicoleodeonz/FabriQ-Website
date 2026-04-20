@@ -16,7 +16,7 @@ const ProductDetailSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress']
+    trim: true
   },
   color: {
     type: String,

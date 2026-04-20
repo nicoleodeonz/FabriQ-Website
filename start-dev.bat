@@ -48,7 +48,7 @@ timeout /t 3 /nobreak
 REM Start Frontend
 echo.
 echo ============================================
-echo Starting Frontend Server (port 5173)...
+echo Starting Frontend Server (port 3000)...
 echo ============================================
 cd ..\FabriQ
 if not exist "node_modules" (
@@ -62,7 +62,7 @@ echo ============================================
 echo Development Environment Started!
 echo ============================================
 echo.
-echo Frontend: http://localhost:5173
+echo Frontend: http://localhost:3000
 echo Backend:  http://localhost:5000
 echo.
 echo NOTE:

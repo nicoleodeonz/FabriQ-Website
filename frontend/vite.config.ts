@@ -6,13 +6,13 @@
   export default defineConfig({
     plugins: [react()],
     server: {
-      port: 3001,
+      port: 3000,
       open: true,
       hmr: {
         protocol: 'ws',
         host: 'localhost',
-        port: 3001,
-        clientPort: 3001,
+        port: 3000,
+        clientPort: 3000,
       },
       proxy: {
         '/api': {

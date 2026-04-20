@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
 import AdminAccount from '../models/Admin.js';
 import CustomerAccount from '../models/Customer.js';
+import StaffAccount from '../models/Staff.js';
+import { isElevatedRole } from '../utils/roles.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
 
@@ -18,6 +20,9 @@ export const authenticate = async (req, res, next) => {
     let user;
     if (role === 'admin') {
       user = await AdminAccount.findById(id);
+      if (user) user = user.toObject();
+    } else if (role === 'staff') {
+      user = await StaffAccount.findById(id);
       if (user) user = user.toObject();
     } else {
       user = await CustomerAccount.findById(id);
@@ -41,7 +46,7 @@ export const authenticate = async (req, res, next) => {
     // Ensure basic auth info is present
     user.id = id;
     user.email = email;
-    user.role = role;
+    user.role = isElevatedRole(role) ? role : 'customer';
 
     req.user = user;
     next();

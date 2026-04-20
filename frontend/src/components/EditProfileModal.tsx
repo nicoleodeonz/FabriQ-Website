@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import {
   BarangayOption,
@@ -6,6 +6,7 @@ import {
   RegionOption,
   phAddressAPI,
 } from '../services/phAddressAPI';
+import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 
 interface EditProfileModalProps {
   isOpen: boolean;
@@ -71,6 +72,14 @@ export function EditProfileModal({
   onSave,
   isLoading = false,
 }: EditProfileModalProps) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const customerFirstName = customerData.firstName || '';
+  const customerLastName = customerData.lastName || '';
+  const customerEmail = customerData.email || '';
+  const customerPhoneNumber = customerData.phoneNumber || '';
+  const customerAddress = customerData.address || '';
+  const customerPreferredBranch = customerData.preferredBranch || '';
+
   const [formData, setFormData] = useState(customerData);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -115,9 +124,17 @@ export function EditProfileModal({
       setError('');
       setFieldErrors({});
 
-      const normalized = { ...customerData } as any;
-      if (customerData.phoneNumber) {
-        let digits = String(customerData.phoneNumber).replace(/\D/g, '');
+      const normalized = {
+        firstName: customerFirstName,
+        lastName: customerLastName,
+        email: customerEmail,
+        phoneNumber: customerPhoneNumber,
+        address: customerAddress,
+        preferredBranch: customerPreferredBranch,
+      } as EditProfileModalProps['customerData'];
+
+      if (customerPhoneNumber) {
+        let digits = String(customerPhoneNumber).replace(/\D/g, '');
         if (digits.startsWith('63')) digits = digits.slice(2);
         if (digits.startsWith('0')) digits = digits.slice(1);
         normalized.phoneNumber = digits.length === 10 ? digits : '';
@@ -125,7 +142,7 @@ export function EditProfileModal({
 
       setFormData(normalized);
 
-      const parsedAddress = parseAddress(customerData.address || '');
+      const parsedAddress = parseAddress(customerAddress);
       setStreetAddress(parsedAddress.street);
       setSelectedRegionCode('');
       setSelectedCityCode('');
@@ -184,7 +201,15 @@ export function EditProfileModal({
     return () => {
       isCancelled = true;
     };
-  }, [customerData, isOpen]);
+  }, [
+    customerAddress,
+    customerEmail,
+    customerFirstName,
+    customerLastName,
+    customerPhoneNumber,
+    customerPreferredBranch,
+    isOpen,
+  ]);
 
   useEffect(() => {
     setFormData((prev) => ({
@@ -390,11 +415,13 @@ export function EditProfileModal({
     };
   }, [isConfirmOpen]);
 
+  useModalInteractionLock(isOpen, modalRef);
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto mx-4 relative">
+      <div ref={modalRef} tabIndex={-1} className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto mx-4 relative">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-light">Edit Profile</h2>
           <button

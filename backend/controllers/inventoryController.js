@@ -1,5 +1,9 @@
 import ProductDetail from '../models/ProductDetail.js';
 import AdminAction from '../models/AdminAction.js';
+import RentalDetail from '../models/RentalDetail.js';
+import { toPublicUrl } from '../utils/media.js';
+import { isElevatedRole } from '../utils/roles.js';
+import { storeUploadedImage } from '../services/mediaStorageService.js';
 
 const LOW_STOCK_THRESHOLD = 2;
 
@@ -26,6 +30,25 @@ async function logAdminAction(req, payload) {
   } catch (error) {
     console.error('inventory logAdminAction error:', error);
   }
+}
+
+function normalizeProductResponse(req, product) {
+  if (!product) {
+    return product;
+  }
+
+  const plainProduct = typeof product.toJSON === 'function' ? product.toJSON() : { ...product };
+
+  if (plainProduct._id && !plainProduct.id) {
+    plainProduct.id = plainProduct._id;
+  }
+
+  delete plainProduct._id;
+  delete plainProduct.__v;
+
+  plainProduct.image = toPublicUrl(req, plainProduct.image);
+
+  return plainProduct;
 }
 
 function computeBranchPerformance(items, branchName) {
@@ -57,6 +80,67 @@ function computeBranchPerformance(items, branchName) {
   };
 }
 
+async function releaseStaleReservedProducts() {
+  const productIdsWithActiveRentals = await RentalDetail.distinct('productId', {
+    status: { $nin: ['cancelled', 'completed'] }
+  });
+
+  const activeCounts = await RentalDetail.aggregate([
+    {
+      $match: {
+        status: { $nin: ['cancelled', 'completed'] }
+      }
+    },
+    {
+      $group: {
+        _id: '$productId',
+        count: { $sum: 1 }
+      }
+    }
+  ]);
+
+  const activeCountByProductId = new Map(
+    activeCounts.map((row) => [String(row._id), Number(row.count || 0)])
+  );
+
+  await ProductDetail.updateMany(
+    {
+      status: 'reserved',
+      _id: { $nin: productIdsWithActiveRentals }
+    },
+    { $set: { status: 'available' } }
+  );
+
+  // Keep product status aligned with actual capacity: available while active rentals are below stock.
+  const potentiallyStaleProducts = await ProductDetail.find({
+    status: { $in: ['reserved', 'rented'] },
+    _id: { $in: productIdsWithActiveRentals }
+  }).select('_id status stock').lean();
+
+  const bulkUpdates = potentiallyStaleProducts
+    .map((product) => {
+      const activeCount = activeCountByProductId.get(String(product._id)) || 0;
+      const stock = Math.max(0, Number(product.stock || 0));
+      const nextStatus = stock > 0 && activeCount < stock ? 'available' : 'rented';
+
+      if (nextStatus === product.status) {
+        return null;
+      }
+
+      return {
+        updateOne: {
+          filter: { _id: product._id },
+          update: { $set: { status: nextStatus, updatedAt: new Date() } }
+        }
+      };
+    })
+    .filter(Boolean);
+
+  if (bulkUpdates.length > 0) {
+    await ProductDetail.bulkWrite(bulkUpdates);
+  }
+}
+
 // Generate next SKU like G001, G002, ...
 async function generateSKU() {
   const products = await ProductDetail.find({ sku: /^G\d+$/ }, { sku: 1 }).lean();
@@ -80,14 +164,15 @@ async function generateSKU() {
 
 export async function uploadImage(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
     }
-    const imageUrl = `/uploads/${req.file.filename}`;
-    res.json({ url: imageUrl });
+
+    const storedImage = await storeUploadedImage(req.file, { folder: 'products' });
+    res.json({ url: toPublicUrl(req, storedImage.url) });
   } catch (err) {
     console.error('uploadImage error:', err);
     res.status(500).json({ message: 'Failed to upload image' });
@@ -96,14 +181,16 @@ export async function uploadImage(req, res) {
 
 export async function getInventory(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
+
+    await releaseStaleReservedProducts();
+
     const items = await ProductDetail.find({ status: { $ne: 'archived' } })
       .sort({ createdAt: -1 })
       .lean();
-    // lean() skips toJSON transform, so map manually
-    const mapped = items.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+    const mapped = items.map((item) => normalizeProductResponse(req, item));
     res.json({ items: mapped });
   } catch (err) {
     console.error('getInventory error:', err);
@@ -113,10 +200,12 @@ export async function getInventory(req, res) {
 
 export async function getPublicInventory(req, res) {
   try {
+    await releaseStaleReservedProducts();
+
     const items = await ProductDetail.find({ status: { $ne: 'archived' } })
       .sort({ createdAt: -1 })
       .lean();
-    const mapped = items.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+    const mapped = items.map((item) => normalizeProductResponse(req, item));
     res.json({ items: mapped });
   } catch (err) {
     console.error('getPublicInventory error:', err);
@@ -126,13 +215,13 @@ export async function getPublicInventory(req, res) {
 
 export async function getArchivedProducts(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
     const items = await ProductDetail.find({ status: 'archived' })
       .sort({ deletedAt: -1, updatedAt: -1 })
       .lean();
-    const mapped = items.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+    const mapped = items.map((item) => normalizeProductResponse(req, item));
     res.json({ items: mapped });
   } catch (err) {
     console.error('getArchivedProducts error:', err);
@@ -142,7 +231,7 @@ export async function getArchivedProducts(req, res) {
 
 export async function getBranchInventory(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -157,7 +246,7 @@ export async function getBranchInventory(req, res) {
       branch: branchName
     }).sort({ createdAt: -1 }).lean();
 
-    const mappedItems = items.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+    const mappedItems = items.map((item) => normalizeProductResponse(req, item));
     const stats = computeBranchPerformance(mappedItems, branchName);
 
     res.json({
@@ -173,14 +262,14 @@ export async function getBranchInventory(req, res) {
 
 export async function getBranchPerformance(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
     const items = await ProductDetail.find({ status: { $ne: 'archived' } })
       .sort({ createdAt: -1 })
       .lean();
-    const mappedItems = items.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+    const mappedItems = items.map((item) => normalizeProductResponse(req, item));
 
     const grouped = new Map();
     for (const item of mappedItems) {
@@ -220,7 +309,7 @@ export async function getBranchPerformance(req, res) {
 
 export async function createProduct(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
     const { name, category, color, size, price, branch, status, lastRented,
@@ -237,7 +326,7 @@ export async function createProduct(req, res) {
     const product = new ProductDetail({
       sku,
       name: name.trim(),
-      category,
+      category: category.trim(),
       color: color.trim(),
       size: Array.isArray(size) ? size : [],
       price,
@@ -251,7 +340,23 @@ export async function createProduct(req, res) {
       deletedAt: null
     });
     await product.save();
-    const obj = product.toJSON();
+
+    await logAdminAction(req, {
+      action: 'inventory_created',
+      targetUserId: `${product.name || 'Unnamed Gown'} (${product.sku || 'NO-SKU'})`,
+      targetRole: 'Inventory',
+      details: {
+        gownName: product.name || '',
+        sku: product.sku || '',
+        branch: product.branch || '',
+        category: product.category || '',
+        status: product.status || '',
+        stock: Number(product.stock || 0),
+        price: Number(product.price || 0)
+      }
+    });
+
+    const obj = normalizeProductResponse(req, product);
     res.status(201).json({ item: obj });
   } catch (err) {
     console.error('createProduct error:', err);
@@ -264,7 +369,7 @@ export async function createProduct(req, res) {
 
 export async function updateProduct(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
     const { id } = req.params;
@@ -277,7 +382,7 @@ export async function updateProduct(req, res) {
 
     const updates = {};
     if (name !== undefined) updates.name = name.trim();
-    if (category !== undefined) updates.category = category;
+    if (category !== undefined) updates.category = category.trim();
     if (color !== undefined) updates.color = color.trim();
     if (size !== undefined) updates.size = Array.isArray(size) ? size : [];
     if (price !== undefined) updates.price = price;
@@ -300,7 +405,23 @@ export async function updateProduct(req, res) {
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
-    res.json({ item: product.toJSON() });
+
+    await logAdminAction(req, {
+      action: 'inventory_updated',
+      targetUserId: `${product.name || 'Unnamed Gown'} (${product.sku || 'NO-SKU'})`,
+      targetRole: 'Inventory',
+      details: {
+        gownName: product.name || '',
+        sku: product.sku || '',
+        branch: product.branch || '',
+        category: product.category || '',
+        status: product.status || '',
+        stock: Number(product.stock || 0),
+        price: Number(product.price || 0)
+      }
+    });
+
+    res.json({ item: normalizeProductResponse(req, product) });
   } catch (err) {
     console.error('updateProduct error:', err);
     if (err.name === 'ValidationError') {
@@ -312,7 +433,7 @@ export async function updateProduct(req, res) {
 
 export async function deleteProduct(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
     const { id } = req.params;
@@ -356,7 +477,7 @@ export async function deleteProduct(req, res) {
 
 export async function restoreProduct(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -396,7 +517,7 @@ export async function restoreProduct(req, res) {
       }
     });
 
-    res.json({ item: product.toJSON(), message: 'Product restored successfully' });
+    res.json({ item: normalizeProductResponse(req, product), message: 'Product restored successfully' });
   } catch (err) {
     console.error('restoreProduct error:', err);
     res.status(500).json({ message: 'Failed to restore product' });

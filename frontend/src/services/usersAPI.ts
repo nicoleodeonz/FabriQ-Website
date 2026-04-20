@@ -1,12 +1,14 @@
 const API_BASE = '/api/users';
 
+export type ManagedUserRole = 'Admin' | 'Staff' | 'Customer';
+
 export interface ManagedUser {
   id: string;
   firstName: string;
   lastName: string;
   email: string;
   phoneNumber: string;
-  role: 'Admin' | 'Customer';
+  role: ManagedUserRole;
   status: 'active' | 'archived';
   createdAt?: string;
   updatedAt?: string;
@@ -16,14 +18,14 @@ interface ArchiveUserResponse {
   message: string;
   user: {
     id: string;
-    role: 'Admin' | 'Customer';
+    role: ManagedUserRole;
     status: 'active' | 'archived';
     updatedAt?: string;
   };
 }
 
 export interface CreateManagedUserPayload {
-  role: 'Admin' | 'Customer';
+  role: ManagedUserRole;
   email: string;
   password: string;
   firstName?: string;
@@ -74,13 +76,13 @@ export async function getUsers(token: string): Promise<ManagedUser[]> {
   return data.users;
 }
 
-export async function archiveUser(token: string, role: 'Admin' | 'Customer', id: string): Promise<ArchiveUserResponse> {
+export async function archiveUser(token: string, role: ManagedUserRole, id: string): Promise<ArchiveUserResponse> {
   return request<ArchiveUserResponse>(`${API_BASE}/${role.toLowerCase()}/${id}/archive`, token, {
     method: 'PATCH'
   });
 }
 
-export async function restoreUser(token: string, role: 'Admin' | 'Customer', id: string): Promise<ArchiveUserResponse> {
+export async function restoreUser(token: string, role: ManagedUserRole, id: string): Promise<ArchiveUserResponse> {
   return request<ArchiveUserResponse>(`${API_BASE}/${role.toLowerCase()}/${id}/restore`, token, {
     method: 'PATCH'
   });

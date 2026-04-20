@@ -1,5 +1,20 @@
+import type { FavoriteGown } from '../App';
+
 // API service for customer profile operations
 const API_BASE_URL = '/api';
+
+export interface CustomerProfileResponse {
+  id?: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phoneNumber?: string;
+  phoneVerified?: boolean;
+  phoneVerifiedAt?: string | null;
+  address?: string;
+  preferredBranch?: string;
+  favoriteGowns?: FavoriteGown[];
+}
 
 export const customerAPI = {
   // Get customer profile (authenticated)
@@ -10,7 +25,7 @@ export const customerAPI = {
       }
     });
     if (!response.ok) throw new Error('Failed to fetch customer');
-    return response.json();
+    return response.json() as Promise<CustomerProfileResponse>;
   },
 
   // Update customer profile (authenticated)
@@ -45,7 +60,77 @@ export const customerAPI = {
       throw new Error(message);
     }
 
-    return response.json();
+    return response.json() as Promise<CustomerProfileResponse>;
+  },
+
+  updateFavoriteGowns: async (token: string, favoriteGowns: FavoriteGown[]) => {
+    const response = await fetch(`${API_BASE_URL}/customers/favorites`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ favoriteGowns }),
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to save favorites';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {
+        // Keep default message if response body is not JSON.
+      }
+      throw new Error(message);
+    }
+
+    return response.json() as Promise<{ favoriteGowns: FavoriteGown[] }>;
+  },
+
+  sendPhoneVerificationCode: async (token: string) => {
+    const response = await fetch(`${API_BASE_URL}/customers/phone-verification/send`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to send verification code';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {
+        // Keep default message if response body is not JSON.
+      }
+      throw new Error(message);
+    }
+
+    return response.json() as Promise<{ message: string; phoneNumber: string }>;
+  },
+
+  verifyPhoneVerificationCode: async (token: string, code: string) => {
+    const response = await fetch(`${API_BASE_URL}/customers/phone-verification/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ code }),
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to verify phone number';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {
+        // Keep default message if response body is not JSON.
+      }
+      throw new Error(message);
+    }
+
+    return response.json() as Promise<{ message: string; customer: CustomerProfileResponse }>;
   },
 
   getMeasurements: async (token: string) => {
@@ -87,6 +172,47 @@ export const customerAPI = {
       }
       throw new Error(message);
     }
+    return response.json();
+  },
+
+  // Create a new custom order (bespoke)
+  createCustomOrder: async (token: string, data: {
+    orderType: string;
+    eventDate: string;
+    preferredColors?: string;
+    fabricPreference?: string;
+    specialRequests?: string;
+    budget?: string;
+    branch?: string;
+    designImageUrl?: string;
+  }) => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(data)
+    });
+    if (!response.ok) {
+      let message = 'Failed to create custom order';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {}
+      throw new Error(message);
+    }
+    return response.json();
+  },
+
+  // Get all custom orders for the authenticated customer
+  getMyCustomOrders: async (token: string) => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders/my-orders`, {
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    if (!response.ok) throw new Error('Failed to fetch custom orders');
     return response.json();
   }
 };

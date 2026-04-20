@@ -1,5 +1,25 @@
 import mongoose from 'mongoose';
 
+const FavoriteGownSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    category: { type: String, default: '' },
+    color: { type: String, default: '' },
+    size: { type: [String], default: [] },
+    price: { type: Number, default: 0 },
+    status: {
+      type: String,
+      enum: ['available', 'rented', 'reserved'],
+      default: 'available',
+    },
+    branch: { type: String, default: '' },
+    image: { type: String, default: '' },
+    rating: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const CustomerDetailSchema = new mongoose.Schema({
   firstName: {
     type: String,
@@ -11,13 +31,21 @@ const CustomerDetailSchema = new mongoose.Schema({
   },
   phoneNumber: {
     type: String,
-    required: true,
+    required: false,
     validate: {
       validator: function(v) {
-        return /^\+63\d{10}$/.test(v);
+        return !v || /^\+63\d{10}$/.test(v);
       },
       message: props => `${props.value} is not a valid phone number. Expected format: +63XXXXXXXXXX`
     }
+  },
+  phoneVerified: {
+    type: Boolean,
+    default: false,
+  },
+  phoneVerifiedAt: {
+    type: Date,
+    default: null,
   },
   address: {
     type: String,
@@ -35,6 +63,10 @@ const CustomerDetailSchema = new mongoose.Schema({
   height: { type: Number, default: null },
   shoulderWidth: { type: Number, default: null },
   sleeveLength: { type: Number, default: null },
+  favoriteGowns: {
+    type: [FavoriteGownSchema],
+    default: [],
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

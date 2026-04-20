@@ -1,6 +1,13 @@
 import AdminAccount from '../models/Admin.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
+import StaffAccount from '../models/Staff.js';
+import {
+  getElevatedAccountModel,
+  isElevatedRole,
+  normalizeManagedRole,
+  toManagedRoleLabel
+} from '../utils/roles.js';
 
 function normalizePhone(input) {
   if (!input && input !== '') return undefined;
@@ -20,6 +27,20 @@ function buildAdminName(email) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(' ') || 'Admin';
+}
+
+function buildElevatedDisplayName(account, role, fallbackEmail = '') {
+  const firstName = String(account?.firstName || '').trim();
+  const lastName = String(account?.lastName || '').trim();
+  const fallbackFirstName = buildAdminName(account?.email || fallbackEmail);
+  const fallbackLastName = String(role || '').toLowerCase() === 'staff' ? 'Staff' : 'Admin';
+  const fullName = `${firstName || fallbackFirstName} ${lastName || ''}`.trim();
+
+  if (fullName) {
+    return fullName;
+  }
+
+  return `${fallbackFirstName} ${fallbackLastName}`.trim();
 }
 
 function normalizeEmail(email) {
@@ -44,8 +65,12 @@ async function logAdminAction(req, payload) {
 
 export async function createUser(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
+    }
+
+    if (String(req.user.role || '').trim().toLowerCase() !== 'admin') {
+      return res.status(403).json({ message: 'Only admin accounts can create users' });
     }
 
     const {
@@ -57,9 +82,9 @@ export async function createUser(req, res) {
       phoneNumber
     } = req.body;
 
-    const normalizedRole = String(role || '').toLowerCase();
-    if (!['admin', 'customer'].includes(normalizedRole)) {
-      return res.status(400).json({ message: 'Role must be admin or customer' });
+    const normalizedRole = normalizeManagedRole(role);
+    if (!normalizedRole) {
+      return res.status(400).json({ message: 'Role must be admin, staff, or customer' });
     }
 
     const normalizedEmail = normalizeEmail(email);
@@ -71,44 +96,57 @@ export async function createUser(req, res) {
       return res.status(400).json({ message: 'Password must be at least 8 characters long' });
     }
 
-    const [existingAdmin, existingCustomer] = await Promise.all([
+    const normalizedFirstName = String(firstName || '').trim();
+    const normalizedLastName = String(lastName || '').trim();
+
+    if (!normalizedFirstName || !normalizedLastName) {
+      return res.status(400).json({ message: 'First name and last name are required' });
+    }
+
+    const [existingAdmin, existingStaff, existingCustomer] = await Promise.all([
       AdminAccount.findOne({ email: normalizedEmail }).lean(),
+      StaffAccount.findOne({ email: normalizedEmail }).lean(),
       CustomerAccount.findOne({ email: normalizedEmail }).lean()
     ]);
 
-    if (existingAdmin || existingCustomer) {
+    if (existingAdmin || existingStaff || existingCustomer) {
       return res.status(409).json({ message: 'Email is already registered' });
     }
 
-    if (normalizedRole === 'admin') {
-      const admin = await AdminAccount.create({
+    if (isElevatedRole(normalizedRole)) {
+      const Model = getElevatedAccountModel(normalizedRole);
+      const elevatedAccount = await Model.create({
+        firstName: normalizedFirstName,
+        lastName: normalizedLastName,
         email: normalizedEmail,
         password,
         status: 'active'
       });
 
+      const roleLabel = toManagedRoleLabel(normalizedRole);
+
       await logAdminAction(req, {
         action: 'user_created',
-        targetUserId: String(admin._id),
-        targetRole: 'Admin',
+        targetUserId: String(elevatedAccount._id),
+        targetRole: roleLabel,
         details: {
-          createdRole: 'Admin',
-          email: admin.email
+          createdRole: roleLabel,
+          email: elevatedAccount.email
         }
       });
 
       return res.status(201).json({
-        message: 'Admin account created successfully',
+        message: `${roleLabel} account created successfully`,
         user: {
-          id: String(admin._id),
-          firstName: buildAdminName(admin.email),
-          lastName: 'Admin',
-          email: admin.email,
+          id: String(elevatedAccount._id),
+          firstName: elevatedAccount.firstName,
+          lastName: elevatedAccount.lastName,
+          email: elevatedAccount.email,
           phoneNumber: '',
-          role: 'Admin',
-          status: admin.status || 'active',
-          createdAt: admin.createdAt,
-          updatedAt: admin.updatedAt
+          role: roleLabel,
+          status: elevatedAccount.status || 'active',
+          createdAt: elevatedAccount.createdAt,
+          updatedAt: elevatedAccount.updatedAt
         }
       });
     }
@@ -128,8 +166,8 @@ export async function createUser(req, res) {
     }
 
     const customer = await CustomerAccount.create({
-      firstName: String(firstName).trim(),
-      lastName: String(lastName).trim(),
+      firstName: normalizedFirstName,
+      lastName: normalizedLastName,
       email: normalizedEmail,
       password,
       phoneNumber: normalizedPhone,
@@ -171,12 +209,13 @@ export async function createUser(req, res) {
 
 export async function getUsers(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const [admins, customers] = await Promise.all([
+    const [admins, staffs, customers] = await Promise.all([
       AdminAccount.find({}, { email: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
+      StaffAccount.find({}, { email: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
       CustomerAccount.find({}, {
         firstName: 1,
         lastName: 1,
@@ -190,14 +229,26 @@ export async function getUsers(req, res) {
 
     const adminUsers = admins.map((admin) => ({
       id: String(admin._id),
-      firstName: buildAdminName(admin.email),
-      lastName: 'Admin',
+      firstName: String(admin.firstName || '').trim() || buildAdminName(admin.email),
+      lastName: String(admin.lastName || '').trim() || 'Admin',
       email: admin.email,
       phoneNumber: '',
       role: 'Admin',
       status: admin.status || 'active',
       createdAt: admin.createdAt,
       updatedAt: admin.updatedAt
+    }));
+
+    const staffUsers = staffs.map((staff) => ({
+      id: String(staff._id),
+      firstName: String(staff.firstName || '').trim() || buildAdminName(staff.email),
+      lastName: String(staff.lastName || '').trim() || 'Staff',
+      email: staff.email,
+      phoneNumber: '',
+      role: 'Staff',
+      status: staff.status || 'active',
+      createdAt: staff.createdAt,
+      updatedAt: staff.updatedAt
     }));
 
     const customerUsers = customers.map((customer) => ({
@@ -212,7 +263,7 @@ export async function getUsers(req, res) {
       updatedAt: customer.updatedAt
     }));
 
-    const users = [...adminUsers, ...customerUsers].sort((a, b) => {
+    const users = [...adminUsers, ...staffUsers, ...customerUsers].sort((a, b) => {
       const aDate = new Date(a.createdAt || 0).getTime();
       const bDate = new Date(b.createdAt || 0).getTime();
       return bDate - aDate;
@@ -227,22 +278,28 @@ export async function getUsers(req, res) {
 
 export async function archiveUser(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
     const { id, role } = req.params;
-    const normalizedRole = String(role || '').toLowerCase();
+    const normalizedRole = normalizeManagedRole(role);
 
-    if (!['admin', 'customer'].includes(normalizedRole)) {
+    if (!normalizedRole) {
       return res.status(400).json({ message: 'Invalid user role' });
     }
 
-    if (normalizedRole === 'admin' && id === String(req.user.id)) {
+    if (req.user.role === 'staff' && isElevatedRole(normalizedRole)) {
+      return res.status(403).json({ message: 'Staff accounts cannot archive admin or staff accounts' });
+    }
+
+    if (isElevatedRole(normalizedRole) && id === String(req.user.id)) {
       return res.status(400).json({ message: 'You cannot archive your own account' });
     }
 
-    const Model = normalizedRole === 'admin' ? AdminAccount : CustomerAccount;
+    const Model = isElevatedRole(normalizedRole)
+      ? getElevatedAccountModel(normalizedRole)
+      : CustomerAccount;
     const updated = await Model.findByIdAndUpdate(
       id,
       { status: 'archived', updatedAt: new Date() },
@@ -253,10 +310,12 @@ export async function archiveUser(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const targetRoleLabel = toManagedRoleLabel(normalizedRole);
+
     await logAdminAction(req, {
       action: 'user_archived',
-      targetUserId: String(updated.email || ''),
-      targetRole: normalizedRole === 'admin' ? 'Admin' : 'Customer',
+      targetUserId: String(updated._id),
+      targetRole: targetRoleLabel,
       details: {
         status: 'archived',
         email: updated.email || ''
@@ -267,7 +326,7 @@ export async function archiveUser(req, res) {
       message: 'User archived successfully',
       user: {
         id: String(updated._id),
-        role: normalizedRole === 'admin' ? 'Admin' : 'Customer',
+        role: targetRoleLabel,
         status: updated.status || 'archived',
         updatedAt: updated.updatedAt
       }
@@ -280,18 +339,20 @@ export async function archiveUser(req, res) {
 
 export async function restoreUser(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
     const { id, role } = req.params;
-    const normalizedRole = String(role || '').toLowerCase();
+    const normalizedRole = normalizeManagedRole(role);
 
-    if (!['admin', 'customer'].includes(normalizedRole)) {
+    if (!normalizedRole) {
       return res.status(400).json({ message: 'Invalid user role' });
     }
 
-    const Model = normalizedRole === 'admin' ? AdminAccount : CustomerAccount;
+    const Model = isElevatedRole(normalizedRole)
+      ? getElevatedAccountModel(normalizedRole)
+      : CustomerAccount;
     const updated = await Model.findByIdAndUpdate(
       id,
       { status: 'active', updatedAt: new Date() },
@@ -302,10 +363,12 @@ export async function restoreUser(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const targetRoleLabel = toManagedRoleLabel(normalizedRole);
+
     await logAdminAction(req, {
       action: 'user_restored',
-      targetUserId: String(updated.email || ''),
-      targetRole: normalizedRole === 'admin' ? 'Admin' : 'Customer',
+      targetUserId: String(updated._id),
+      targetRole: targetRoleLabel,
       details: {
         status: 'active',
         email: updated.email || ''
@@ -316,7 +379,7 @@ export async function restoreUser(req, res) {
       message: 'User restored successfully',
       user: {
         id: String(updated._id),
-        role: normalizedRole === 'admin' ? 'Admin' : 'Customer',
+        role: targetRoleLabel,
         status: updated.status || 'active',
         updatedAt: updated.updatedAt
       }
@@ -329,7 +392,7 @@ export async function restoreUser(req, res) {
 
 export async function getAdminActions(req, res) {
   try {
-    if (req.user.role !== 'admin') {
+    if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
@@ -346,10 +409,33 @@ export async function getAdminActions(req, res) {
       .limit(300)
       .lean();
 
+    const elevatedActionIds = actions
+      .map((entry) => String(entry.adminId || '').trim())
+      .filter(Boolean);
+
+    const [admins, staffs] = await Promise.all([
+      AdminAccount.find({ _id: { $in: elevatedActionIds } }, { firstName: 1, lastName: 1, email: 1 }).lean(),
+      StaffAccount.find({ _id: { $in: elevatedActionIds } }, { firstName: 1, lastName: 1, email: 1 }).lean(),
+    ]);
+
+    const elevatedActors = new Map();
+    admins.forEach((entry) => {
+      elevatedActors.set(String(entry._id), {
+        role: 'admin',
+        label: buildElevatedDisplayName(entry, 'admin', entry.email),
+      });
+    });
+    staffs.forEach((entry) => {
+      elevatedActors.set(String(entry._id), {
+        role: 'staff',
+        label: buildElevatedDisplayName(entry, 'staff', entry.email),
+      });
+    });
+
     return res.json({
       actions: actions.map((entry) => ({
         id: String(entry._id),
-        adminLabel: entry.adminLabel || 'Admin',
+        adminLabel: elevatedActors.get(String(entry.adminId || '').trim())?.label || entry.adminLabel || 'Admin',
         adminEmail: entry.adminEmail || '',
         action: entry.action,
         targetUserId: entry.targetUserId || '',

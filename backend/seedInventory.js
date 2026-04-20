@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
 import ProductDetail from './models/ProductDetail.js';
+import { loadEnvironment } from './config/loadEnv.js';
 
-dotenv.config();
+loadEnvironment();
 
 const gowns = [
   {

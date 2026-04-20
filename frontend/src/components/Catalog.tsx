@@ -1,6 +1,8 @@
+import type { FavoriteGown } from '../App';
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Heart, Calendar, MapPin, Star } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { GownDetailsModal } from './GownDetailsModal';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
 
@@ -9,7 +11,13 @@ type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 
 interface CatalogProps {
   setCurrentView: (view: View) => void;
   isLoggedIn: boolean;
+  isAdmin: boolean;
   navigateProtected: (view: View) => void;
+  setSelectedGownId: (id: string | null) => void;
+  navigateWithGown: (view: 'rentals' | 'appointments', gownId: string) => void;
+  favoriteGowns: FavoriteGown[];
+  onAddFavorite: (gown: FavoriteGown) => void;
+  onRemoveFavorite: (gownId: string) => void;
 }
 
 interface GownItem {
@@ -24,6 +32,8 @@ interface GownItem {
   image: string;
   rating: number;
 }
+
+const CATALOG_PAGE_SIZE = 9;
 
 function toCatalogGown(item: InventoryItem): GownItem {
   return {
@@ -42,16 +52,24 @@ function toCatalogGown(item: InventoryItem): GownItem {
   };
 }
 
-export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: CatalogProps) {
+export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected, setSelectedGownId, navigateWithGown, favoriteGowns, onAddFavorite, onRemoveFavorite }: CatalogProps) {
   const [gowns, setGowns] = useState<GownItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedGown, setSelectedGown] = useState<GownItem | null>(null);
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [showLiveViewModal, setShowLiveViewModal] = useState(false);
+  const [pendingFavorite, setPendingFavorite] = useState<GownItem | null>(null);
+  const [pendingFavoriteRemoval, setPendingFavoriteRemoval] = useState<GownItem | null>(null);
 
-  const categories = ['All', 'Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress'];
+  const favoriteIds = useMemo(() => favoriteGowns.map((item) => item.id), [favoriteGowns]);
+
+  const categories = useMemo(
+    () => ['All', ...new Set(gowns.map((gown) => gown.category).filter(Boolean))],
+    [gowns]
+  );
 
   const loadCatalog = async () => {
     setCatalogLoading(true);
@@ -93,10 +111,70 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
     return matchesSearch && matchesCategory;
   }), [gowns, searchQuery, selectedCategory]);
 
-  const toggleFavorite = (id: string) => {
-    setFavorites(prev => 
-      prev.includes(id) ? prev.filter(fav => fav !== id) : [...prev, id]
-    );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedCategory]);
+
+  useEffect(() => {
+    if (selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
+      setSelectedCategory('All');
+    }
+  }, [categories, selectedCategory]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredGowns.length / CATALOG_PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedGowns = filteredGowns.slice(
+    (safeCurrentPage - 1) * CATALOG_PAGE_SIZE,
+    safeCurrentPage * CATALOG_PAGE_SIZE,
+  );
+  const resultStart = filteredGowns.length === 0 ? 0 : (safeCurrentPage - 1) * CATALOG_PAGE_SIZE + 1;
+  const resultEnd = Math.min(safeCurrentPage * CATALOG_PAGE_SIZE, filteredGowns.length);
+
+  const handleFavoriteClick = (gown: GownItem) => {
+    if (favoriteIds.includes(gown.id)) {
+      setPendingFavoriteRemoval(gown);
+      return;
+    }
+
+    setPendingFavorite(gown);
+  };
+
+  const confirmAddFavorite = () => {
+    if (!pendingFavorite) return;
+    onAddFavorite({
+      id: pendingFavorite.id,
+      name: pendingFavorite.name,
+      category: pendingFavorite.category,
+      color: pendingFavorite.color,
+      size: pendingFavorite.size,
+      price: pendingFavorite.price,
+      status: pendingFavorite.status,
+      branch: pendingFavorite.branch,
+      image: pendingFavorite.image,
+      rating: pendingFavorite.rating,
+    });
+    setPendingFavorite(null);
+  };
+
+  const confirmRemoveFavorite = () => {
+    if (!pendingFavoriteRemoval) return;
+    onRemoveFavorite(pendingFavoriteRemoval.id);
+    setPendingFavoriteRemoval(null);
+  };
+
+  const handleBookNow = (gownId: string) => {
+    if (isAdmin) {
+      setShowLiveViewModal(true);
+      return;
+    }
+    navigateWithGown('rentals', gownId);
+  };
+
+  const changePage = (nextPage: number) => {
+    setCurrentPage(nextPage);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
   };
 
   return (
@@ -145,7 +223,7 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
 
         {/* Results Count */}
         <div className="mb-6 text-sm text-[#6B5D4F]">
-          {filteredGowns.length} {filteredGowns.length === 1 ? 'gown' : 'gowns'} found
+          Showing {resultStart}-{resultEnd} of {filteredGowns.length} {filteredGowns.length === 1 ? 'gown' : 'gowns'}
         </div>
 
         {catalogError && (
@@ -166,7 +244,7 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
 
         {/* Gown Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-16">
-          {filteredGowns.map((gown) => (
+          {paginatedGowns.map((gown) => (
             <div
               key={gown.id}
               className="group bg-white overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
@@ -183,7 +261,7 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
                 {/* Status Badge */}
                 {gown.status === 'rented' && (
                   <div className="absolute top-4 left-4 px-3 py-1 bg-[#6B5D4F] text-white text-xs uppercase tracking-wider">
-                    Rented
+                    Unavailable
                   </div>
                 )}
                 {gown.status === 'reserved' && (
@@ -196,13 +274,13 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    toggleFavorite(gown.id);
+                    handleFavoriteClick(gown);
                   }}
                   className="absolute top-4 right-4 p-2 bg-white/90 hover:bg-white transition-colors"
                 >
                   <Heart
                     className={`w-5 h-5 ${
-                      favorites.includes(gown.id)
+                      favoriteIds.includes(gown.id)
                         ? 'fill-red-500 text-red-500'
                         : 'text-[#6B5D4F]'
                     }`}
@@ -245,7 +323,7 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigateProtected('rentals');
+                        handleBookNow(gown.id);
                       }}
                       className="px-4 py-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors text-xs uppercase tracking-wider"
                     >
@@ -257,6 +335,32 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
             </div>
           ))}
         </div>
+
+        {filteredGowns.length > CATALOG_PAGE_SIZE && (
+          <div className="mb-16 flex flex-wrap items-center justify-between gap-4">
+            <p className="text-sm text-[#6B5D4F] leading-none">
+              Page {safeCurrentPage} of {totalPages}
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => changePage(Math.max(1, safeCurrentPage - 1))}
+                disabled={safeCurrentPage === 1}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={() => changePage(Math.min(totalPages, safeCurrentPage + 1))}
+                disabled={safeCurrentPage === totalPages}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Empty State */}
         {filteredGowns.length === 0 && (
@@ -278,134 +382,111 @@ export function Catalog({ setCurrentView, isLoggedIn, navigateProtected }: Catal
         )}
       </div>
 
-      {/* Detail Modal */}
       {selectedGown && (
+        <GownDetailsModal
+          gown={selectedGown}
+          isAdmin={isAdmin}
+          onClose={() => setSelectedGown(null)}
+          onBookRental={(gownId) => {
+            navigateWithGown('rentals', gownId);
+            setSelectedGown(null);
+          }}
+          onScheduleFitting={(gownId) => {
+            navigateWithGown('appointments', gownId);
+            setSelectedGown(null);
+          }}
+          onAdminPreview={() => setShowLiveViewModal(true)}
+        />
+      )}
+
+      {showLiveViewModal && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-          onClick={() => setSelectedGown(null)}
+          onClick={() => setShowLiveViewModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Live view"
         >
           <div
-            className="bg-white max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+            className="bg-white max-w-md w-full rounded-2xl p-8"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="grid md:grid-cols-2">
-              {/* Image */}
-              <div className="aspect-[3/4] bg-[#F5F1E8]">
-                <ImageWithFallback
-                  src={selectedGown.image}
-                  alt={selectedGown.name}
-                  className="w-full h-full object-cover"
-                />
-              </div>
+            <h3 className="font-serif text-3xl mb-3">Live View</h3>
+            <p className="text-sm text-[#6B5D4F] mb-6 leading-relaxed">
+              You are viewing the storefront as an admin. Renting gowns and scheduling fittings are disabled in this view.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowLiveViewModal(false)}
+              className="w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors"
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
 
-              {/* Details */}
-              <div className="p-8 md:p-12">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="flex items-center">
-                    <Star className="w-4 h-4 fill-[#D4AF37] text-[#D4AF37]" />
-                    <span className="text-sm text-[#6B5D4F] ml-1">{selectedGown.rating}</span>
-                  </div>
-                  <span className="text-xs text-[#6B5D4F]">•</span>
-                  <span className="text-xs text-[#6B5D4F] uppercase tracking-wider">
-                    {selectedGown.category}
-                  </span>
-                </div>
+      {pendingFavorite && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setPendingFavorite(null)}
+        >
+          <div
+            className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-8 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="mb-3 text-2xl font-light text-black">Add to favorites?</h3>
+            <p className="mb-6 text-sm leading-6 text-[#6B5D4F]">
+              Add {pendingFavorite.name} to your favorites list?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingFavorite(null)}
+                className="flex-1 rounded-full border border-[#E8DCC8] px-5 py-3 transition-colors hover:border-[#1a1a1a]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmAddFavorite}
+                className="flex-1 rounded-full bg-black px-5 py-3 text-white transition-colors hover:bg-[#D4AF37] hover:text-black"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-                <h2 className="font-serif text-4xl mb-4">{selectedGown.name}</h2>
-
-                <div className="mb-6">
-                  <div className="text-xs text-[#6B5D4F] uppercase tracking-wider mb-2">
-                    Rental Price
-                  </div>
-                  <div className="font-serif text-4xl mb-1">
-                    ₱{selectedGown.price.toLocaleString()}
-                  </div>
-                  <div className="text-sm text-[#6B5D4F]">per day</div>
-                </div>
-
-                <div className="space-y-4 mb-8 pb-8 border-b border-[#E8DCC8]">
-                  <div>
-                    <span className="text-xs uppercase tracking-wider text-[#6B5D4F]">Color:</span>
-                    <span className="ml-2 text-[#1a1a1a]">{selectedGown.color}</span>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase tracking-wider text-[#6B5D4F]">Sizes Available:</span>
-                    <div className="flex gap-2 mt-2">
-                      {selectedGown.size.map(size => (
-                        <span
-                          key={size}
-                          className="px-3 py-1 bg-[#F5F1E8] text-[#1a1a1a] text-sm"
-                        >
-                          {size}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase tracking-wider text-[#6B5D4F]">Location:</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <MapPin className="w-4 h-4 text-[#6B5D4F]" />
-                      <span className="text-[#1a1a1a]">{selectedGown.branch}</span>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-xs uppercase tracking-wider text-[#6B5D4F]">Status:</span>
-                    <span className={`ml-2 px-3 py-1 text-xs uppercase tracking-wider ${
-                      selectedGown.status === 'available'
-                        ? 'bg-green-100 text-green-800'
-                        : selectedGown.status === 'rented'
-                        ? 'bg-[#6B5D4F] text-white'
-                        : 'bg-[#D4AF37] text-white'
-                    }`}>
-                      {selectedGown.status}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {selectedGown.status === 'available' && (
-                    <>
-                      <button
-                        onClick={() => {
-                          navigateProtected('rentals');
-                          setSelectedGown(null);
-                        }}
-                        className="w-full py-4 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2"
-                      >
-                        <Calendar className="w-5 h-5" />
-                        <span>Book This Gown</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setCurrentView('appointments');
-                          setSelectedGown(null);
-                        }}
-                        className="w-full py-4 border border-[#1a1a1a] text-[#1a1a1a] hover:bg-[#1a1a1a] hover:text-white transition-all"
-                      >
-                        Schedule Fitting
-                      </button>
-                    </>
-                  )}
-                  {selectedGown.status !== 'available' && (
-                    <button
-                      onClick={() => {
-                        setCurrentView('appointments');
-                        setSelectedGown(null);
-                      }}
-                      className="w-full py-4 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors"
-                    >
-                      Get Notified When Available
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  onClick={() => setSelectedGown(null)}
-                  className="w-full mt-4 py-3 text-sm text-[#6B5D4F] hover:text-[#1a1a1a] transition-colors"
-                >
-                  Close
-                </button>
-              </div>
+      {pendingFavoriteRemoval && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setPendingFavoriteRemoval(null)}
+        >
+          <div
+            className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-8 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="mb-3 text-2xl font-light text-black">Remove from favorites?</h3>
+            <p className="mb-6 text-sm leading-6 text-[#6B5D4F]">
+              Remove {pendingFavoriteRemoval.name} from your favorites list?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setPendingFavoriteRemoval(null)}
+                className="flex-1 rounded-full border border-[#E8DCC8] px-5 py-3 transition-colors hover:border-[#1a1a1a]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmRemoveFavorite}
+                className="flex-1 rounded-full bg-black px-5 py-3 text-white transition-colors hover:bg-[#D4AF37] hover:text-black"
+              >
+                Remove
+              </button>
             </div>
           </div>
         </div>

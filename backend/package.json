@@ -9,18 +9,23 @@
     "dev": "nodemon server.js",
     "seed": "node seed.js",
     "seed:inventory": "node seedInventory.js",
-    "reset": "node reset.js"
+    "reset": "node reset.js",
+    "migrate:image-urls": "node migrate_image_urls.js",
+    "migrate:cloudinary-product-images": "node migrate_product_images_to_cloudinary.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.0.0",
-    "multer": "^2.1.1"
+    "multer": "^2.1.1",
+    "twilio": "^5.5.4"
   },
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "nodemon": "^3.0.2"
   }
 }

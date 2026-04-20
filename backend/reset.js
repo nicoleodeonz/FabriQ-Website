@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
 import CustomerAccount from './models/Customer.js';
 import CustomerDetail from './models/CustomerDetail.js';
+import { loadEnvironment } from './config/loadEnv.js';
 
-dotenv.config();
+loadEnvironment();
 
 const resetCustomerData = async () => {
   try {

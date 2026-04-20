@@ -22,6 +22,7 @@ export function Navigation({
   navigateProtected
 }: NavigationProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const desktopActionShift: CSSProperties = { position: 'relative', left: '340px' };
 
   const navItems: { view: View; label: string; protected?: boolean }[] = isAdmin
     ? []
@@ -82,8 +83,8 @@ export function Navigation({
 
           {/* Right: Desktop Actions */}
           <div className="hidden md:flex flex-1 items-center justify-end gap-2 pl-6 lg:pl-10 md:translate-x-2 lg:translate-x-3">
-            {renderButton('profile', '', 'profile', { transform: 'translateX(320px)' })} {/* Profile icon only */}
-            {isAdmin && renderButton('admin', '', 'admin')} {/* Admin gear icon only if admin */}
+            {renderButton('profile', '', 'profile', desktopActionShift)} {/* Profile icon only */}
+            {isAdmin && renderButton('admin', '', 'admin', desktopActionShift)} {/* Admin gear icon only if admin */}
           </div>
 
           {/* Mobile Menu Button */}

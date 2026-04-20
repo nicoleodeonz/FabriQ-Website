@@ -22,14 +22,22 @@ const CustomerAccountSchema = new mongoose.Schema({
   },
   phoneNumber: {
     type: String,
-    required: true,
-    unique: true,
+    required: false,
+    default: undefined,
     validate: {
       validator: function(v) {
-        return /^\+63\d{10}$/.test(v);
+        return !v || /^\+63\d{10}$/.test(v);
       },
       message: props => `${props.value} is not a valid phone number. Expected format: +63XXXXXXXXXX`
     }
+  },
+  phoneVerified: {
+    type: Boolean,
+    default: false
+  },
+  phoneVerifiedAt: {
+    type: Date,
+    default: null
   },
   preferredBranch: {
     type: String,
@@ -45,12 +53,51 @@ const CustomerAccountSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'archived'],
-    default: 'active'
+    enum: ['pending_verification', 'active', 'archived'],
+    default: 'pending_verification'
+  },
+  signupVerificationCodeHash: {
+    type: String,
+    default: null
+  },
+  signupVerificationExpiresAt: {
+    type: Date,
+    default: null
+  },
+  signupVerificationSentAt: {
+    type: Date,
+    default: null
+  },
+  resetPasswordCodeHash: {
+    type: String,
+    default: null
+  },
+  resetPasswordCodeExpiresAt: {
+    type: Date,
+    default: null
+  },
+  resetPasswordVerifiedAt: {
+    type: Date,
+    default: null
+  },
+  resetPasswordSentAt: {
+    type: Date,
+    default: null
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+CustomerAccountSchema.index(
+  { phoneNumber: 1 },
+  {
+    name: 'phoneNumber_1',
+    unique: true,
+    partialFilterExpression: {
+      phoneNumber: { $type: 'string' }
+    }
+  }
+);
 
 // Hash passwords and normalize phone, set updatedAt before saving
 CustomerAccountSchema.pre('save', async function(next) {
@@ -59,6 +106,12 @@ CustomerAccountSchema.pre('save', async function(next) {
   if (this.isModified('password')) {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+  }
+
+  if (!this.phoneNumber) {
+    this.phoneNumber = undefined;
+    next();
+    return;
   }
 
   if (this.phoneNumber) {
@@ -72,6 +125,8 @@ CustomerAccountSchema.pre('save', async function(next) {
     digits = digits.slice(-10);
     if (digits.length === 10) {
       this.phoneNumber = '+63' + digits;
+    } else {
+      this.phoneNumber = undefined;
     }
   }
 

@@ -3,8 +3,17 @@ import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X,
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
+import { GownDetailsModal } from './GownDetailsModal';
+import type { GownDetails } from './GownDetailsModal';
 import * as usersAPI from '../services/usersAPI';
-import type { AdminActionEntry, CreateManagedUserPayload, ManagedUser } from '../services/usersAPI';
+import type { AdminActionEntry, CreateManagedUserPayload, ManagedUser, ManagedUserRole } from '../services/usersAPI';
+import * as rentalAPI from '../services/rentalAPI';
+import type { AdminRentalDetail } from '../services/rentalAPI';
+import { appointmentAPI } from '../services/appointmentAPI';
+import type { AdminAppointmentDetail } from '../services/appointmentAPI';
+import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
+import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
+import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 
 export type { InventoryItem };
 
@@ -14,14 +23,14 @@ interface User {
   lastName: string;
   email: string;
   phone: string;
-  role: 'Admin' | 'Customer';
+  role: ManagedUserRole;
   joinDate: string;
   status: 'active' | 'archived';
   lastActivity: string;
 }
 
 interface NewUserForm {
-  role: 'Admin' | 'Customer';
+  role: ManagedUserRole;
   email: string;
   password: string;
   firstName: string;
@@ -36,14 +45,36 @@ interface PendingReturn {
   dueDate: string;
   daysLate: number;
 }
-const mockPendingReturns: PendingReturn[] = [
-  { id: 'R001', gownName: 'Midnight Elegance', customer: 'Maria Santos', dueDate: '2026-02-05', daysLate: 4 },
-  { id: 'R002', gownName: 'Pearl Romance', customer: 'Ana Reyes', dueDate: '2026-02-10', daysLate: 0 },
-  { id: 'R003', gownName: 'Rose Garden', customer: 'Carmen Cruz', dueDate: '2026-02-15', daysLate: 0 },
-];
+
+interface RentalFollowUpTarget {
+  id: string;
+  gownName: string;
+  customer: string;
+  dueDate: string;
+  daysLate: number;
+  status: 'pending' | 'active' | 'for-payment' | 'for-pickup';
+}
+
+interface AdminRentalCard {
+  id: string;
+  referenceId?: string;
+  gownName: string;
+  customerName: string;
+  endDate: string;
+  status: AdminRentalDetail['status'];
+  totalPrice: number;
+  branch: string;
+}
+
+interface CurrentAdminUser {
+  id?: string;
+  role?: string;
+}
 
 interface AdminDashboardProps {
   token: string;
+  currentUserRole?: string;
+  currentUser?: CurrentAdminUser | null;
 }
 
 type AddItemField =
@@ -57,7 +88,37 @@ type AddItemField =
   | 'image'
   | 'description';
 
-export function AdminDashboard({ token }: AdminDashboardProps) {
+const INVENTORY_PREVIEW_DELAY_MS = 2000;
+const INVENTORY_PAGE_SIZE = 9;
+const APPOINTMENT_PAGE_SIZE = 3;
+const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
+const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
+
+function compareInventoryItemsAscending(left: InventoryItem, right: InventoryItem) {
+  const leftKey = (left.sku || left.id || '').trim();
+  const rightKey = (right.sku || right.id || '').trim();
+
+  return leftKey.localeCompare(rightKey, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
+  return {
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    color: item.color,
+    size: Array.isArray(item.size) ? item.size : [],
+    price: item.price,
+    status: item.status === 'available' || item.status === 'rented' || item.status === 'reserved'
+      ? item.status
+      : 'maintenance',
+    branch: item.branch,
+    image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
+    rating: typeof item.rating === 'number' ? item.rating : 0,
+  };
+}
+
+export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
   const getCurrentUserId = (jwtToken: string) => {
     try {
       const payloadPart = jwtToken.split('.')[1];
@@ -71,14 +132,14 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     }
   };
 
-  const currentUserId = getCurrentUserId(token);
+  const currentUserId = String(currentUser?.id || '').trim() || getCurrentUserId(token);
 
   type InventoryConfirmAction =
     | { type: 'delete'; item: InventoryItem }
     | { type: 'restore'; item: InventoryItem }
     | null;
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'rentals' | 'users' | 'history'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history'>('overview');
   const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
   
   // Inventory State
@@ -99,17 +160,22 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
   const [branchPerformanceLoading, setBranchPerformanceLoading] = useState(false);
   const [branchPerformanceError, setBranchPerformanceError] = useState<string | null>(null);
   const [inventoryView, setInventoryView] = useState<'active' | 'archive'>('active');
+  const [inventoryPage, setInventoryPage] = useState(1);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [inventoryMessage, setInventoryMessage] = useState<string | null>(null);
+  const [inventorySearchQuery, setInventorySearchQuery] = useState('');
   const [archivedItems, setArchivedItems] = useState<InventoryItem[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [restoringItemId, setRestoringItemId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<InventoryConfirmAction>(null);
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
+  const [hoverPreviewItem, setHoverPreviewItem] = useState<InventoryItem | null>(null);
   const cancelConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const primaryConfirmButtonRef = useRef<HTMLButtonElement>(null);
+  const inventoryPreviewTimerRef = useRef<number | null>(null);
+  const hoveredInventoryIdRef = useRef<string | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [showAddItem, setShowAddItem] = useState(false);
   const [addItemErrors, setAddItemErrors] = useState<Partial<Record<AddItemField, string>>>({});
@@ -133,7 +199,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
   const [usersMessage, setUsersMessage] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'customer'>('all');
+  const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'staff' | 'customer'>('all');
   const [showArchivedUsersOnly, setShowArchivedUsersOnly] = useState(false);
   const [confirmUserArchive, setConfirmUserArchive] = useState<User | null>(null);
   const [isConfirmingUserArchive, setIsConfirmingUserArchive] = useState(false);
@@ -147,6 +213,11 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
   const [adminHistory, setAdminHistory] = useState<AdminActionEntry[]>([]);
   const [adminHistoryLoading, setAdminHistoryLoading] = useState(false);
   const [adminHistoryError, setAdminHistoryError] = useState<string | null>(null);
+  const [adminHistorySearchQuery, setAdminHistorySearchQuery] = useState('');
+  const [adminHistoryFrom, setAdminHistoryFrom] = useState('');
+  const [adminHistoryTo, setAdminHistoryTo] = useState('');
+  const [adminHistoryFromTime, setAdminHistoryFromTime] = useState('');
+  const [adminHistoryToTime, setAdminHistoryToTime] = useState('');
   const [newUserForm, setNewUserForm] = useState<NewUserForm>({
     role: 'Customer',
     email: '',
@@ -155,11 +226,91 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     lastName: '',
     phoneNumber: ''
   });
+  const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
+  const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
+
+  // Rental Management State
+  const [adminRentals, setAdminRentals] = useState<AdminRentalDetail[]>([]);
+  const [adminRentalsLoading, setAdminRentalsLoading] = useState(false);
+  const [adminRentalsError, setAdminRentalsError] = useState<string | null>(null);
+  const [rentalSearchQuery, setRentalSearchQuery] = useState('');
+  const [rentalManagementView, setRentalManagementView] = useState<'active' | 'archive'>('active');
+  const [appointmentManagementView, setAppointmentManagementView] = useState<'active' | 'archive'>('active');
+  const [appointmentPage, setAppointmentPage] = useState(1);
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'scheduled'>('pending');
+  const [appointmentSearchQuery, setAppointmentSearchQuery] = useState('');
+  const [adminAppointments, setAdminAppointments] = useState<AdminAppointmentDetail[]>([]);
+  const [adminAppointmentsLoading, setAdminAppointmentsLoading] = useState(false);
+  const [adminAppointmentsError, setAdminAppointmentsError] = useState<string | null>(null);
+  const [appointmentStatusUpdatingId, setAppointmentStatusUpdatingId] = useState<string | null>(null);
+  const [selectedPendingAppointment, setSelectedPendingAppointment] = useState<AdminAppointmentDetail | null>(null);
+  const [isApproveAppointmentConfirmOpen, setIsApproveAppointmentConfirmOpen] = useState(false);
+  const [selectedScheduledAppointment, setSelectedScheduledAppointment] = useState<AdminAppointmentDetail | null>(null);
+  const [isCompleteAppointmentConfirmOpen, setIsCompleteAppointmentConfirmOpen] = useState(false);
+  const [selectedCancelAppointment, setSelectedCancelAppointment] = useState<AdminAppointmentDetail | null>(null);
+  const [isCancelAppointmentConfirmOpen, setIsCancelAppointmentConfirmOpen] = useState(false);
+  const [appointmentCancelReason, setAppointmentCancelReason] = useState('');
+  const [appointmentCancelError, setAppointmentCancelError] = useState<string | null>(null);
+  const [adminCustomOrders, setAdminCustomOrders] = useState<AdminCustomOrderRecord[]>([]);
+  const [adminCustomOrdersLoading, setAdminCustomOrdersLoading] = useState(false);
+  const [adminCustomOrdersError, setAdminCustomOrdersError] = useState<string | null>(null);
+  const [customOrderManagementView, setCustomOrderManagementView] = useState<'active' | 'archive'>('active');
+  const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
+  const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<AdminCustomOrderStatus>('inquiry');
+  const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
+  const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
+  const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
+  const [isRejectCustomOrderConfirmOpen, setIsRejectCustomOrderConfirmOpen] = useState(false);
+  const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
+  const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
+  const [rentalViewFilter, setRentalViewFilter] = useState<'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('pending');
+  const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
+  const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
+  const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
+  const [isRejectRentalConfirmOpen, setIsRejectRentalConfirmOpen] = useState(false);
+  const [isPickedUpConfirmOpen, setIsPickedUpConfirmOpen] = useState(false);
+  const [rejectRentalReason, setRejectRentalReason] = useState('');
+  const [rejectRentalError, setRejectRentalError] = useState<string | null>(null);
+  const [rentalStatusUpdating, setRentalStatusUpdating] = useState(false);
+  const [rentalStatusError, setRentalStatusError] = useState<string | null>(null);
+  const [rentalActionInProgress, setRentalActionInProgress] = useState<'approve' | 'reject' | 'picked-up' | 'returned' | null>(null);
+  const [isItemReturnedConfirmOpen, setIsItemReturnedConfirmOpen] = useState(false);
+  const [selectedReturnRental, setSelectedReturnRental] = useState<PendingReturn | null>(null);
 
   // Notification State
   const [showNotificationModal, setShowNotificationModal] = useState(false);
-  const [selectedRental, setSelectedRental] = useState<PendingReturn | null>(null);
+  const [selectedRental, setSelectedRental] = useState<RentalFollowUpTarget | null>(null);
   const [notificationMethod, setNotificationMethod] = useState<'sms' | 'email' | 'both'>('both');
+
+  const [isSendReminderConfirmOpen, setIsSendReminderConfirmOpen] = useState(false);
+  const [isReminderSentSuccessOpen, setIsReminderSentSuccessOpen] = useState(false);
+
+  const isAnyDashboardModalOpen = Boolean(
+    confirmAction ||
+    showAddItem ||
+    editingItem ||
+    hoverPreviewItem ||
+    selectedUser ||
+    confirmUserArchive ||
+    confirmUserRestore ||
+    showAddUserModal ||
+    showPendingRentalModal ||
+    isApproveRentalConfirmOpen ||
+    isRejectRentalConfirmOpen ||
+    isPickedUpConfirmOpen ||
+    isItemReturnedConfirmOpen ||
+    showNotificationModal ||
+    isSendReminderConfirmOpen ||
+    isReminderSentSuccessOpen ||
+    isApproveAppointmentConfirmOpen ||
+    isCompleteAppointmentConfirmOpen ||
+    isCancelAppointmentConfirmOpen ||
+    selectedCustomOrder ||
+    isApproveCustomOrderConfirmOpen ||
+    isRejectCustomOrderConfirmOpen
+  );
+
+  useModalInteractionLock(isAnyDashboardModalOpen);
 
   // Image upload state
   const [imageInputMode, setImageInputMode] = useState<'url' | 'file'>('url');
@@ -180,6 +331,21 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
   useEffect(() => {
     if (activeTab !== 'history') return;
     loadAdminHistory();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'rentals') return;
+    loadAdminRentals();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'appointments') return;
+    loadAdminAppointments();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'bespoke') return;
+    loadAdminCustomOrders();
   }, [activeTab]);
 
   useEffect(() => {
@@ -222,6 +388,36 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     return () => window.removeEventListener('keydown', onEsc);
   }, [confirmAction, isConfirmingAction]);
 
+  useEffect(() => () => {
+    if (inventoryPreviewTimerRef.current !== null) {
+      window.clearTimeout(inventoryPreviewTimerRef.current);
+    }
+  }, []);
+
+  function clearInventoryPreviewTimer() {
+    if (inventoryPreviewTimerRef.current !== null) {
+      window.clearTimeout(inventoryPreviewTimerRef.current);
+      inventoryPreviewTimerRef.current = null;
+    }
+  }
+
+  function handleInventoryRowHoverStart(item: InventoryItem) {
+    hoveredInventoryIdRef.current = item.id;
+    clearInventoryPreviewTimer();
+    inventoryPreviewTimerRef.current = window.setTimeout(() => {
+      if (hoveredInventoryIdRef.current === item.id) {
+        setHoverPreviewItem(item);
+      }
+    }, INVENTORY_PREVIEW_DELAY_MS);
+  }
+
+  function handleInventoryRowHoverEnd(itemId?: string) {
+    if (!itemId || hoveredInventoryIdRef.current === itemId) {
+      hoveredInventoryIdRef.current = null;
+    }
+    clearInventoryPreviewTimer();
+  }
+
   async function loadInventory() {
     setInventoryLoading(true);
     setInventoryError(null);
@@ -246,6 +442,144 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     } finally {
       setArchiveLoading(false);
     }
+  }
+
+  async function loadAdminRentals() {
+    setAdminRentalsLoading(true);
+    setAdminRentalsError(null);
+    try {
+      const rentals = await rentalAPI.rentalAPI.getAdminRentals(token);
+      setAdminRentals(rentals);
+    } catch (err) {
+      setAdminRentalsError(err instanceof Error ? err.message : 'Failed to load rentals');
+    } finally {
+      setAdminRentalsLoading(false);
+    }
+  }
+
+  async function loadAdminAppointments() {
+    setAdminAppointmentsLoading(true);
+    setAdminAppointmentsError(null);
+    try {
+      const appointments = await appointmentAPI.getAdminAppointments(token);
+      setAdminAppointments(appointments);
+    } catch (err) {
+      setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to load appointments');
+    } finally {
+      setAdminAppointmentsLoading(false);
+    }
+  }
+
+  async function loadAdminCustomOrders() {
+    setAdminCustomOrdersLoading(true);
+    setAdminCustomOrdersError(null);
+    try {
+      const orders = await adminCustomOrderAPI.getAllCustomOrders(token);
+      setAdminCustomOrders(orders);
+    } catch (err) {
+      setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to load custom orders');
+    } finally {
+      setAdminCustomOrdersLoading(false);
+    }
+  }
+
+  async function handleCustomOrderStatusUpdate(id: string, status: AdminCustomOrderStatus) {
+    setCustomOrderStatusUpdatingId(id);
+    setAdminCustomOrdersError(null);
+    try {
+      const updated = await adminCustomOrderAPI.updateCustomOrderStatus(token, id, status);
+      setAdminCustomOrders((prev) => prev.map((order) => {
+        const orderId = String(order.id || order._id || '');
+        return orderId === id ? updated : order;
+      }));
+      return updated;
+    } catch (err) {
+      setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to update custom order status');
+      return null;
+    } finally {
+      setCustomOrderStatusUpdatingId(null);
+    }
+  }
+
+  async function handleConfirmRejectCustomOrder() {
+    if (!selectedCustomOrder) return;
+
+    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+    const trimmedReason = rejectCustomOrderReason.trim();
+    if (!orderId) return;
+    if (!trimmedReason) {
+      setRejectCustomOrderError('Rejection reason is required.');
+      return;
+    }
+
+    const updated = await handleCustomOrderStatusUpdate(orderId, 'rejected');
+    if (updated) {
+      setSelectedCustomOrder(updated);
+      setIsRejectCustomOrderConfirmOpen(false);
+      setRejectCustomOrderReason('');
+      setRejectCustomOrderError(null);
+    } else if (adminCustomOrdersError) {
+      setRejectCustomOrderError(adminCustomOrdersError);
+    }
+  }
+
+  async function handleConfirmApproveCustomOrder() {
+    if (!selectedCustomOrder) return;
+
+    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+    const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+    if (!orderId || !nextStatus) return;
+
+    const updated = await handleCustomOrderStatusUpdate(orderId, nextStatus);
+    if (updated) {
+      setSelectedCustomOrder(updated);
+      setIsApproveCustomOrderConfirmOpen(false);
+    }
+  }
+
+  async function handleAppointmentStatusUpdate(id: string, status: 'scheduled' | 'completed' | 'cancelled', reason?: string) {
+    setAppointmentStatusUpdatingId(id);
+    setAdminAppointmentsError(null);
+    try {
+      const updated = await appointmentAPI.updateAppointmentStatus(token, id, status, reason);
+      setAdminAppointments((prev) => prev.map((item) => (item.id === id ? updated : item)));
+    } catch (err) {
+      setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to update appointment');
+    } finally {
+      setAppointmentStatusUpdatingId(null);
+    }
+  }
+
+  async function handleConfirmApproveAppointment() {
+    if (!selectedPendingAppointment) return;
+
+    await handleAppointmentStatusUpdate(selectedPendingAppointment.id, 'scheduled');
+    setIsApproveAppointmentConfirmOpen(false);
+    setSelectedPendingAppointment(null);
+  }
+
+  async function handleConfirmCompleteAppointment() {
+    if (!selectedScheduledAppointment) return;
+
+    await handleAppointmentStatusUpdate(selectedScheduledAppointment.id, 'completed');
+    setIsCompleteAppointmentConfirmOpen(false);
+    setSelectedScheduledAppointment(null);
+  }
+
+  async function handleConfirmCancelAppointment() {
+    if (!selectedCancelAppointment) return;
+
+    const trimmedReason = appointmentCancelReason.trim();
+    if (!trimmedReason) {
+      setAppointmentCancelError('Cancellation reason is required.');
+      return;
+    }
+
+    await handleAppointmentStatusUpdate(selectedCancelAppointment.id, 'cancelled', trimmedReason);
+    setIsCancelAppointmentConfirmOpen(false);
+    setSelectedCancelAppointment(null);
+    setAppointmentCancelReason('');
+    setAppointmentCancelError(null);
   }
 
   function mapManagedUserToDashboardUser(user: ManagedUser): User {
@@ -293,6 +627,8 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     if (normalized === 'user_created') return 'User Created';
     if (normalized === 'user_archived') return 'User Archived';
     if (normalized === 'user_restored') return 'User Restored';
+    if (normalized === 'appointment_status_updated') return 'Appointment Status Updated';
+    if (normalized === 'custom_order_status_updated') return 'Custom Order Status Updated';
     return normalized
       .split('_')
       .filter(Boolean)
@@ -300,7 +636,43 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
       .join(' ') || 'Action';
   }
 
+  const formatUserDisplayId = (value: unknown, role: string) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return '';
+
+    const normalizedRole = String(role || '').trim().toLowerCase();
+    const isAdmin = normalizedRole === 'admin' || normalizedRole === 'staff';
+    const isClient = normalizedRole === 'customer' || normalizedRole === 'client';
+    if (!isAdmin && !isClient) return rawValue;
+
+    let hash = 0;
+    for (let index = 0; index < rawValue.length; index += 1) {
+      hash = ((hash * 31) + rawValue.charCodeAt(index)) >>> 0;
+    }
+
+    if (isAdmin) {
+      // Always starts with 'A', followed by 5 alphanumeric chars
+      const suffix = hash.toString(36).toUpperCase().padStart(5, '0').slice(-5);
+      return 'A' + suffix;
+    }
+
+    // Customer/client: 6 chars, first char must NOT be 'A'
+    const base = hash.toString(36).toUpperCase().padStart(6, '0').slice(-6);
+    if (base.charAt(0) !== 'A') return base;
+    const NON_A_CHARS = '0123456789BCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const altHash = ((hash >>> 3) ^ (hash * 7)) >>> 0;
+    return NON_A_CHARS[altHash % NON_A_CHARS.length] + base.slice(1);
+  };
+
   function formatHistoryDetails(entry: AdminActionEntry) {
+    const formatStatusLabel = (status: unknown) => String(status || '')
+      .trim()
+      .toLowerCase()
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+
     const parts: string[] = [];
     if (entry.targetRole) parts.push(`targetRole: ${entry.targetRole}`);
 
@@ -323,7 +695,112 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     } else if (entry.action === 'user_restored' && restoredEmail) {
       parts.push(`restoredEmail: ${restoredEmail}`);
     } else if (entry.targetUserId) {
-      parts.push(`targetUserId: ${entry.targetUserId}`);
+      const targetRole = String(entry.targetRole || '').trim().toLowerCase();
+      const detailsRole = entry.details && typeof entry.details.role === 'string'
+        ? entry.details.role
+        : entry.details && typeof entry.details.accountType === 'string'
+          ? entry.details.accountType
+          : '';
+      const normalizedDetailsRole = String(detailsRole).trim().toLowerCase();
+      const matchedUserRole = users.find((user) => user.id === entry.targetUserId)?.role || '';
+      const normalizedMatchedUserRole = String(matchedUserRole).trim().toLowerCase();
+      const resolvedTargetRole = targetRole || normalizedDetailsRole || normalizedMatchedUserRole;
+      const targetUserIdValue = formatUserDisplayId(entry.targetUserId, resolvedTargetRole);
+      parts.push(`targetUserId: ${targetUserIdValue}`);
+    }
+
+    if (entry.action === 'rental_status_updated') {
+      const details = entry.details ?? {};
+      if (details && typeof details === 'object') {
+        const rawReferenceId =
+          typeof details.rentalReferenceId === 'string' && details.rentalReferenceId.trim()
+            ? details.rentalReferenceId
+            : (typeof details.referenceId === 'string' ? details.referenceId : '');
+
+        const normalizedReferenceId = rawReferenceId
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, '')
+          .slice(0, 7);
+
+        if (/^[A-Z0-9]{7}$/.test(normalizedReferenceId)) {
+          parts.push(`rentalReferenceId: ${normalizedReferenceId}`);
+        }
+
+        if (typeof details.gownName === 'string' && details.gownName.trim()) {
+          parts.push(`gownName: ${details.gownName}`);
+        }
+        if (typeof details.customerName === 'string' && details.customerName.trim()) {
+          parts.push(`customerName: ${details.customerName}`);
+        }
+
+        const newStatusLabel = formatStatusLabel(details.newStatus);
+        const previousStatusLabel = formatStatusLabel(details.previousStatus);
+
+        if (newStatusLabel) {
+          parts.push(`setStatusTo: ${newStatusLabel}`);
+        }
+        if (previousStatusLabel) {
+          parts.push(`fromStatus: ${previousStatusLabel}`);
+        }
+
+        if (typeof details.reason === 'string' && details.reason.trim()) {
+          parts.push(`reason: ${details.reason}`);
+        }
+
+        if (typeof details.pickupScheduleDate === 'string' && details.pickupScheduleDate.trim()) {
+          parts.push(`pickupDate: ${details.pickupScheduleDate}`);
+        }
+        if (typeof details.pickupScheduleTime === 'string' && details.pickupScheduleTime.trim()) {
+          parts.push(`pickupTime: ${details.pickupScheduleTime}`);
+        }
+      }
+
+      return parts.join(' | ') || '-';
+    }
+
+    if (entry.action === 'appointment_status_updated' || entry.action === 'custom_order_status_updated') {
+      const details = entry.details ?? {};
+      if (details && typeof details === 'object') {
+        const nextStatusLabel = formatStatusLabel(details.newStatus);
+        const previousStatusLabel = formatStatusLabel(details.previousStatus);
+
+        if (typeof details.customOrderReferenceId === 'string' && details.customOrderReferenceId.trim()) {
+          parts.push(`customOrderReferenceId: ${details.customOrderReferenceId}`);
+        }
+
+        if (typeof details.customerName === 'string' && details.customerName.trim()) {
+          parts.push(`customerName: ${details.customerName}`);
+        }
+        if (typeof details.appointmentType === 'string' && details.appointmentType.trim()) {
+          parts.push(`appointmentType: ${details.appointmentType}`);
+        }
+        if (typeof details.orderType === 'string' && details.orderType.trim()) {
+          parts.push(`orderType: ${details.orderType}`);
+        }
+        if (typeof details.branch === 'string' && details.branch.trim()) {
+          parts.push(`branch: ${details.branch}`);
+        }
+        if (typeof details.date === 'string' && details.date.trim()) {
+          parts.push(`date: ${details.date}`);
+        }
+        if (typeof details.time === 'string' && details.time.trim()) {
+          parts.push(`time: ${details.time}`);
+        }
+        if (typeof details.eventDate === 'string' && details.eventDate.trim()) {
+          parts.push(`eventDate: ${details.eventDate}`);
+        }
+        if (nextStatusLabel) {
+          parts.push(`setStatusTo: ${nextStatusLabel}`);
+        }
+        if (previousStatusLabel) {
+          parts.push(`fromStatus: ${previousStatusLabel}`);
+        }
+        if (typeof details.reason === 'string' && details.reason.trim()) {
+          parts.push(`reason: ${details.reason}`);
+        }
+      }
+
+      return parts.join(' | ') || '-';
     }
 
     if (entry.details) {
@@ -341,13 +818,134 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     return parts.join(' | ') || '-';
   }
 
+  function parseTimeInput(value: string): { hours: number; minutes: number } | null {
+    const input = value.trim();
+    if (!input) return null;
+
+    const match = input.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!match) return null;
+
+    let hours = Number(match[1]);
+    const minutes = match[2] ? Number(match[2]) : 0;
+    const meridiem = match[3] ? match[3].toLowerCase() : null;
+
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+      return null;
+    }
+
+    if (meridiem) {
+      if (hours < 1 || hours > 12) return null;
+      if (meridiem === 'am') {
+        hours = hours === 12 ? 0 : hours;
+      } else {
+        hours = hours === 12 ? 12 : hours + 12;
+      }
+    } else if (hours < 0 || hours > 23) {
+      return null;
+    }
+
+    return { hours, minutes };
+  }
+
+  function buildFilterDateTime(dateValue: string, timeValue: string, isEnd: boolean): Date | null {
+    if (!dateValue) return null;
+
+    const parts = dateValue.split('-').map((part) => Number(part));
+    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
+      return null;
+    }
+
+    const [year, month, day] = parts;
+    const parsedTime = parseTimeInput(timeValue);
+    if (timeValue.trim() && !parsedTime) {
+      return null;
+    }
+
+    const hours = parsedTime ? parsedTime.hours : (isEnd ? 23 : 0);
+    const minutes = parsedTime ? parsedTime.minutes : (isEnd ? 59 : 0);
+    const seconds = isEnd ? 59 : 0;
+    const milliseconds = isEnd ? 999 : 0;
+
+    return new Date(year, month - 1, day, hours, minutes, seconds, milliseconds);
+  }
+
+  const hasFromTimeInput = adminHistoryFromTime.trim().length > 0;
+  const hasToTimeInput = adminHistoryToTime.trim().length > 0;
+  const isFromTimeValid = !hasFromTimeInput || parseTimeInput(adminHistoryFromTime) !== null;
+  const isToTimeValid = !hasToTimeInput || parseTimeInput(adminHistoryToTime) !== null;
+  const adminHistoryQuery = adminHistorySearchQuery.trim().toLowerCase();
+
+  const filteredAdminHistory = adminHistory.filter((entry) => {
+    const createdAt = entry.createdAt ? new Date(entry.createdAt) : null;
+    if (!createdAt || Number.isNaN(createdAt.getTime())) return false;
+
+    const fromDate = buildFilterDateTime(adminHistoryFrom, adminHistoryFromTime, false);
+    const toDate = buildFilterDateTime(adminHistoryTo, adminHistoryToTime, true);
+
+    if (fromDate && !Number.isNaN(fromDate.getTime()) && createdAt < fromDate) {
+      return false;
+    }
+
+    if (toDate && !Number.isNaN(toDate.getTime()) && createdAt > toDate) {
+      return false;
+    }
+
+    if (adminHistoryQuery) {
+      const detailEmailValues = entry.details
+        ? Object.entries(entry.details)
+            .filter(([key]) => key.toLowerCase().includes('email'))
+            .map(([, value]) => String(value))
+        : [];
+
+      const targetRole = String(entry.targetRole || '').trim().toLowerCase();
+      const detailsRole = entry.details && typeof entry.details.role === 'string'
+        ? entry.details.role
+        : entry.details && typeof entry.details.accountType === 'string'
+          ? entry.details.accountType
+          : '';
+      const normalizedDetailsRole = String(detailsRole).trim().toLowerCase();
+      const matchedUserRole = entry.targetUserId
+        ? users.find((user) => user.id === entry.targetUserId)?.role || ''
+        : '';
+      const normalizedMatchedUserRole = String(matchedUserRole).trim().toLowerCase();
+      const resolvedTargetRole = targetRole || normalizedDetailsRole || normalizedMatchedUserRole;
+      const formattedTargetUserId = formatUserDisplayId(entry.targetUserId, resolvedTargetRole);
+
+      const searchTargets = [
+        entry.adminLabel,
+        entry.adminEmail,
+        entry.targetUserId,
+        formattedTargetUserId,
+        ...detailEmailValues,
+        entry.action,
+        formatHistoryAction(entry.action),
+        formatHistoryDetails(entry),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+
+      if (!searchTargets.some((value) => value.includes(adminHistoryQuery))) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
   async function handleArchiveUser(user: User) {
     if (user.status === 'archived') {
       return;
     }
 
-    if (user.role === 'Admin' && user.id === currentUserId) {
+    const isElevatedTarget = user.role === 'Admin' || user.role === 'Staff';
+
+    if (isElevatedTarget && user.id === currentUserId) {
       setUsersError('You cannot archive your own admin account.');
+      return;
+    }
+
+    if (isCurrentUserStaff && isElevatedTarget) {
+      setUsersError('Staff accounts cannot archive admin or staff accounts.');
       return;
     }
 
@@ -398,6 +996,11 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
       return;
     }
 
+    if (!newUserForm.firstName.trim() || !newUserForm.lastName.trim()) {
+      setNewUserError('First name and last name are required.');
+      return;
+    }
+
     if (newUserForm.password.trim().length < 8) {
       setNewUserError('Password must be at least 8 characters long.');
       return;
@@ -415,10 +1018,10 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
       role: newUserForm.role,
       email: newUserForm.email.trim(),
       password: newUserForm.password,
+      firstName: newUserForm.firstName.trim(),
+      lastName: newUserForm.lastName.trim(),
       ...(newUserForm.role === 'Customer'
         ? {
-            firstName: newUserForm.firstName.trim(),
-            lastName: newUserForm.lastName.trim(),
             phoneNumber: newUserForm.phoneNumber.trim()
           }
         : {})
@@ -527,6 +1130,38 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
   function showUsersTempMessage(msg: string) {
     setUsersMessage(msg);
     setTimeout(() => setUsersMessage(null), 3000);
+  }
+
+  async function handleConfirmApproveRental() {
+    if (!selectedPendingRental) return;
+
+    const nextStatus = selectedPendingRental.status === 'paid_for_confirmation' ? 'for_pickup' : 'for_payment';
+
+    setRentalStatusUpdating(true);
+    setRentalActionInProgress('approve');
+    setRentalStatusError(null);
+
+    try {
+      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, nextStatus);
+      setAdminRentals((prev) =>
+        prev.map((rental) =>
+          rental.id === selectedPendingRental.id ? { ...rental, status: nextStatus } : rental
+        )
+      );
+      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+      setIsApproveRentalConfirmOpen(false);
+      setShowPendingRentalModal(false);
+      setSelectedPendingRental(null);
+    } catch (err) {
+      setRentalStatusError(
+        err instanceof Error
+          ? err.message
+          : (nextStatus === 'for_pickup' ? 'Failed to schedule pickup.' : 'Failed to approve rental.')
+      );
+    } finally {
+      setRentalStatusUpdating(false);
+      setRentalActionInProgress(null);
+    }
   }
 
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -730,6 +1365,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     const matchesRole =
       userFilter === 'all' ||
       (userFilter === 'admin' && user.role === 'Admin') ||
+      (userFilter === 'staff' && user.role === 'Staff') ||
       (userFilter === 'customer' && user.role === 'Customer');
     const matchesArchiveView = showArchivedUsersOnly
       ? user.status === 'archived'
@@ -737,19 +1373,369 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
     return matchesSearch && matchesRole && matchesArchiveView;
   });
 
+  const inventoryQuery = inventorySearchQuery.trim().toLowerCase();
+  const filteredInventory = inventory
+    .filter((item) => {
+      if (!inventoryQuery) return true;
+      return (
+        item.name.toLowerCase().includes(inventoryQuery) ||
+        (item.sku || '').toLowerCase().includes(inventoryQuery) ||
+        item.category.toLowerCase().includes(inventoryQuery) ||
+        item.color.toLowerCase().includes(inventoryQuery) ||
+        item.branch.toLowerCase().includes(inventoryQuery) ||
+        item.status.toLowerCase().includes(inventoryQuery)
+      );
+    })
+    .sort(compareInventoryItemsAscending);
+
+  const filteredArchivedItems = archivedItems
+    .filter((item) => {
+      if (!inventoryQuery) return true;
+      return (
+        item.name.toLowerCase().includes(inventoryQuery) ||
+        (item.sku || '').toLowerCase().includes(inventoryQuery) ||
+        item.category.toLowerCase().includes(inventoryQuery) ||
+        item.color.toLowerCase().includes(inventoryQuery) ||
+        item.branch.toLowerCase().includes(inventoryQuery)
+      );
+    })
+    .sort(compareInventoryItemsAscending);
+
+  useEffect(() => {
+    setInventoryPage(1);
+  }, [inventorySearchQuery, inventoryView]);
+
+  const inventoryItemsForCurrentView = inventoryView === 'archive' ? filteredArchivedItems : filteredInventory;
+  const inventoryTotalPages = Math.max(1, Math.ceil(inventoryItemsForCurrentView.length / INVENTORY_PAGE_SIZE));
+  const safeInventoryPage = Math.min(inventoryPage, inventoryTotalPages);
+  const paginatedInventoryItems = inventoryItemsForCurrentView.slice(
+    (safeInventoryPage - 1) * INVENTORY_PAGE_SIZE,
+    safeInventoryPage * INVENTORY_PAGE_SIZE,
+  );
+  const inventoryCurrentPageCount = paginatedInventoryItems.length;
+
+  const changeInventoryPage = (nextPage: number) => {
+    setInventoryPage(nextPage);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const currentRentalCards: AdminRentalCard[] = adminRentals
+    .filter((rental) => rental.status === 'active' || rental.status === 'pending')
+    .map((rental) => ({
+      id: rental.id,
+      referenceId: rental.referenceId,
+      gownName: rental.gownName,
+      customerName: rental.customerName,
+      endDate: rental.endDate,
+      status: rental.status,
+      totalPrice: rental.totalPrice,
+      branch: rental.branch,
+    }));
+
+  const pendingRentalCards = currentRentalCards.filter((rental) => rental.status === 'pending');
+  const activeRentalCards = currentRentalCards.filter((rental) => rental.status === 'active');
+  const archivedRentalCards: AdminRentalCard[] = adminRentals
+    .map((rental) => ({
+      id: rental.id,
+      referenceId: rental.referenceId,
+      gownName: rental.gownName,
+      customerName: rental.customerName,
+      endDate: rental.endDate,
+      status: rental.status,
+      totalPrice: rental.totalPrice,
+      branch: rental.branch,
+    }));
+  const forPaymentRentals = adminRentals.filter(
+    (rental) => rental.status === 'for_payment' || rental.status === 'paid_for_confirmation'
+  );
+  const forPickupRentals = adminRentals.filter((rental) => rental.status === 'for_pickup');
+
+  const isPickupScheduled = (rental: AdminRentalDetail) =>
+    Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);
+
+  const getRentalStatusLabel = (rental: AdminRentalDetail) => {
+    if (rental.status === 'paid_for_confirmation') return 'Paid - For Confirmation';
+    if (rental.status === 'for_pickup') {
+      return isPickupScheduled(rental) ? 'Pickup is Scheduled' : 'Schedule Pickup';
+    }
+    const status = rental.status;
+    return status
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  };
+
+  const normalizeRentalStatus = (status: unknown) => String(status || '').trim().toLowerCase();
+  const isCancelledRentalStatus = (status: unknown) => normalizeRentalStatus(status).includes('cancel');
+  const rentalQuery = rentalSearchQuery.trim().toLowerCase();
+
+  const matchesRentalSearch = (rental: {
+    id?: string;
+    referenceId?: string;
+    gownName?: string;
+    customerName?: string;
+    branch?: string;
+    status?: string;
+    startDate?: string;
+    endDate?: string;
+  }) => {
+    if (!rentalQuery) return true;
+
+    return [
+      rental.id,
+      rental.referenceId,
+      rental.gownName,
+      rental.customerName,
+      rental.branch,
+      rental.status,
+      rental.startDate,
+      rental.endDate,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(rentalQuery));
+  };
+
+  const filteredPendingRentalCards = pendingRentalCards.filter((rental) => matchesRentalSearch(rental));
+  const filteredActiveRentalCards = activeRentalCards.filter((rental) => matchesRentalSearch(rental));
+  const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesRentalSearch(rental));
+  const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesRentalSearch(rental));
+  const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesRentalSearch(rental));
+
+  const pendingReturns: PendingReturn[] = activeRentalCards
+    .map((rental) => {
+      const due = new Date(rental.endDate);
+      due.setHours(0, 0, 0, 0);
+      if (Number.isNaN(due.getTime())) return null;
+
+      const threeDaysBeforeDue = new Date(due);
+      threeDaysBeforeDue.setDate(threeDaysBeforeDue.getDate() - 3);
+
+      if (today < threeDaysBeforeDue) return null;
+
+      const daysLate = Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
+
+      return {
+        id: rental.id,
+        gownName: rental.gownName,
+        customer: rental.customerName,
+        dueDate: rental.endDate,
+        daysLate,
+      };
+    })
+    .filter((rental): rental is PendingReturn => rental !== null);
+
+  const isWithinReturnFollowUpWindow = (endDate: string) => {
+    const due = new Date(endDate);
+    due.setHours(0, 0, 0, 0);
+    if (Number.isNaN(due.getTime())) {
+      return false;
+    }
+
+    const threeDaysBeforeDue = new Date(due);
+    threeDaysBeforeDue.setDate(threeDaysBeforeDue.getDate() - 3);
+    return today >= threeDaysBeforeDue;
+  };
+
+  const filteredPendingReturns = pendingReturns.filter((rental) => {
+    if (!rentalQuery) return true;
+    return [rental.id, rental.gownName, rental.customer, rental.dueDate]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(rentalQuery));
+  });
+
+  const createRentalFollowUpTarget = (
+    rental: Pick<AdminRentalCard, 'id' | 'gownName' | 'customerName' | 'endDate' | 'status'>
+  ): RentalFollowUpTarget => {
+    const due = new Date(rental.endDate);
+    due.setHours(0, 0, 0, 0);
+    const hasValidDueDate = !Number.isNaN(due.getTime());
+    const daysLate = hasValidDueDate
+      ? Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)))
+      : 0;
+
+    return {
+      id: rental.id,
+      gownName: rental.gownName,
+      customer: rental.customerName,
+      dueDate: rental.endDate,
+      daysLate,
+      status: rental.status === 'active' ? 'active' : rental.status === 'pending' ? 'pending' : 'for-payment',
+    };
+  };
+
+  const openRentalFollowUp = (target: RentalFollowUpTarget) => {
+    setSelectedRental(target);
+    setShowNotificationModal(true);
+  };
+
+  const appointmentQuery = appointmentSearchQuery.trim().toLowerCase();
+  const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
+    if (!appointmentQuery) return true;
+
+    return [
+      appointment.id,
+      appointment.customerName,
+      appointment.customerEmail,
+      appointment.contactNumber,
+      appointment.type,
+      appointment.branch,
+      appointment.date,
+      appointment.time,
+      appointment.status,
+      appointment.selectedGownName,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(appointmentQuery));
+  };
+
+  const pendingAppointments = adminAppointments.filter((appointment) => appointment.status === 'pending');
+  const scheduledAppointments = adminAppointments.filter((appointment) => appointment.status === 'scheduled');
+  const archivedAppointments = adminAppointments.filter(
+    (appointment) => appointment.status === 'completed' || appointment.status === 'cancelled'
+  );
+  const filteredPendingAppointments = pendingAppointments.filter(matchesAppointmentSearch);
+  const filteredScheduledAppointments = scheduledAppointments.filter(matchesAppointmentSearch);
+  const filteredArchivedAppointments = archivedAppointments.filter(matchesAppointmentSearch);
+  const appointmentItemsForCurrentView = appointmentManagementView === 'archive'
+    ? filteredArchivedAppointments
+    : appointmentStatusFilter === 'pending'
+      ? filteredPendingAppointments
+      : filteredScheduledAppointments;
+  const appointmentTotalPages = Math.max(1, Math.ceil(appointmentItemsForCurrentView.length / APPOINTMENT_PAGE_SIZE));
+  const safeAppointmentPage = Math.min(appointmentPage, appointmentTotalPages);
+  const paginatedAppointments = appointmentItemsForCurrentView.slice(
+    (safeAppointmentPage - 1) * APPOINTMENT_PAGE_SIZE,
+    safeAppointmentPage * APPOINTMENT_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setAppointmentPage(1);
+  }, [appointmentSearchQuery, appointmentManagementView, appointmentStatusFilter]);
+
+  const changeAppointmentPage = (nextPage: number) => {
+    setAppointmentPage(nextPage);
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  };
+
+  const customOrderQuery = customOrderSearchQuery.trim().toLowerCase();
+  const filteredAdminCustomOrders = adminCustomOrders.filter((order) => {
+    const matchesStatus = customOrderManagementView === 'archive'
+      ? order.status === 'completed' || order.status === 'rejected'
+      : order.status === customOrderStatusFilter;
+    if (!matchesStatus) return false;
+    if (!customOrderQuery) return true;
+
+    return [
+      order.id,
+      order._id,
+      order.referenceId,
+      order.customerName,
+      order.email,
+      order.contactNumber,
+      order.orderType,
+      order.branch,
+      order.status,
+      order.eventDate,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(customOrderQuery));
+  });
+
+  const getAppointmentTypeLabel = (type: string) => {
+    if (type === 'consultation') return 'Design Consultation';
+    if (type === 'measurement') return 'Measurement Session';
+    if (type === 'fitting') return 'Fitting Appointment';
+    if (type === 'pickup') return 'Pickup/Return';
+    return type;
+  };
+
+  const getCustomOrderStatusLabel = (status: string) => status
+    .split('-')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+
+  const getCustomOrderStatusBadgeClass = (status: AdminCustomOrderStatus) => {
+    if (status === 'inquiry') return 'bg-amber-100 text-amber-800';
+    if (status === 'design-approval') return 'bg-violet-100 text-violet-800';
+    if (status === 'in-progress') return 'bg-blue-100 text-blue-800';
+    if (status === 'fitting') return 'bg-cyan-100 text-cyan-800';
+    if (status === 'rejected') return 'bg-red-100 text-red-800';
+    return 'bg-green-100 text-green-800';
+  };
+
+  const getNextCustomOrderStatus = (status: AdminCustomOrderStatus): AdminCustomOrderStatus | null => {
+    if (status === 'completed' || status === 'rejected') {
+      return null;
+    }
+
+    const currentIndex = CUSTOM_ORDER_STATUS_OPTIONS.indexOf(status);
+    if (currentIndex === -1 || currentIndex === CUSTOM_ORDER_STATUS_OPTIONS.length - 1) {
+      return null;
+    }
+
+    return CUSTOM_ORDER_STATUS_OPTIONS[currentIndex + 1];
+  };
+
+  const formatCustomOrderBudget = (value: string | number | undefined) => {
+    if (value === undefined || value === null) return 'N/A';
+
+    const rawValue = String(value).trim();
+    if (!rawValue) return 'N/A';
+
+    const normalizedValue = rawValue.replace(/[₱,\s]/g, '');
+    const numericValue = Number(normalizedValue);
+
+    if (Number.isFinite(numericValue) && /^-?\d+(\.\d+)?$/.test(normalizedValue)) {
+      return `₱${numericValue.toLocaleString()}`;
+    }
+
+    return rawValue;
+  };
+
+  const adminHistoryActionButtonClass = 'px-4 inline-flex items-center justify-center rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors';
+  const adminHistoryClearFiltersButtonClass = `${adminHistoryActionButtonClass} py-2 whitespace-nowrap`;
+
+  const notificationMethodText = notificationMethod === 'both'
+    ? 'SMS and Email'
+    : notificationMethod === 'sms'
+      ? 'SMS'
+      : 'Email';
+
+  const reminderMessage = selectedRental
+    ? selectedRental.status === 'pending'
+      ? `Dear ${selectedRental.customer}, this is a follow-up regarding your rental request for '${selectedRental.gownName}'. Your request is currently pending review with Hannah Vanessa Boutique. Please keep your phone and email available for the next update. Thank you!`
+      : selectedRental.status === 'for-payment'
+        ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is currently awaiting payment. Please settle the required payment so we can proceed with the next step. Thank you!`
+        : selectedRental.status === 'for-pickup'
+          ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is ready for pickup. Please check your scheduled pickup details and coordinate with Hannah Vanessa Boutique if you need any changes. Thank you!`
+      : `Dear ${selectedRental.customer}, this is a friendly reminder that your rented gown '${selectedRental.gownName}' is due for return on ${selectedRental.dueDate}. ${selectedRental.daysLate > 0 ? `You currently have a late fee of ₱${(selectedRental.daysLate * 500).toLocaleString()}. ` : ''}Please return it to Hannah Vanessa Boutique at your earliest convenience. Thank you!`
+    : '';
+
   // Notification Handler
   const handleSendNotification = () => {
     if (!selectedRental) return;
 
-    const methodText = notificationMethod === 'both' 
-      ? 'SMS and Email' 
-      : notificationMethod === 'sms' 
-      ? 'SMS' 
-      : 'Email';
-
-    alert(`Return reminder sent to ${selectedRental.customer} via ${methodText}!\n\nMessage: "Dear ${selectedRental.customer}, this is a friendly reminder that your rented gown '${selectedRental.gownName}' is due for return on ${selectedRental.dueDate}. ${selectedRental.daysLate > 0 ? `You currently have a late fee of ₱${(selectedRental.daysLate * 500).toLocaleString()}. ` : ''}Please return it to Hannah Vanessa Boutique at your earliest convenience. Thank you!"`);
-    
     setShowNotificationModal(false);
+    setIsSendReminderConfirmOpen(true);
+  };
+
+  const handleConfirmSendNotification = () => {
+    if (!selectedRental) return;
+
+    setIsSendReminderConfirmOpen(false);
+    setShowNotificationModal(false);
+    setIsReminderSentSuccessOpen(true);
+  };
+
+  const handleDismissReminderSentSuccess = () => {
+    setIsReminderSentSuccessOpen(false);
     setSelectedRental(null);
     setNotificationMethod('both');
   };
@@ -809,6 +1795,26 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
             }`}
           >
             Rentals
+          </button>
+          <button
+            onClick={() => setActiveTab('appointments')}
+            className={`px-6 py-3 border-b-2 transition-colors ${
+              activeTab === 'appointments'
+                ? 'border-[#D4AF37] font-medium'
+                : 'border-transparent text-[#6B5D4F] hover:text-black'
+            }`}
+          >
+            Appointments
+          </button>
+          <button
+            onClick={() => setActiveTab('bespoke')}
+            className={`px-6 py-3 border-b-2 transition-colors ${
+              activeTab === 'bespoke'
+                ? 'border-[#D4AF37] font-medium'
+                : 'border-transparent text-[#6B5D4F] hover:text-black'
+            }`}
+          >
+            Bespoke
           </button>
           <button
             onClick={() => setActiveTab('users')}
@@ -985,6 +1991,24 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
               </div>
             </div>
 
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search Inventory"
+                value={inventorySearchQuery}
+                onChange={(e) => setInventorySearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            <p className="text-sm text-[#6B5D4F]">
+              Hover over a product to preview its details.
+            </p>
+
+            <div className="text-sm text-[#6B5D4F]">
+              Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'gown' : 'gowns'}
+            </div>
+
             {/* Inventory status messages */}
             {inventoryError && (
               <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
@@ -1010,7 +2034,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
 
             {/* Inventory Table */}
             <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
-              <div className="overflow-x-auto">
+              <div style={{ height: '650px' }} className="overflow-y-auto overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-[#FAF7F0]">
                     <tr>
@@ -1029,14 +2053,19 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E8DCC8]">
-                    {inventoryView === 'active' && !inventoryLoading && inventory.length === 0 && (
-                      <tr><td colSpan={8} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">No items in inventory. Add a gown to get started.</td></tr>
+                    {inventoryView === 'active' && !inventoryLoading && filteredInventory.length === 0 && (
+                      <tr><td colSpan={8} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No inventory items match your search.' : 'No items in inventory. Add a gown to get started.'}</td></tr>
                     )}
-                    {inventoryView === 'archive' && !archiveLoading && archivedItems.length === 0 && (
-                      <tr><td colSpan={9} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">No archived gowns found.</td></tr>
+                    {inventoryView === 'archive' && !archiveLoading && filteredArchivedItems.length === 0 && (
+                      <tr><td colSpan={9} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No archived gowns match your search.' : 'No archived gowns found.'}</td></tr>
                     )}
-                    {inventoryView === 'active' && inventory.map((item) => (
-                      <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
+                    {inventoryView === 'active' && paginatedInventoryItems.map((item) => (
+                      <tr
+                        key={item.id}
+                        className="hover:bg-[#FAF7F0] transition-colors cursor-help"
+                        onMouseEnter={() => handleInventoryRowHoverStart(item)}
+                        onMouseLeave={() => handleInventoryRowHoverEnd(item.id)}
+                      >
                         <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
                         <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
                         <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
@@ -1059,14 +2088,20 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                         <td className="px-6 py-4">
                           <div className="flex gap-2">
                             <button
-                              onClick={() => setEditingItem(item)}
+                              onClick={() => {
+                                handleInventoryRowHoverEnd(item.id);
+                                setEditingItem(item);
+                              }}
                               className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
                               title="Edit"
                             >
                               <Edit className="w-4 h-4 text-[#6B5D4F]" />
                             </button>
                             <button
-                              onClick={() => handleDeleteItem(item.id)}
+                              onClick={() => {
+                                handleInventoryRowHoverEnd(item.id);
+                                handleDeleteItem(item.id);
+                              }}
                               className="p-2 hover:bg-red-50 rounded-full transition-colors"
                               title="Delete"
                             >
@@ -1076,7 +2111,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                         </td>
                       </tr>
                     ))}
-                    {inventoryView === 'archive' && archivedItems.map((item) => (
+                    {inventoryView === 'archive' && paginatedInventoryItems.map((item) => (
                       <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
                         <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
                         <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
@@ -1112,153 +2147,1113 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                 </table>
               </div>
             </div>
+
+            {inventoryItemsForCurrentView.length > INVENTORY_PAGE_SIZE && (
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <p className="text-sm text-[#6B5D4F] leading-none">
+                  Page {safeInventoryPage} of {inventoryTotalPages}
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => changeInventoryPage(Math.max(1, safeInventoryPage - 1))}
+                    disabled={safeInventoryPage === 1}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => changeInventoryPage(Math.min(inventoryTotalPages, safeInventoryPage + 1))}
+                    disabled={safeInventoryPage === inventoryTotalPages}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {activeTab === 'rentals' && (
           <div className="space-y-6">
-            {/* Header with Add Button */}
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Rental Management</h2>
-            </div>
-
-            {/* Current Rentals */}
-            <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-              <h3 className="text-lg font-medium mb-4">Current Inventory Status</h3>
-              <div className="space-y-3">
-                {inventory.filter(item => item.status === 'rented').map((item) => (
-                  <div key={item.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="font-medium">{item.name}</h4>
-                        <p className="text-sm text-[#6B5D4F]">{item.category} • {item.color}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm text-[#6B5D4F] mb-1">Rental Fee</p>
-                        <p className="text-lg font-light">₱{item.price.toLocaleString()}/day</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {inventory.filter(item => item.status === 'rented').length === 0 && (
-                  <p className="text-center py-8 text-[#6B5D4F]">No current rentals</p>
-                )}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={loadAdminRentals}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={() => setRentalManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                  aria-label={rentalManagementView === 'archive' ? 'Back to active rentals' : 'Show archived rentals'}
+                >
+                  <Archive className="w-5 h-5" />
+                  {rentalManagementView === 'archive' ? 'Back' : 'Archive'}
+                </button>
               </div>
             </div>
 
-            {/* Pending Returns Section */}
-            <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-              <h3 className="text-lg font-medium mb-4">Pending Returns</h3>
-              <div className="space-y-3">
-                {mockPendingReturns.map((rental) => (
-                  <div
-                    key={rental.id}
-                    className={`p-4 rounded-lg border transition-colors ${
-                      rental.daysLate > 0
-                        ? 'border-red-300 bg-red-50/30'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h4 className="font-medium">{rental.gownName}</h4>
-                          {rental.daysLate > 0 && (
-                            <span className="px-3 py-1 bg-red-100 text-red-800 text-xs rounded-full font-medium">
-                              {rental.daysLate} {rental.daysLate === 1 ? 'day' : 'days'} late
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search Rental"
+                value={rentalSearchQuery}
+                onChange={(e) => setRentalSearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            {adminRentalsError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="status" aria-live="polite">
+                {adminRentalsError}
+              </div>
+            )}
+
+            <div
+              style={{ height: '650px' }}
+              className="bg-white rounded-2xl border border-[#E8DCC8] p-8 overflow-y-auto overflow-x-auto"
+            >
+              {rentalManagementView === 'active' && (
+              <div className="flex flex-wrap gap-3 mb-6">
+                <button
+                  onClick={() => setRentalViewFilter('pending')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'pending'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  Pending Rentals
+                </button>
+                <button
+                  onClick={() => setRentalViewFilter('for-payment')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'for-payment'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  For Payment
+                </button>
+                <button
+                  onClick={() => setRentalViewFilter('for-pickup')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'for-pickup'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  Schedule Pickup
+                </button>
+                <button
+                  onClick={() => setRentalViewFilter('active')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'active'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  Active Rentals
+                </button>
+                <button
+                  onClick={() => setRentalViewFilter('returns')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'returns'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  Pending Returns
+                </button>
+              </div>
+              )}
+
+              {rentalManagementView === 'archive' && (
+                <p className="text-sm text-[#6B5D4F] mb-6">Showing all rental records from rental details.</p>
+              )}
+
+              {adminRentalsLoading && (
+                <p className="text-center py-8 text-[#6B5D4F]" role="status" aria-live="polite">
+                  Loading rental details...
+                </p>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'pending' && (
+                <div className="space-y-3">
+                  {filteredPendingRentalCards.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs rounded-full font-medium">
+                              Pending
                             </span>
-                          )}
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Ends: {rental.endDate}</span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
-                          <div className="flex items-center gap-2">
-                            <Users className="w-4 h-4" />
-                            <span>{rental.customer}</span>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-sm text-[#6B5D4F] mb-1">Total Rental</p>
+                            <p className="text-lg font-light">₱{rental.totalPrice.toLocaleString()}</p>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Clock className="w-4 h-4" />
-                            <span>Due: {rental.dueDate}</span>
-                          </div>
+                          <button
+                            onClick={() => {
+                              const full = adminRentals.find((r) => r.id === rental.id) ?? null;
+                              setSelectedPendingRental(full);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-3">
-                        {rental.daysLate > 0 && (
+                    </div>
+                  ))}
+                  {filteredPendingRentalCards.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No pending rentals match your search' : 'No pending rentals'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'active' && (
+                <div className="space-y-3">
+                  {filteredActiveRentalCards.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs rounded-full font-medium">
+                              Active
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{rental.branch}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Ends: {rental.endDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
                           <div className="text-right">
-                            <p className="text-xs text-[#6B5D4F] mb-1">Late Fee</p>
-                            <p className="text-lg font-light text-red-600">
-                              ₱{(rental.daysLate * 500).toLocaleString()}
+                            <p className="text-sm text-[#6B5D4F] mb-1">Total Rental</p>
+                            <p className="text-lg font-light">₱{rental.totalPrice.toLocaleString()}</p>
+                          </div>
+                          {isWithinReturnFollowUpWindow(rental.endDate) && (
+                            <button
+                              onClick={() => openRentalFollowUp(createRentalFollowUpTarget(rental))}
+                              className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] whitespace-nowrap"
+                              title="Send Follow Up"
+                            >
+                              <Send className="w-4 h-4" />
+                              <span className="text-sm">Follow Up</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              const full = adminRentals.find((r) => r.id === rental.id) ?? null;
+                              setSelectedPendingRental(full);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredActiveRentalCards.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No active rentals match your search' : 'No active rentals'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'for-payment' && (
+                <div className="space-y-3">
+                  {filteredForPaymentRentals.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            <span
+                              className={`px-3 py-1 text-xs rounded-full font-medium ${
+                                rental.status === 'paid_for_confirmation'
+                                  ? 'bg-violet-100 text-violet-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {rental.status === 'paid_for_confirmation' ? 'Paid - For Confirmation' : 'For Payment'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Ends: {rental.endDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-xs text-[#6B5D4F] mb-1">Balance Due</p>
+                            <p className="text-lg font-light text-rose-700">
+                              ₱{Math.max(0, rental.totalPrice - rental.downpayment).toLocaleString()}
                             </p>
                           </div>
-                        )}
-                        <button
-                          onClick={() => {
-                            setSelectedRental(rental);
-                            setShowNotificationModal(true);
-                          }}
-                          className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
-                            rental.daysLate > 0
-                              ? 'bg-red-600 text-white hover:bg-red-700'
-                              : 'bg-[#D4AF37] text-white hover:bg-[#1a1a1a]'
-                          }`}
-                          title="Send Return Reminder"
-                        >
-                          <Send className="w-4 h-4" />
-                          <span className="text-sm">Follow Up</span>
-                        </button>
+                          {rental.status !== 'paid_for_confirmation' && (
+                            <button
+                              onClick={() => openRentalFollowUp({
+                                id: rental.id,
+                                gownName: rental.gownName,
+                                customer: rental.customerName,
+                                dueDate: rental.endDate,
+                                daysLate: 0,
+                                status: 'for-payment',
+                              })}
+                              className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] whitespace-nowrap"
+                              title="Send Follow Up"
+                            >
+                              <Send className="w-4 h-4" />
+                              <span className="text-sm">Follow Up</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              setSelectedPendingRental(rental);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  ))}
+                  {filteredForPaymentRentals.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rentals for payment match your search' : 'No rentals for payment'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'for-pickup' && (
+                <div className="space-y-3">
+                  {filteredForPickupRentals.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            <span className="px-3 py-1 bg-cyan-100 text-cyan-800 text-xs rounded-full font-medium">
+                              {getRentalStatusLabel(rental)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{rental.branch}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Start: {rental.startDate}</span>
+                            </div>
+                            {isPickupScheduled(rental) && (
+                              <div className="flex items-center gap-2">
+                                <Calendar className="w-4 h-4" />
+                                <span>Pickup: {rental.pickupScheduleDate} {rental.pickupScheduleTime}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-xs text-[#6B5D4F] mb-1">Paid</p>
+                            <p className="text-lg font-light text-cyan-700">₱{rental.totalPrice.toLocaleString()}</p>
+                          </div>
+                          <button
+                            onClick={() => openRentalFollowUp({
+                              id: rental.id,
+                              gownName: rental.gownName,
+                              customer: rental.customerName,
+                              dueDate: rental.endDate,
+                              daysLate: 0,
+                              status: 'for-pickup',
+                            })}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] whitespace-nowrap"
+                            title="Send Follow Up"
+                          >
+                            <Send className="w-4 h-4" />
+                            <span className="text-sm">Follow Up</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSelectedPendingRental(rental);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredForPickupRentals.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rentals for pick up match your search' : 'No rentals for pick up'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'returns' && (
+                <div className="space-y-3">
+                  {filteredPendingReturns.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className={`p-4 rounded-lg border transition-colors ${
+                        rental.daysLate > 0
+                          ? 'border-red-300 bg-red-50/30'
+                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            {rental.daysLate > 0 && (
+                              <span className="px-3 py-1 bg-red-100 text-red-800 text-xs rounded-full font-medium">
+                                {rental.daysLate} {rental.daysLate === 1 ? 'day' : 'days'} late
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customer}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Due: {rental.dueDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {rental.daysLate > 0 && (
+                            <div className="text-right">
+                              <p className="text-xs text-[#6B5D4F] mb-1">Late Fee</p>
+                              <p className="text-lg font-light text-red-600">
+                                ₱{(rental.daysLate * 500).toLocaleString()}
+                              </p>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => {
+                              openRentalFollowUp({
+                                id: rental.id,
+                                gownName: rental.gownName,
+                                customer: rental.customer,
+                                dueDate: rental.dueDate,
+                                daysLate: rental.daysLate,
+                                status: 'active',
+                              });
+                            }}
+                            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                              rental.daysLate > 0
+                                ? 'bg-red-600 text-white hover:bg-red-700'
+                                : 'bg-[#D4AF37] text-white hover:bg-[#1a1a1a]'
+                            }`}
+                            title="Send Return Reminder"
+                          >
+                            <Send className="w-4 h-4" />
+                            <span className="text-sm">Follow Up</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              const full = adminRentals.find((r) => r.id === rental.id) ?? null;
+                              setSelectedPendingRental(full);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0]"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredPendingReturns.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No pending returns match your search' : 'No pending returns'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'archive' && (
+                <div className="space-y-3">
+                  {filteredArchivedRentalCards.map((rental) => (
+                    <div
+                      key={rental.id}
+                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{rental.gownName}</h4>
+                            <span
+                              style={isCancelledRentalStatus(rental.status) ? { backgroundColor: '#fee2e2', color: '#991b1b' } : undefined}
+                              className={`px-3 py-1 text-xs rounded-full font-medium ${
+                                rental.status === 'completed'
+                                  ? 'bg-green-100 text-green-800'
+                                  : isCancelledRentalStatus(rental.status)
+                                  ? 'bg-red-100 text-red-800'
+                                  : rental.status === 'for_payment'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : rental.status === 'paid_for_confirmation'
+                                  ? 'bg-violet-100 text-violet-800'
+                                  : rental.status === 'for_pickup'
+                                  ? 'bg-cyan-100 text-cyan-800'
+                                  : rental.status === 'active'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {rental.status === 'paid_for_confirmation'
+                                ? 'Paid - For Confirmation'
+                                : rental.status
+                                    .split('_')
+                                    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                                    .join(' ')}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{rental.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{rental.branch}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>Ended: {rental.endDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="text-sm text-[#6B5D4F] mb-1">Total Rental</p>
+                            <p className="text-lg font-light">₱{rental.totalPrice.toLocaleString()}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              const full = adminRentals.find((r) => r.id === rental.id) ?? null;
+                              setSelectedPendingRental(full);
+                              setShowPendingRentalModal(true);
+                            }}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            title="View Rental Details"
+                          >
+                            <span className="text-sm">View Details</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredArchivedRentalCards.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rental records match your search' : 'No rental records found'}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {hoverPreviewItem && (
+          <GownDetailsModal
+            gown={toInventoryPreviewDetails(hoverPreviewItem)}
+            isAdmin={true}
+            onClose={() => setHoverPreviewItem(null)}
+            onBookRental={() => {}}
+            onScheduleFitting={() => {}}
+          />
+        )}
+
+        {activeTab === 'appointments' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-light">Appointment Management</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={loadAdminAppointments}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={() => setAppointmentManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                  aria-label={appointmentManagementView === 'archive' ? 'Back to active appointments' : 'Show archived appointments'}
+                >
+                  <Archive className="w-5 h-5" />
+                  {appointmentManagementView === 'archive' ? 'Back' : 'Archive'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search Appointment"
+                value={appointmentSearchQuery}
+                onChange={(e) => setAppointmentSearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            {adminAppointmentsError && (
+              <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                {adminAppointmentsError}
+              </div>
+            )}
+
+            <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8 overflow-x-auto">
+              {appointmentManagementView === 'active' && (
+                <div className="flex flex-wrap gap-3 mb-6">
+                  <button
+                    onClick={() => setAppointmentStatusFilter('pending')}
+                    className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                      appointmentStatusFilter === 'pending'
+                        ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                        : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    Pending Appointments
+                  </button>
+                  <button
+                    onClick={() => setAppointmentStatusFilter('scheduled')}
+                    className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                      appointmentStatusFilter === 'scheduled'
+                        ? 'bg-blue-50 border-blue-200 text-blue-800 font-medium'
+                        : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    Scheduled
+                  </button>
+                </div>
+              )}
+
+              {appointmentManagementView === 'archive' && (
+                <p className="text-sm text-[#6B5D4F] mb-6">Showing archived appointments.</p>
+              )}
+
+              {adminAppointmentsLoading && (
+                <p className="text-center py-8 text-[#6B5D4F]">Loading appointments...</p>
+              )}
+
+              {!adminAppointmentsLoading && appointmentManagementView === 'active' && appointmentStatusFilter === 'pending' && (
+                <div className="space-y-3">
+                  {paginatedAppointments.map((appointment) => (
+                    <div key={appointment.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
+                            <span className={`px-3 py-1 text-xs rounded-full font-medium ${
+                              appointment.rescheduleReason
+                                ? 'bg-orange-100 text-orange-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {appointment.rescheduleReason ? 'Rescheduled' : 'Pending'}
+                            </span>
+                          </div>
+                          <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{appointment.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Mail className="w-4 h-4" />
+                              <span>{appointment.customerEmail}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Phone className="w-4 h-4" />
+                              <span>{appointment.contactNumber}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Calendar className="w-4 h-4" />
+                              <span>{appointment.date}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>{appointment.time}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{appointment.branch}</span>
+                            </div>
+                          </div>
+                          {appointment.selectedGownName && (
+                            <p className="text-sm text-[#6B5D4F] mb-2">Gown: {appointment.selectedGownName}</p>
+                          )}
+                          {appointment.notes && (
+                            <p className="text-sm text-[#6B5D4F] italic mb-2">{appointment.notes}</p>
+                          )}
+                          {appointment.rescheduleReason && (
+                            <div className="mb-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-900">
+                              <span className="font-medium">Reschedule reason: </span>
+                              <span>{appointment.rescheduleReason}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setAdminAppointmentsError(null);
+                              setSelectedPendingAppointment(appointment);
+                              setIsApproveAppointmentConfirmOpen(true);
+                            }}
+                            disabled={appointmentStatusUpdatingId === appointment.id}
+                            className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Approve'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setAdminAppointmentsError(null);
+                              setAppointmentCancelError(null);
+                              setAppointmentCancelReason('');
+                              setSelectedCancelAppointment(appointment);
+                              setIsCancelAppointmentConfirmOpen(true);
+                            }}
+                            disabled={appointmentStatusUpdatingId === appointment.id}
+                            className="px-4 py-2 rounded-lg border border-red-300 text-red-600 hover:border-red-600 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {appointmentItemsForCurrentView.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">
+                      {appointmentQuery ? 'No pending appointments match your search' : 'No pending appointments'}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!adminAppointmentsLoading && appointmentManagementView === 'active' && appointmentStatusFilter === 'scheduled' && (
+                <div className="space-y-3">
+                  {paginatedAppointments.map((appointment) => (
+                    <div key={appointment.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
+                            <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">Scheduled</span>
+                          </div>
+                          <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{appointment.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Mail className="w-4 h-4" />
+                              <span>{appointment.customerEmail}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Phone className="w-4 h-4" />
+                              <span>{appointment.contactNumber}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Calendar className="w-4 h-4" />
+                              <span>{appointment.date}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>{appointment.time}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{appointment.branch}</span>
+                            </div>
+                          </div>
+                          {appointment.selectedGownName && (
+                            <p className="text-sm text-[#6B5D4F] mb-2">Gown: {appointment.selectedGownName}</p>
+                          )}
+                          {appointment.notes && (
+                            <p className="text-sm text-[#6B5D4F] italic">{appointment.notes}</p>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setAdminAppointmentsError(null);
+                              setSelectedScheduledAppointment(appointment);
+                              setIsCompleteAppointmentConfirmOpen(true);
+                            }}
+                            disabled={appointmentStatusUpdatingId === appointment.id}
+                            className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Complete'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setAdminAppointmentsError(null);
+                              setAppointmentCancelError(null);
+                              setAppointmentCancelReason('');
+                              setSelectedCancelAppointment(appointment);
+                              setIsCancelAppointmentConfirmOpen(true);
+                            }}
+                            disabled={appointmentStatusUpdatingId === appointment.id}
+                            className="px-4 py-2 rounded-lg border border-red-300 text-red-600 hover:border-red-600 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {appointmentItemsForCurrentView.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">
+                      {appointmentQuery ? 'No scheduled appointments match your search' : 'No scheduled appointments'}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!adminAppointmentsLoading && appointmentManagementView === 'archive' && (
+                <div className="space-y-3">
+                  {paginatedAppointments.map((appointment) => (
+                    <div key={appointment.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
+                            <span className={`px-3 py-1 text-xs rounded-full font-medium ${
+                              appointment.status === 'completed'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}>
+                              {appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1)}
+                            </span>
+                          </div>
+                          <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
+                            <div className="flex items-center gap-2">
+                              <Users className="w-4 h-4" />
+                              <span>{appointment.customerName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Mail className="w-4 h-4" />
+                              <span>{appointment.customerEmail}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Phone className="w-4 h-4" />
+                              <span>{appointment.contactNumber}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Calendar className="w-4 h-4" />
+                              <span>{appointment.date}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Clock className="w-4 h-4" />
+                              <span>{appointment.time}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="w-4 h-4" />
+                              <span>{appointment.branch}</span>
+                            </div>
+                          </div>
+                          {appointment.selectedGownName && (
+                            <p className="text-sm text-[#6B5D4F] mb-2">Gown: {appointment.selectedGownName}</p>
+                          )}
+                          {appointment.notes && (
+                            <p className="text-sm text-[#6B5D4F] italic">{appointment.notes}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {appointmentItemsForCurrentView.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">
+                      {appointmentQuery ? 'No archived appointments match your search' : 'No archived appointments yet'}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {!adminAppointmentsLoading && appointmentItemsForCurrentView.length > 0 && (
+                <div className="mt-8 flex items-center justify-between gap-4 pt-6">
+                  <p className="text-sm text-[#6B5D4F]">
+                    Page {safeAppointmentPage} of {appointmentTotalPages}
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => changeAppointmentPage(Math.max(1, safeAppointmentPage - 1))}
+                      disabled={safeAppointmentPage === 1}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeAppointmentPage(Math.min(appointmentTotalPages, safeAppointmentPage + 1))}
+                      disabled={safeAppointmentPage === appointmentTotalPages}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
                   </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'bespoke' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center gap-4">
+              <h2 className="text-2xl font-light">Bespoke Management</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={loadAdminCustomOrders}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                >
+                  Refresh
+                </button>
+                <button
+                  onClick={() => setCustomOrderManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                  aria-label={customOrderManagementView === 'archive' ? 'Back to active custom orders' : 'Show archived custom orders'}
+                >
+                  <Archive className="w-5 h-5" />
+                  {customOrderManagementView === 'archive' ? 'Back' : 'Archive'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search Custom Orders"
+                value={customOrderSearchQuery}
+                onChange={(e) => setCustomOrderSearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            {customOrderManagementView === 'active' && (
+              <div className="flex flex-wrap gap-3">
+                {CUSTOM_ORDER_FILTER_TABS.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => setCustomOrderStatusFilter(status)}
+                    className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                      customOrderStatusFilter === status
+                        ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                        : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    {status === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(status)}
+                  </button>
                 ))}
               </div>
+            )}
+
+            {customOrderManagementView === 'archive' && (
+              <p className="text-sm text-[#6B5D4F]">Showing archived custom orders.</p>
+            )}
+
+            {adminCustomOrdersError && (
+              <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                {adminCustomOrdersError}
+              </div>
+            )}
+
+            <div
+              style={{ height: '650px' }}
+              className="bg-white rounded-2xl border border-[#E8DCC8] p-8 overflow-y-auto overflow-x-auto"
+            >
+              {adminCustomOrdersLoading && (
+                <p className="text-center py-8 text-[#6B5D4F]">Loading custom orders...</p>
+              )}
+
+              {!adminCustomOrdersLoading && filteredAdminCustomOrders.length === 0 && (
+                <p className="text-center py-8 text-[#6B5D4F]">
+                  {customOrderManagementView === 'archive'
+                    ? (customOrderQuery ? 'No archived custom orders match your search.' : 'No archived custom orders yet.')
+                    : (customOrderQuery || adminCustomOrders.length > 0
+                        ? 'No custom orders match your filters.'
+                        : 'No custom orders yet.')}
+                </p>
+              )}
+
+              {!adminCustomOrdersLoading && filteredAdminCustomOrders.length > 0 && (
+                <div className="space-y-3">
+                  {filteredAdminCustomOrders.map((order) => {
+                    const orderId = String(order.id || order._id || '');
+                    const orderReferenceId = String(order.referenceId || orderId || '').trim();
+
+                    return (
+                      <div key={orderId} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2 flex-wrap">
+                              <h4 className="font-medium">{order.orderType || 'Custom Order'}</h4>
+                              <span className={`px-3 py-1 text-xs rounded-full font-medium ${getCustomOrderStatusBadgeClass(order.status)}`}>
+                                {getCustomOrderStatusLabel(order.status)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-6 text-sm text-[#6B5D4F]">
+                              <div className="flex items-center gap-2">
+                                <Users className="w-4 h-4" />
+                                <span>{order.customerName}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Mail className="w-4 h-4" />
+                                <span>{order.email || 'No email'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Phone className="w-4 h-4" />
+                                <span>{order.contactNumber || 'No phone'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <MapPin className="w-4 h-4" />
+                                <span>{order.branch || 'No branch'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Calendar className="w-4 h-4" />
+                                <span>Event: {order.eventDate || 'Not set'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4" />
+                                <span>Order Reference ID: {orderReferenceId || 'N/A'}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="text-right min-w-[120px]">
+                              <p className="text-sm text-[#6B5D4F] mb-1">Budget</p>
+                              <p className="text-lg font-light">{formatCustomOrderBudget(order.budget)}</p>
+                            </div>
+                            <button
+                              onClick={() => setSelectedCustomOrder(order)}
+                              className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                            >
+                              <span className="text-sm">View Details</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {activeTab === 'users' && (
           <div className="space-y-6">
-            <div className="flex flex-col gap-4">
+            <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">User Management</h2>
-
-              {/* User Management Toolbar */}
-              <div className="flex flex-col md:flex-row gap-3 md:items-center">
-                <input
-                  type="text"
-                  placeholder="Search User"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
-                />
-
-                <div className="flex gap-2 md:ml-auto shrink-0">
-                  {!showArchivedUsersOnly && (
-                    <button
-                      onClick={() => {
-                        setNewUserError(null);
-                        setShowAddUserModal(true);
-                      }}
-                      className="px-6 py-3 min-w-[150px] rounded-lg flex items-center justify-center gap-2 whitespace-nowrap transition-colors bg-[#1a1a1a] text-white hover:bg-[#D4AF37]"
-                    >
-                      <Plus className="w-5 h-5" />
-                      Add User
-                    </button>
-                  )}
+              <div className="flex gap-2 shrink-0">
+                {!showArchivedUsersOnly && !isCurrentUserStaff && (
                   <button
-                    onClick={() => setShowArchivedUsersOnly((prev) => !prev)}
-                    className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border ${
-                      showArchivedUsersOnly
-                        ? 'bg-[#EDE1CE] text-[#5B4A36] border-[#D4AF37]'
-                        : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black'
-                    }`}
+                    onClick={() => {
+                      setNewUserError(null);
+                      setShowAddUserModal(true);
+                    }}
+                    className="px-6 py-3 min-w-[150px] rounded-lg flex items-center justify-center gap-2 whitespace-nowrap transition-colors bg-[#1a1a1a] text-white hover:bg-[#D4AF37]"
                   >
-                    <Archive className="w-5 h-5" />
-                    {showArchivedUsersOnly ? 'Back' : 'Archive'}
+                    <Plus className="w-5 h-5" />
+                    Add User
                   </button>
-                </div>
+                )}
+                <button
+                  onClick={() => setShowArchivedUsersOnly((prev) => !prev)}
+                  className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border ${
+                    showArchivedUsersOnly
+                      ? 'bg-[#EDE1CE] text-[#5B4A36] border-[#D4AF37]'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black'
+                  }`}
+                >
+                  <Archive className="w-5 h-5" />
+                  {showArchivedUsersOnly ? 'Back' : 'Archive'}
+                </button>
+                <button
+                  onClick={loadUsers}
+                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
+                >
+                  Refresh
+                </button>
               </div>
-
-              {showArchivedUsersOnly && (
-                <p className="text-sm text-[#6B5D4F]">Showing archived users only.</p>
-              )}
             </div>
+
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search User"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            {showArchivedUsersOnly && (
+              <p className="text-sm text-[#6B5D4F]">Showing archived users only.</p>
+            )}
 
             {usersError && (
               <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
@@ -1273,7 +3268,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
             )}
 
             {/* Stats */}
-            <div className="grid md:grid-cols-3 gap-4">
+            <div className="grid md:grid-cols-4 gap-4">
               <button
                 type="button"
                 onClick={() => setUserFilter('all')}
@@ -1296,6 +3291,16 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
               </button>
               <button
                 type="button"
+                onClick={() => setUserFilter('staff')}
+                className={`text-left bg-white p-6 rounded-2xl border transition-colors ${
+                  userFilter === 'staff' ? 'border-[#D4AF37] ring-2 ring-[#D4AF37]/20' : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                }`}
+              >
+                <p className="text-sm text-[#6B5D4F] mb-1">Staff Accounts</p>
+                <p className="text-2xl font-light text-[#1a1a1a]">{users.filter(u => u.role === 'Staff').length}</p>
+              </button>
+              <button
+                type="button"
                 onClick={() => setUserFilter('customer')}
                 className={`text-left bg-white p-6 rounded-2xl border transition-colors ${
                   userFilter === 'customer' ? 'border-[#D4AF37] ring-2 ring-[#D4AF37]/20' : 'border-[#E8DCC8] hover:border-[#D4AF37]'
@@ -1307,7 +3312,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
             </div>
 
             {/* Users List */}
-            <div className="space-y-4">
+            <div style={{ height: '650px' }} className="space-y-4 overflow-y-auto overflow-x-auto pr-1">
               {usersLoading && (
                 <p className="text-center py-8 text-[#6B5D4F]">Loading users...</p>
               )}
@@ -1368,18 +3373,27 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                         </button>
                       ) : (
                         (() => {
-                          const isSelfAdmin = user.role === 'Admin' && user.id === currentUserId;
+                          const isElevatedTarget = user.role === 'Admin' || user.role === 'Staff';
+                          const isSelfAdmin = isElevatedTarget && user.id === currentUserId;
+                          const isStaffRestricted = isCurrentUserStaff && isElevatedTarget;
+                          const archiveTitle = isSelfAdmin
+                            ? 'You cannot archive your own account'
+                            : isStaffRestricted
+                              ? 'Staff accounts cannot archive admin or staff accounts'
+                              : undefined;
                           return (
                         <button
                           onClick={() => handleArchiveUser(user)}
-                          disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin}
+                          disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin || isStaffRestricted}
                           className="px-4 py-2 text-sm bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={isSelfAdmin ? 'You cannot archive your own account' : undefined}
+                          title={archiveTitle}
                         >
                           {user.status === 'archived'
                             ? 'Archived'
                             : isSelfAdmin
                               ? 'Logged In'
+                            : isStaffRestricted
+                              ? 'Restricted'
                             : archivingUserId === user.id
                               ? 'Archiving...'
                               : 'Archive'}
@@ -1401,11 +3415,87 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
               <h2 className="text-2xl font-light">Admin History</h2>
               <button
                 onClick={loadAdminHistory}
-                className="px-4 py-2 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
+                className={`${adminHistoryActionButtonClass} py-2`}
               >
                 Refresh
               </button>
             </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminHistorySearchQuery('');
+                    setAdminHistoryFrom('');
+                    setAdminHistoryTo('');
+                    setAdminHistoryFromTime('');
+                    setAdminHistoryToTime('');
+                  }}
+                  className={adminHistoryClearFiltersButtonClass}
+                >
+                  Clear Filters
+                </button>
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-[#8A7A69]">From</label>
+                  <input
+                    type="date"
+                    value={adminHistoryFrom}
+                    onChange={(e) => setAdminHistoryFrom(e.target.value)}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] bg-white"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-[#8A7A69]">From Time</label>
+                  <input
+                    type="text"
+                    value={adminHistoryFromTime}
+                    onChange={(e) => setAdminHistoryFromTime(e.target.value)}
+                    placeholder="e.g. 9:30 AM or 14:30"
+                    aria-invalid={!isFromTimeValid}
+                    className="px-3 py-2 w-full md:w-44 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] bg-white"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-[#8A7A69]">To</label>
+                  <input
+                    type="date"
+                    value={adminHistoryTo}
+                    onChange={(e) => setAdminHistoryTo(e.target.value)}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] bg-white"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-[#8A7A69]">To Time</label>
+                  <input
+                    type="text"
+                    value={adminHistoryToTime}
+                    onChange={(e) => setAdminHistoryToTime(e.target.value)}
+                    placeholder="e.g. 6:00 PM or 18:00"
+                    aria-invalid={!isToTimeValid}
+                    className="px-3 py-2 w-full md:w-44 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="text"
+                placeholder="Search Admin History"
+                value={adminHistorySearchQuery}
+                onChange={(e) => setAdminHistorySearchQuery(e.target.value)}
+                className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
+              />
+            </div>
+
+            {(!isFromTimeValid || !isToTimeValid) && (
+              <p className="text-sm text-red-600">
+                Invalid time format. Use HH:mm (24-hour) or h:mm AM/PM.
+              </p>
+            )}
 
             {adminHistoryError && (
               <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
@@ -1417,15 +3507,17 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
               <p className="text-center py-8 text-[#6B5D4F]">Loading admin history...</p>
             )}
 
-            {!adminHistoryLoading && !adminHistoryError && adminHistory.length === 0 && (
-              <p className="text-center py-8 text-[#6B5D4F]">No admin actions recorded yet.</p>
+            {!adminHistoryLoading && !adminHistoryError && filteredAdminHistory.length === 0 && (
+              <p className="text-center py-8 text-[#6B5D4F]">
+                {adminHistory.length === 0 ? 'No admin actions recorded yet.' : 'No admin actions match the selected filters.'}
+              </p>
             )}
 
-            {!adminHistoryLoading && adminHistory.length > 0 && (
+            {!adminHistoryLoading && filteredAdminHistory.length > 0 && (
               <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
-                <div className="overflow-x-auto">
+                <div style={{ height: '650px' }} className="overflow-y-auto overflow-x-auto">
                   <table className="w-full min-w-[760px]">
-                    <thead className="bg-[#FAF7F0]">
+                    <thead className="bg-[#FAF7F0] sticky top-0 z-10">
                       <tr>
                         <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Admin</th>
                         <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Action</th>
@@ -1434,7 +3526,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E8DCC8]">
-                      {adminHistory.map((entry) => (
+                      {filteredAdminHistory.map((entry) => (
                         <tr key={entry.id} className="hover:bg-[#FAF7F0] transition-colors align-top">
                           <td className="px-6 py-4 text-sm">
                             <p className="font-medium">{entry.adminLabel || 'Admin'}</p>
@@ -1912,7 +4004,9 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                   </div>
                   <div className="flex-1">
                     <h4 className="text-xl font-medium mb-1">{`${selectedUser.firstName} ${selectedUser.lastName}`.trim() || 'Unnamed User'}</h4>
-                    <p className="text-sm text-[#6B5D4F] mb-2">{selectedUser.id}</p>
+                    <p className="text-sm text-[#6B5D4F] mb-2">
+                      {formatUserDisplayId(selectedUser.id, selectedUser.role) || selectedUser.id}
+                    </p>
                     <span className="inline-block px-3 py-1 rounded-full text-xs font-medium bg-[#EDE1CE] text-[#5B4A36] mr-2">
                       {selectedUser.role}
                     </span>
@@ -1973,7 +4067,7 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
         )}
 
         {/* Add User Modal */}
-        {showAddUserModal && (
+        {showAddUserModal && !isCurrentUserStaff && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto mx-4 relative">
               <div className="flex items-center justify-between mb-6">
@@ -2007,10 +4101,11 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                     <label className="block text-sm text-[#6B5D4F] mb-2">Account Type</label>
                     <select
                       value={newUserForm.role}
-                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, role: e.target.value as 'Admin' | 'Customer' }))}
+                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, role: e.target.value as ManagedUserRole }))}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
                     >
                       <option value="Customer">Customer</option>
+                      <option value="Staff">Staff</option>
                       <option value="Admin">Admin</option>
                     </select>
                   </div>
@@ -2026,30 +4121,26 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                     />
                   </div>
 
-                  {newUserForm.role === 'Customer' && (
-                    <>
-                      <div>
-                        <label className="block text-sm text-[#6B5D4F] mb-2">First Name</label>
-                        <input
-                          type="text"
-                          value={newUserForm.firstName}
-                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, firstName: e.target.value }))}
-                          className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                          placeholder="First name"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm text-[#6B5D4F] mb-2">Last Name</label>
-                        <input
-                          type="text"
-                          value={newUserForm.lastName}
-                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, lastName: e.target.value }))}
-                          className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                          placeholder="Last name"
-                        />
-                      </div>
-                    </>
-                  )}
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">First Name</label>
+                    <input
+                      type="text"
+                      value={newUserForm.firstName}
+                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, firstName: e.target.value }))}
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      placeholder="First name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Last Name</label>
+                    <input
+                      type="text"
+                      value={newUserForm.lastName}
+                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, lastName: e.target.value }))}
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      placeholder="Last name"
+                    />
+                  </div>
 
                   {newUserForm.role === 'Customer' && (
                     <div className="md:col-span-2">
@@ -2100,14 +4191,1072 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
           </div>
         )}
 
-        {/* Return Notification Modal */}
+        {/* Rental Details Modal */}
+        {showPendingRentalModal && selectedPendingRental && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-2xl font-light">Rental Details</h3>
+                  <span
+                    style={isCancelledRentalStatus(selectedPendingRental.status) ? { backgroundColor: '#fee2e2', color: '#991b1b' } : undefined}
+                    className={`inline-block mt-1 px-3 py-1 text-xs rounded-full font-medium ${
+                      selectedPendingRental.status === 'pending'
+                        ? 'bg-amber-100 text-amber-800'
+                        : selectedPendingRental.status === 'for_payment'
+                        ? 'bg-rose-100 text-rose-800'
+                        : selectedPendingRental.status === 'paid_for_confirmation'
+                        ? 'bg-violet-100 text-violet-800'
+                        : selectedPendingRental.status === 'for_pickup'
+                        ? 'bg-cyan-100 text-cyan-800'
+                        : isCancelledRentalStatus(selectedPendingRental.status)
+                        ? 'bg-red-100 text-red-800'
+                        : selectedPendingRental.status === 'active'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-[#EDE1CE] text-[#5B4A36]'
+                    }`}
+                  >
+                    {getRentalStatusLabel(selectedPendingRental)}
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowPendingRentalModal(false);
+                    setSelectedPendingRental(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-5">
+                {/* Gown Info */}
+                <div className="bg-[#FAF7F0] p-4 rounded-xl">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Gown</p>
+                  <p className="text-lg font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
+                  <p className="text-sm text-[#6B5D4F] mt-0.5">SKU: {selectedPendingRental.sku}</p>
+                  <p className="text-sm text-[#6B5D4F] mt-0.5">Reference ID: {selectedPendingRental.referenceId || selectedPendingRental.id}</p>
+                </div>
+
+                {/* Customer Info */}
+                <div className="bg-[#FAF7F0] p-4 rounded-xl">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Customer</p>
+                  <div className="space-y-1.5 text-sm text-[#6B5D4F]">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 shrink-0" />
+                      <span>{selectedPendingRental.customerName}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#9C8B7A]">Email:</span>
+                      <span>{selectedPendingRental.customerEmail}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#9C8B7A]">Contact:</span>
+                      <span>{selectedPendingRental.contactNumber}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rental Period */}
+                <div className="bg-[#FAF7F0] p-4 rounded-xl">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Rental Period</p>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-[#9C8B7A] mb-0.5">Start Date</p>
+                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.startDate}</p>
+                    </div>
+                    <div>
+                      <p className="text-[#9C8B7A] mb-0.5">End Date</p>
+                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.endDate}</p>
+                    </div>
+                    <div>
+                      <p className="text-[#9C8B7A] mb-0.5">Branch</p>
+                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.branch}</p>
+                    </div>
+                    <div>
+                      <p className="text-[#9C8B7A] mb-0.5">Event Type</p>
+                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.eventType}</p>
+                    </div>
+                    {isPickupScheduled(selectedPendingRental) && (
+                      <>
+                        <div>
+                          <p className="text-[#9C8B7A] mb-0.5">Pickup Date</p>
+                          <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.pickupScheduleDate}</p>
+                        </div>
+                        <div>
+                          <p className="text-[#9C8B7A] mb-0.5">Pickup Time</p>
+                          <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.pickupScheduleTime}</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Payment */}
+                <div className="bg-[#FAF7F0] p-4 rounded-xl">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Payment</p>
+                  <div className="flex justify-between text-sm">
+                    <div>
+                      <p className="text-[#9C8B7A] mb-0.5">Downpayment</p>
+                      <p className="font-medium text-[#3D2B1F]">₱{selectedPendingRental.downpayment.toLocaleString()}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[#9C8B7A] mb-0.5">Total Price</p>
+                      <p className="text-lg font-medium text-[#3D2B1F]">₱{selectedPendingRental.totalPrice.toLocaleString()}</p>
+                    </div>
+                  </div>
+
+                  {selectedPendingRental.paymentSubmittedAt && (
+                    <div className="mt-4 border-t border-[#E8DCC8] pt-4 space-y-3 text-sm">
+                      <div className="flex justify-between gap-4">
+                        <p className="text-[#9C8B7A]">Paid At</p>
+                        <p className="font-medium text-right text-[#3D2B1F]">
+                          {new Date(selectedPendingRental.paymentSubmittedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      {selectedPendingRental.paymentReferenceNumber && (
+                        <div className="flex justify-between gap-4">
+                          <p className="text-[#9C8B7A]">Reference Number</p>
+                          <p className="font-medium text-right text-[#3D2B1F]">
+                            {selectedPendingRental.paymentReferenceNumber}
+                          </p>
+                        </div>
+                      )}
+
+                      {selectedPendingRental.paymentReceiptUrl && (
+                        <div>
+                          <p className="text-[#9C8B7A] mb-2">Payment Receipt</p>
+                          <a
+                            href={selectedPendingRental.paymentReceiptUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block"
+                          >
+                            <img
+                              src={selectedPendingRental.paymentReceiptUrl}
+                              alt="Payment receipt"
+                              className="w-full h-44 object-cover rounded-lg border border-[#E8DCC8]"
+                            />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {rentalStatusError && (
+                <p className="mt-4 text-sm text-red-600 text-center">{rentalStatusError}</p>
+              )}
+
+              <div className="mt-8 sticky bottom-0 bg-white pt-6 flex flex-wrap gap-3 relative">
+                <div
+                  className="absolute left-0 right-0 top-0 border-t border-[#E8DCC8]"
+                  style={{ transform: 'translateY(-30px)' }}
+                />
+                <button
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setShowPendingRentalModal(false);
+                    setSelectedPendingRental(null);
+                    setRentalStatusError(null);
+                    setRentalActionInProgress(null);
+                    setIsApproveRentalConfirmOpen(false);
+                    setIsRejectRentalConfirmOpen(false);
+                    setIsPickedUpConfirmOpen(false);
+                    setRejectRentalReason('');
+                    setRejectRentalError(null);
+                  }}
+                  className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Close
+                </button>
+                {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'for_payment' || selectedPendingRental.status === 'paid_for_confirmation') && (
+                  <>
+                    <button
+                      disabled={rentalStatusUpdating}
+                      onClick={() => {
+                        setRejectRentalReason('');
+                        setRejectRentalError(null);
+                        setIsRejectRentalConfirmOpen(true);
+                      }}
+                      className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                    >
+                      <span style={{ color: '#B86A6A', WebkitTextFillColor: '#B86A6A' }}>
+                        Reject
+                      </span>
+                    </button>
+                    {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'paid_for_confirmation') && (
+                      <button
+                        disabled={rentalStatusUpdating}
+                        onClick={() => {
+                          setRentalStatusError(null);
+                          setIsApproveRentalConfirmOpen(true);
+                        }}
+                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                      >
+                        {rentalActionInProgress === 'approve'
+                          ? 'Processing...'
+                          : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Schedule Pickup' : 'Approve')}
+                      </button>
+                    )}
+                  </>
+                )}
+                {selectedPendingRental.status === 'for_pickup' && isPickupScheduled(selectedPendingRental) && (
+                  <button
+                    disabled={rentalStatusUpdating}
+                    onClick={() => {
+                      setRentalStatusError(null);
+                      setIsPickedUpConfirmOpen(true);
+                    }}
+                    className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-cyan-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  >
+                    Picked Up
+                  </button>
+                )}
+                {selectedPendingRental.status === 'active' && (
+                  <button
+                    disabled={rentalStatusUpdating}
+                    onClick={() => {
+                      setRentalStatusError(null);
+                      setSelectedReturnRental({
+                        id: selectedPendingRental.id,
+                        gownName: selectedPendingRental.gownName,
+                        customer: selectedPendingRental.customerName,
+                        dueDate: selectedPendingRental.endDate,
+                        daysLate: 0,
+                      });
+                      setIsItemReturnedConfirmOpen(true);
+                    }}
+                    className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  >
+                    Item Returned
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Custom Order Details Modal */}
+        {selectedCustomOrder && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div
+                className="bg-white rounded-2xl w-full px-6 pt-10 pb-4 overflow-y-auto"
+                style={{ maxWidth: '750px', height: '75vh' }}
+            >
+              <div style={{ height: '20px' }} />
+              <div className="flex justify-between items-start mb-6 pl-4 pr-2">
+                <div className="pr-4">
+                  <div className="flex items-center gap-3" style={{ paddingLeft: '32px', paddingTop: '16px' }}>
+                    <h3 className="text-2xl font-light">Custom Order Details</h3>
+                    <span className={`inline-block px-3 py-1 text-xs rounded-full font-medium ${getCustomOrderStatusBadgeClass(selectedCustomOrder.status)}`}>
+                      {getCustomOrderStatusLabel(selectedCustomOrder.status)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedCustomOrder(null)}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) 340px',
+                  gap: '6px',
+                  alignItems: 'start',
+                }}
+              >
+                <div className="min-w-0 flex-1 space-y-5" style={{ paddingLeft: '32px' }}>
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-2">Order</p>
+                    <p className="text-lg font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                    <div className="mt-3 grid gap-2 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Event Date:</span> {selectedCustomOrder.eventDate || 'Not set'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Branch:</span> {selectedCustomOrder.branch || 'No branch selected'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedCustomOrder.budget)}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Customer</p>
+                    <div className="grid gap-2 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Name:</span> {selectedCustomOrder.customerName}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Email:</span> {selectedCustomOrder.email || 'No email'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Phone:</span> {selectedCustomOrder.contactNumber || 'No phone'}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Design Notes</p>
+                    <div className="space-y-3 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Preferred Colors:</span> {selectedCustomOrder.preferredColors || 'None provided'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Fabric Preference:</span> {selectedCustomOrder.fabricPreference || 'None provided'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Special Requests:</span> {selectedCustomOrder.specialRequests || 'None provided'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ width: '180px' }} className="space-y-5">
+                  <div className="bg-[#FAF7F0] p-4 rounded-xl flex flex-col">
+                    <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Design Inspiration</p>
+                    {selectedCustomOrder.designImageUrl ? (
+                      <div
+                        className="rounded-xl border border-[#E8DCC8] bg-white overflow-y-auto overflow-x-hidden"
+                        style={{ height: '400px', width: '300px' }}
+                      >
+                        <img
+                          src={selectedCustomOrder.designImageUrl}
+                          alt={`${selectedCustomOrder.orderType || 'Custom order'} inspiration`}
+                          className="block w-full object-contain bg-white"
+                          style={{ height: '600px' }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex-1 min-h-[12rem] rounded-xl border border-dashed border-[#D8C8B2] bg-white/60 flex items-center justify-center text-sm text-[#8A7A69] text-center px-6">
+                        No design inspiration image was provided for this custom order.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
+                <div
+                  className="absolute left-0 right-0 top-0 border-t border-[#E8DCC8]"
+                  style={{ transform: 'translateY(-30px)' }}
+                />
+                {(() => {
+                  const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+                  const isUpdating = customOrderStatusUpdatingId === orderId;
+                  const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+                  const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed';
+
+                  return (
+                    <>
+                      <button
+                        onClick={() => setSelectedCustomOrder(null)}
+                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!orderId || !canReject) return;
+                          setAdminCustomOrdersError(null);
+                          setRejectCustomOrderReason('');
+                          setRejectCustomOrderError(null);
+                          setIsRejectCustomOrderConfirmOpen(true);
+                        }}
+                        disabled={isUpdating || !canReject}
+                        className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isUpdating && canReject ? 'Rejecting...' : 'Reject'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!orderId || !nextStatus) return;
+                          setAdminCustomOrdersError(null);
+                          setIsApproveCustomOrderConfirmOpen(true);
+                        }}
+                        disabled={isUpdating || !nextStatus}
+                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isUpdating && !!nextStatus ? 'Approving...' : 'Approve'}
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isRejectCustomOrderConfirmOpen && selectedCustomOrder && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Rejection</h3>
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={() => {
+                    setIsRejectCustomOrderConfirmOpen(false);
+                    setRejectCustomOrderReason('');
+                    setRejectCustomOrderError(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close custom order rejection confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Please provide a reason before rejecting this custom order.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Current Status: {getCustomOrderStatusLabel(selectedCustomOrder.status)}</p>
+              </div>
+
+              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for rejection *</label>
+              <textarea
+                value={rejectCustomOrderReason}
+                onChange={(e) => {
+                  setRejectCustomOrderReason(e.target.value);
+                  if (rejectCustomOrderError) setRejectCustomOrderError(null);
+                }}
+                rows={4}
+                placeholder="State why this custom order is being rejected"
+                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+              />
+
+              {rejectCustomOrderError && (
+                <p className="mt-3 text-sm text-red-600">{rejectCustomOrderError}</p>
+              )}
+
+              {adminCustomOrdersError && !rejectCustomOrderError && (
+                <p className="mt-3 text-sm text-red-600">{adminCustomOrdersError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={() => {
+                    setIsRejectCustomOrderConfirmOpen(false);
+                    setRejectCustomOrderReason('');
+                    setRejectCustomOrderError(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={handleConfirmRejectCustomOrder}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                >
+                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '') ? 'Rejecting...' : 'Confirm Reject'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isApproveCustomOrderConfirmOpen && selectedCustomOrder && (() => {
+          const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+          if (!nextStatus) return null;
+
+          const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+          const isUpdating = customOrderStatusUpdatingId === orderId;
+
+          return (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="text-2xl font-light">Confirm Approval</h3>
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={() => setIsApproveCustomOrderConfirmOpen(false)}
+                    className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                    aria-label="Close custom order approval confirmation"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <p className="text-sm text-[#6B5D4F] mb-4">
+                  This will move the custom order to {getCustomOrderStatusLabel(nextStatus)}.
+                </p>
+
+                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
+                  <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                  <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
+                  <p className="text-sm text-[#6B5D4F]">Next Status: {getCustomOrderStatusLabel(nextStatus)}</p>
+                </div>
+
+                {adminCustomOrdersError && (
+                  <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
+                )}
+
+                <div className="mt-6 flex gap-3">
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={() => setIsApproveCustomOrderConfirmOpen(false)}
+                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={handleConfirmApproveCustomOrder}
+                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  >
+                    {isUpdating ? 'Approving...' : `Confirm`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {isItemReturnedConfirmOpen && selectedReturnRental && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Item Returned</h3>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsItemReturnedConfirmOpen(false);
+                    setSelectedReturnRental(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close item returned confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Confirm that the customer has returned the gown.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedReturnRental.gownName}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedReturnRental.customer}</p>
+                <p className="text-sm text-[#6B5D4F]">Due: {selectedReturnRental.dueDate}</p>
+              </div>
+
+              {rentalStatusError && rentalActionInProgress === 'returned' && (
+                <p className="text-red-600 text-sm mb-3">{rentalStatusError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsItemReturnedConfirmOpen(false);
+                    setSelectedReturnRental(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={async () => {
+                    if (!selectedReturnRental) return;
+                    setRentalStatusUpdating(true);
+                    setRentalActionInProgress('returned');
+                    setRentalStatusError(null);
+                    try {
+                      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedReturnRental.id, 'completed');
+                      setAdminRentals((prev) =>
+                        prev.map((r) =>
+                          r.id === selectedReturnRental.id ? { ...r, status: 'completed' } : r
+                        )
+                      );
+                      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+                      setIsItemReturnedConfirmOpen(false);
+                      setShowPendingRentalModal(false);
+                      setSelectedPendingRental(null);
+                      setSelectedReturnRental(null);
+                    } catch (err) {
+                      setRentalStatusError(err instanceof Error ? err.message : 'Failed to mark rental as completed.');
+                    } finally {
+                      setRentalStatusUpdating(false);
+                      setRentalActionInProgress(null);
+                    }
+                  }}
+                  className="flex-1 py-3 border-2 border-green-300 bg-green-50 text-green-800 rounded-xl hover:bg-green-100 transition-colors font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {rentalActionInProgress === 'returned' ? 'Processing...' : 'Yes, Item Returned'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isPickedUpConfirmOpen && selectedPendingRental && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Picked Up</h3>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => setIsPickedUpConfirmOpen(false)}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close picked up confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Confirm that this customer has already picked up the gown.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => setIsPickedUpConfirmOpen(false)}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={async () => {
+                    if (!selectedPendingRental) return;
+                    setRentalStatusUpdating(true);
+                    setRentalActionInProgress('picked-up');
+                    setRentalStatusError(null);
+                    try {
+                      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, 'active');
+                      setAdminRentals((prev) =>
+                        prev.map((r) =>
+                          r.id === selectedPendingRental.id ? { ...r, status: 'active' } : r
+                        )
+                      );
+                      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+                      setIsPickedUpConfirmOpen(false);
+                      setShowPendingRentalModal(false);
+                      setSelectedPendingRental(null);
+                    } catch (err) {
+                      setRentalStatusError(err instanceof Error ? err.message : 'Failed to mark rental as picked up.');
+                    } finally {
+                      setRentalStatusUpdating(false);
+                      setRentalActionInProgress(null);
+                    }
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-cyan-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {rentalActionInProgress === 'picked-up' ? 'Processing...' : 'Yes, Mark as Picked Up'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isRejectRentalConfirmOpen && selectedPendingRental && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Rejection</h3>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsRejectRentalConfirmOpen(false);
+                    setRejectRentalReason('');
+                    setRejectRentalError(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close rejection confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                {selectedPendingRental.status === 'for_payment' || selectedPendingRental.status === 'paid_for_confirmation'
+                  ? 'Please provide a reason before rejecting this payment.'
+                  : 'Please provide a reason before rejecting this rental request.'}
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
+              </div>
+
+              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for rejection *</label>
+              <textarea
+                value={rejectRentalReason}
+                onChange={(e) => {
+                  setRejectRentalReason(e.target.value);
+                  if (rejectRentalError) setRejectRentalError(null);
+                }}
+                rows={4}
+                placeholder="State why this rental is being rejected"
+                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                disabled={rentalStatusUpdating}
+              />
+
+              {rejectRentalError && (
+                <p className="mt-3 text-sm text-red-600">{rejectRentalError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsRejectRentalConfirmOpen(false);
+                    setRejectRentalReason('');
+                    setRejectRentalError(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={async () => {
+                    if (!selectedPendingRental) return;
+
+                    const trimmedReason = rejectRentalReason.trim();
+                    if (!trimmedReason) {
+                      setRejectRentalError('Rejection reason is required.');
+                      return;
+                    }
+
+                    setRentalStatusUpdating(true);
+                    setRentalActionInProgress('reject');
+                    setRentalStatusError(null);
+                    setRejectRentalError(null);
+
+                    try {
+                      await rentalAPI.rentalAPI.updateRentalStatus(
+                        token,
+                        selectedPendingRental.id,
+                        'cancelled',
+                        trimmedReason
+                      );
+                      setAdminRentals((prev) => prev.filter((r) => r.id !== selectedPendingRental.id));
+                      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+                      setIsRejectRentalConfirmOpen(false);
+                      setRejectRentalReason('');
+                      setShowPendingRentalModal(false);
+                      setSelectedPendingRental(null);
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : 'Failed to reject rental.';
+                      setRejectRentalError(message);
+                      setRentalStatusError(message);
+                    } finally {
+                      setRentalStatusUpdating(false);
+                      setRentalActionInProgress(null);
+                    }
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                >
+                  {rentalActionInProgress === 'reject' ? 'Rejecting...' : 'Confirm Reject'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isApproveRentalConfirmOpen && selectedPendingRental && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">
+                  {selectedPendingRental.status === 'paid_for_confirmation' ? 'Confirm Pickup Scheduling' : 'Confirm Approval'}
+                </h3>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => setIsApproveRentalConfirmOpen(false)}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close approval confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                {selectedPendingRental.status === 'paid_for_confirmation'
+                  ? 'This will confirm the submitted payment and move the rental to For Pickup.'
+                  : 'This will approve the rental request and move it to For Payment.'}
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Reference ID: {selectedPendingRental.referenceId || selectedPendingRental.id}</p>
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => setIsApproveRentalConfirmOpen(false)}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={handleConfirmApproveRental}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {rentalActionInProgress === 'approve'
+                    ? 'Processing...'
+                    : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Yes, Schedule Pickup' : 'Yes, Approve')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isApproveAppointmentConfirmOpen && selectedPendingAppointment && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Appointment Approval</h3>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
+                  onClick={() => {
+                    setIsApproveAppointmentConfirmOpen(false);
+                    setSelectedPendingAppointment(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close appointment approval confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                This will approve the appointment request and move it to Scheduled.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
+                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedPendingAppointment.type)}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingAppointment.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Date: {selectedPendingAppointment.date}</p>
+                <p className="text-sm text-[#6B5D4F]">Time: {selectedPendingAppointment.time}</p>
+                <p className="text-sm text-[#6B5D4F]">Branch: {selectedPendingAppointment.branch}</p>
+              </div>
+
+              {selectedPendingAppointment.notes && (
+                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Additional Comments</p>
+                  <p className="text-sm text-[#6B5D4F]">{selectedPendingAppointment.notes}</p>
+                </div>
+              )}
+
+              {selectedPendingAppointment.rescheduleReason && (
+                <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 mb-4">
+                  <p className="text-xs text-orange-700 uppercase tracking-wide mb-2">Rescheduled</p>
+                  <p className="text-sm text-orange-900">{selectedPendingAppointment.rescheduleReason}</p>
+                </div>
+              )}
+
+              {adminAppointmentsError && appointmentStatusUpdatingId === selectedPendingAppointment.id && (
+                <p className="text-red-600 text-sm mb-3">{adminAppointmentsError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
+                  onClick={() => {
+                    setIsApproveAppointmentConfirmOpen(false);
+                    setSelectedPendingAppointment(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
+                  onClick={handleConfirmApproveAppointment}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {appointmentStatusUpdatingId === selectedPendingAppointment.id ? 'Approving...' : 'Yes, Approve'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isCompleteAppointmentConfirmOpen && selectedScheduledAppointment && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Appointment Completion</h3>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
+                  onClick={() => {
+                    setIsCompleteAppointmentConfirmOpen(false);
+                    setSelectedScheduledAppointment(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close appointment completion confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                This will mark the appointment as completed and move it to the archive.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
+                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedScheduledAppointment.type)}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedScheduledAppointment.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Date: {selectedScheduledAppointment.date}</p>
+                <p className="text-sm text-[#6B5D4F]">Time: {selectedScheduledAppointment.time}</p>
+                <p className="text-sm text-[#6B5D4F]">Branch: {selectedScheduledAppointment.branch}</p>
+              </div>
+
+              {adminAppointmentsError && appointmentStatusUpdatingId === selectedScheduledAppointment.id && (
+                <p className="text-red-600 text-sm mb-3">{adminAppointmentsError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
+                  onClick={() => {
+                    setIsCompleteAppointmentConfirmOpen(false);
+                    setSelectedScheduledAppointment(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
+                  onClick={handleConfirmCompleteAppointment}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                >
+                  {appointmentStatusUpdatingId === selectedScheduledAppointment.id ? 'Completing...' : 'Yes, Complete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isCancelAppointmentConfirmOpen && selectedCancelAppointment && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Cancellation</h3>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
+                  onClick={() => {
+                    setIsCancelAppointmentConfirmOpen(false);
+                    setSelectedCancelAppointment(null);
+                    setAppointmentCancelReason('');
+                    setAppointmentCancelError(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close appointment cancellation confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Please provide a reason before cancelling this appointment.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
+                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedCancelAppointment.type)}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCancelAppointment.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Date: {selectedCancelAppointment.date}</p>
+                <p className="text-sm text-[#6B5D4F]">Time: {selectedCancelAppointment.time}</p>
+              </div>
+
+              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for cancellation *</label>
+              <textarea
+                value={appointmentCancelReason}
+                onChange={(e) => {
+                  setAppointmentCancelReason(e.target.value);
+                  if (appointmentCancelError) setAppointmentCancelError(null);
+                }}
+                rows={4}
+                placeholder="State why this appointment is being cancelled"
+                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
+              />
+
+              {appointmentCancelError && (
+                <p className="mt-3 text-sm text-red-600">{appointmentCancelError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
+                  onClick={() => {
+                    setIsCancelAppointmentConfirmOpen(false);
+                    setSelectedCancelAppointment(null);
+                    setAppointmentCancelReason('');
+                    setAppointmentCancelError(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
+                  onClick={handleConfirmCancelAppointment}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                >
+                  {appointmentStatusUpdatingId === selectedCancelAppointment.id ? 'Cancelling...' : 'Confirm Cancel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rental Follow Up Modal */}
         {showNotificationModal && selectedRental && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl max-w-md w-full p-8">
               <div className="flex justify-between items-start mb-6">
-                <h3 className="text-2xl font-light">Send Return Reminder</h3>
+                <h3 className="text-2xl font-light">Send Follow Up</h3>
                 <button
                   onClick={() => {
+                    setIsSendReminderConfirmOpen(false);
+                    setIsReminderSentSuccessOpen(false);
                     setShowNotificationModal(false);
                     setSelectedRental(null);
                     setNotificationMethod('both');
@@ -2124,8 +5273,11 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                   <h4 className="font-medium mb-2">{selectedRental.gownName}</h4>
                   <div className="space-y-1 text-sm text-[#6B5D4F]">
                     <p>Customer: {selectedRental.customer}</p>
-                    <p>Due Date: {selectedRental.dueDate}</p>
-                    {selectedRental.daysLate > 0 && (
+                    <p>{selectedRental.status === 'pending' ? 'Status: Pending Rental Request' : `Due Date: ${selectedRental.dueDate}`}</p>
+                    {selectedRental.status === 'pending' && (
+                      <p>Requested End Date: {selectedRental.dueDate}</p>
+                    )}
+                    {selectedRental.status === 'active' && selectedRental.daysLate > 0 && (
                       <p className="text-red-600 font-medium">
                         {selectedRental.daysLate} {selectedRental.daysLate === 1 ? 'day' : 'days'} late • ₱{(selectedRental.daysLate * 500).toLocaleString()} late fee
                       </p>
@@ -2188,6 +5340,8 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                 <div className="flex gap-3 pt-4">
                   <button
                     onClick={() => {
+                      setIsSendReminderConfirmOpen(false);
+                      setIsReminderSentSuccessOpen(false);
                       setShowNotificationModal(false);
                       setSelectedRental(null);
                       setNotificationMethod('both');
@@ -2201,13 +5355,106 @@ export function AdminDashboard({ token }: AdminDashboardProps) {
                     className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2"
                   >
                     <Send className="w-5 h-5" />
-                    Send Reminder
+                    Send Follow Up
                   </button>
                 </div>
               </div>
             </div>
           </div>
         )}
+
+        {isSendReminderConfirmOpen && selectedRental && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            style={{ zIndex: 60 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm send follow up"
+            onClick={() => {
+              setIsSendReminderConfirmOpen(false);
+              setShowNotificationModal(true);
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Send Follow Up</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSendReminderConfirmOpen(false);
+                    setShowNotificationModal(true);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                  aria-label="Close send reminder confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Follow up will be sent to {selectedRental.customer} via {notificationMethodText}.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Message</p>
+                <p className="text-sm text-[#3D2B1F] leading-relaxed">{reminderMessage}</p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSendReminderConfirmOpen(false);
+                    setShowNotificationModal(true);
+                  }}
+                  className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSendNotification}
+                  className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
+                >
+                  Send Follow Up
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isReminderSentSuccessOpen && selectedRental && (
+          <div
+            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+            style={{ zIndex: 60 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Follow up sent"
+            onClick={handleDismissReminderSentSuccess}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-md w-full p-8"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-2xl font-light mb-3">Follow Up Sent</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Follow up has been sent to {selectedRental.customer} via {notificationMethodText}.
+              </p>
+
+              <button
+                type="button"
+                onClick={handleDismissReminderSentSuccess}
+                className="w-full px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
+              >
+                Okay
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

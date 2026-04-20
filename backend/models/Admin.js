@@ -2,11 +2,36 @@ import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 const AdminAccountSchema = new mongoose.Schema({
+  firstName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  lastName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   email: {
     type: String,
     required: true,
     unique: true,
     lowercase: true
+  },
+  phoneNumber: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  address: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  preferredBranch: {
+    type: String,
+    trim: true,
+    default: 'Taguig Main - Cadena de Amor'
   },
   password: {
     type: String,
@@ -15,6 +40,22 @@ const AdminAccountSchema = new mongoose.Schema({
   tokenVersion: {
     type: Number,
     default: 0
+  },
+  resetPasswordCodeHash: {
+    type: String,
+    default: null
+  },
+  resetPasswordCodeExpiresAt: {
+    type: Date,
+    default: null
+  },
+  resetPasswordVerifiedAt: {
+    type: Date,
+    default: null
+  },
+  resetPasswordSentAt: {
+    type: Date,
+    default: null
   },
   status: {
     type: String,

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { ArrowRight, Sparkles, Heart, Calendar, Ruler } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
@@ -6,6 +7,7 @@ type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 
 interface HomeProps {
   setCurrentView: (view: View) => void;
   isLoggedIn: boolean;
+  isAdmin: boolean;
   onOpenAuthModal: () => void; 
 }
 
@@ -175,7 +177,16 @@ function CTASection({ setCurrentView, navigateProtected }: { setCurrentView: (vi
   );
 }
 
-export function Home({ setCurrentView, isLoggedIn, onOpenAuthModal }: HomeProps) {
+export function Home({ setCurrentView, isLoggedIn, isAdmin, onOpenAuthModal }: HomeProps) {
+  const [showLiveViewModal, setShowLiveViewModal] = useState(false);
+  const [blockedActionLabel, setBlockedActionLabel] = useState('this action');
+
+  const getActionLabel = (view: View) => {
+    if (view === 'rentals') return 'renting gowns';
+    if (view === 'custom-orders') return 'creating custom orders';
+    if (view === 'appointments') return 'booking appointments';
+    return 'this action';
+  };
 
   const services = [
     {
@@ -216,6 +227,13 @@ export function Home({ setCurrentView, isLoggedIn, onOpenAuthModal }: HomeProps)
       onOpenAuthModal(); 
       return;
     }
+
+    if (isAdmin && view !== 'catalog') {
+      setBlockedActionLabel(getActionLabel(view));
+      setShowLiveViewModal(true);
+      return;
+    }
+
     setCurrentView(view);
   };
 
@@ -226,6 +244,33 @@ export function Home({ setCurrentView, isLoggedIn, onOpenAuthModal }: HomeProps)
       <ServicesGrid services={services} setCurrentView={setCurrentView} navigateProtected={navigateProtected} />
       <StatsSection stats={stats} />
       <CTASection setCurrentView={setCurrentView} navigateProtected={navigateProtected} />
+
+      {showLiveViewModal && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setShowLiveViewModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Live view"
+        >
+          <div
+            className="bg-white max-w-md w-full rounded-2xl p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-serif text-3xl mb-3">Live View</h3>
+            <p className="text-sm text-[#6B5D4F] mb-6 leading-relaxed">
+              You are viewing the storefront as an admin. {blockedActionLabel.charAt(0).toUpperCase() + blockedActionLabel.slice(1)} is disabled in this view.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowLiveViewModal(false)}
+              className="w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors"
+            >
+              Okay
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

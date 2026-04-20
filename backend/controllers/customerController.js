@@ -1,5 +1,104 @@
 import CustomerAccount from '../models/Customer.js';
 import CustomerDetail from '../models/CustomerDetail.js';
+import AdminAccount from '../models/Admin.js';
+import StaffAccount from '../models/Staff.js';
+import {
+  checkPhoneVerificationCode,
+  isTwilioVerifyConfigError,
+  sendPhoneVerificationCode,
+} from '../services/twilioVerifyService.js';
+import { isElevatedRole } from '../utils/roles.js';
+import { toPublicUrl } from '../utils/media.js';
+
+function sanitizeFavoriteGowns(items) {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .map((item) => ({
+      id: String(item?.id || '').trim(),
+      name: String(item?.name || '').trim(),
+      category: String(item?.category || '').trim(),
+      color: String(item?.color || '').trim(),
+      size: Array.isArray(item?.size) ? item.size.map((size) => String(size || '').trim()).filter(Boolean) : [],
+      price: Number(item?.price || 0),
+      status: ['available', 'rented', 'reserved'].includes(String(item?.status || '').toLowerCase())
+        ? String(item.status).toLowerCase()
+        : 'available',
+      branch: String(item?.branch || '').trim(),
+      image: String(item?.image || '').trim(),
+      rating: Number(item?.rating || 0),
+    }))
+    .filter((item) => item.id && item.name)
+    .map((item) => ({
+      ...item,
+      price: Number.isFinite(item.price) ? item.price : 0,
+      rating: Number.isFinite(item.rating) ? item.rating : 0,
+    }));
+}
+
+function normalizeFavoriteGownImages(req, favoriteGowns) {
+  if (!Array.isArray(favoriteGowns)) {
+    return [];
+  }
+
+  return favoriteGowns.map((gown) => ({
+    ...gown,
+    image: toPublicUrl(req, gown?.image),
+  }));
+}
+
+async function ensureCustomerDetail(customer) {
+  let detail = await CustomerDetail.findOne({ email: customer.email });
+
+  if (!detail) {
+    detail = new CustomerDetail({
+      email: customer.email,
+      firstName: customer.firstName,
+      lastName: customer.lastName,
+      phoneNumber: customer.phoneNumber,
+      phoneVerified: Boolean(customer.phoneVerified),
+      phoneVerifiedAt: customer.phoneVerifiedAt || null,
+      address: customer.address || '',
+      favoriteGowns: [],
+    });
+  }
+
+  return detail;
+}
+
+function buildElevatedName(email) {
+  const prefix = String(email || '').split('@')[0] || 'Admin';
+  return prefix
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ') || 'Admin';
+}
+
+function getElevatedModel(role) {
+  return String(role || '').toLowerCase() === 'staff' ? StaffAccount : AdminAccount;
+}
+
+function mapElevatedProfile(account, role) {
+  const fallbackFirstName = buildElevatedName(account?.email);
+  const fallbackLastName = String(role || '').toLowerCase() === 'staff' ? 'Staff' : 'Admin';
+
+  return {
+    id: account._id,
+    firstName: String(account.firstName || '').trim() || fallbackFirstName,
+    lastName: String(account.lastName || '').trim() || fallbackLastName,
+    email: account.email,
+    phoneNumber: String(account.phoneNumber || '').trim(),
+    phoneVerified: false,
+    phoneVerifiedAt: null,
+    address: String(account.address || '').trim(),
+    preferredBranch: String(account.preferredBranch || '').trim() || 'Taguig Main - Cadena de Amor',
+    role,
+    status: account.status,
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt
+  };
+}
 
 // Normalize various phone input shapes to +63XXXXXXXXXX
 const normalizePhone = (input) => {
@@ -20,6 +119,18 @@ const normalizePhone = (input) => {
 export const getCustomer = async (req, res) => {
   try {
     const email = req.user.email;
+
+    if (isElevatedRole(req.user.role)) {
+      const ElevatedModel = getElevatedModel(req.user.role);
+      const elevatedAccount = await ElevatedModel.findOne({ email }).lean();
+
+      if (!elevatedAccount) {
+        return res.status(404).json({ message: 'Profile not found' });
+      }
+
+      return res.json(mapElevatedProfile(elevatedAccount, req.user.role));
+    }
+
     const customer = await CustomerAccount.findOne({ email });
 
     if (!customer) {
@@ -34,6 +145,7 @@ export const getCustomer = async (req, res) => {
 
     // Do not return sensitive fields like password
     const { password, __v, ...safeCustomer } = mergedCustomer;
+    safeCustomer.favoriteGowns = normalizeFavoriteGownImages(req, safeCustomer.favoriteGowns);
 
     res.json(safeCustomer);
   } catch (error) {
@@ -45,6 +157,48 @@ export const getCustomer = async (req, res) => {
 export const updateCustomer = async (req, res) => {
   try {
     const email = req.user.email;
+
+    if (isElevatedRole(req.user.role)) {
+      const ElevatedModel = getElevatedModel(req.user.role);
+      const elevatedAccount = await ElevatedModel.findOne({ email });
+
+      if (!elevatedAccount) {
+        return res.status(404).json({ message: 'Profile not found' });
+      }
+
+      const allowedFields = ['firstName', 'lastName', 'phoneNumber', 'address', 'preferredBranch'];
+
+      for (const field of allowedFields) {
+        if (req.body[field] === undefined) continue;
+
+        if (field === 'phoneNumber') {
+          if (!req.body.phoneNumber) {
+            elevatedAccount.phoneNumber = '';
+            continue;
+          }
+
+          const normalized = normalizePhone(req.body.phoneNumber);
+          if (!normalized) {
+            return res.status(400).json({ message: 'Invalid phone number format. Must be 10 digits.' });
+          }
+          if (!normalized.startsWith('+639')) {
+            return res.status(400).json({ message: 'Phone number must start with 9.' });
+          }
+
+          elevatedAccount.phoneNumber = normalized;
+        } else if (field === 'address') {
+          elevatedAccount.address = String(req.body.address || '').trim();
+        } else if (field === 'preferredBranch') {
+          elevatedAccount.preferredBranch = String(req.body.preferredBranch || '').trim() || 'Taguig Main - Cadena de Amor';
+        } else {
+          elevatedAccount[field] = String(req.body[field] || '').trim();
+        }
+      }
+
+      await elevatedAccount.save();
+      return res.json(mapElevatedProfile(elevatedAccount.toObject(), req.user.role));
+    }
+
     const customer = await CustomerAccount.findOne({ email });
 
     if (!customer) {
@@ -53,10 +207,22 @@ export const updateCustomer = async (req, res) => {
 
     // Update allowed fields
     const allowedFields = ['firstName', 'lastName', 'phoneNumber', 'address', 'preferredBranch'];
+    const currentPhoneNumber = String(customer.phoneNumber || '');
+    let nextPhoneNumber = currentPhoneNumber;
+    let shouldResetPhoneVerification = false;
 
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
         if (field === 'phoneNumber') {
+          if (!req.body.phoneNumber) {
+            if (currentPhoneNumber) {
+              shouldResetPhoneVerification = true;
+            }
+            customer.phoneNumber = undefined;
+            nextPhoneNumber = '';
+            continue;
+          }
+
           const normalized = normalizePhone(req.body.phoneNumber);
           if (!normalized) {
             return res.status(400).json({ message: 'Invalid phone number format. Must be 10 digits.' });
@@ -70,6 +236,10 @@ export const updateCustomer = async (req, res) => {
             return res.status(409).json({ message: 'This phone number is already registered.' });
           }
           customer.phoneNumber = normalized;
+          nextPhoneNumber = normalized;
+          if (normalized !== currentPhoneNumber) {
+            shouldResetPhoneVerification = true;
+          }
         } else if (field === 'address') {
           customer.address = String(req.body.address || '').trim();
         } else {
@@ -78,19 +248,33 @@ export const updateCustomer = async (req, res) => {
       }
     }
 
+    if (shouldResetPhoneVerification) {
+      customer.phoneVerified = false;
+      customer.phoneVerifiedAt = null;
+    }
+
     const updatedCustomer = await customer.save();
 
     // Keep legacy detail collection in sync; create it if missing.
+    const detailUpdate = {
+      email,
+      firstName: updatedCustomer.firstName,
+      lastName: updatedCustomer.lastName,
+      address: updatedCustomer.address || '',
+    };
+
+    if (updatedCustomer.phoneNumber) {
+      detailUpdate.phoneNumber = updatedCustomer.phoneNumber;
+    }
+
+    detailUpdate.phoneVerified = Boolean(updatedCustomer.phoneVerified);
+    detailUpdate.phoneVerifiedAt = updatedCustomer.phoneVerifiedAt || null;
+
     await CustomerDetail.findOneAndUpdate(
       { email },
       {
-        $set: {
-          email,
-          firstName: updatedCustomer.firstName,
-          lastName: updatedCustomer.lastName,
-          phoneNumber: updatedCustomer.phoneNumber,
-          address: updatedCustomer.address || '',
-        },
+        $set: detailUpdate,
+        ...((updatedCustomer.phoneNumber || nextPhoneNumber) ? {} : { $unset: { phoneNumber: 1 } }),
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
@@ -103,6 +287,7 @@ export const updateCustomer = async (req, res) => {
       : latestCustomer;
 
     const { password, __v, ...safeCustomer } = mergedCustomer;
+    safeCustomer.favoriteGowns = normalizeFavoriteGownImages(req, safeCustomer.favoriteGowns);
     res.json(safeCustomer);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -113,8 +298,8 @@ export const updateCustomer = async (req, res) => {
 export const resetCustomerData = async (req, res) => {
   try {
     // Only allow admins to reset customer data
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Admin access required for this operation' });
+    if (!isElevatedRole(req.user.role)) {
+      return res.status(403).json({ message: 'Admin or staff access required for this operation' });
     }
 
     await CustomerAccount.deleteMany({});
@@ -204,5 +389,151 @@ export const updateMeasurements = async (req, res) => {
   } catch (error) {
     console.error('Update measurements error:', error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateFavoriteGowns = async (req, res) => {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customer accounts can manage favorites.' });
+    }
+
+    const customer = await CustomerAccount.findOne({ email: req.user.email });
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer not found.' });
+    }
+
+    const favoriteGowns = sanitizeFavoriteGowns(req.body.favoriteGowns);
+    const detail = await ensureCustomerDetail(customer);
+    detail.favoriteGowns = favoriteGowns;
+    detail.updatedAt = new Date();
+    await detail.save();
+
+    return res.json({ favoriteGowns: normalizeFavoriteGownImages(req, detail.favoriteGowns) });
+  } catch (error) {
+    console.error('Update favorite gowns error:', error);
+    return res.status(500).json({ message: error.message || 'Failed to update favorites.' });
+  }
+};
+
+function buildSafeCustomerProfile(accountDoc, detailDoc = null) {
+  const mergedCustomer = detailDoc
+    ? { ...accountDoc, ...detailDoc }
+    : accountDoc;
+
+  const { password, __v, ...safeCustomer } = mergedCustomer;
+  return safeCustomer;
+}
+
+function mapTwilioVerificationError(error) {
+  if (isTwilioVerifyConfigError(error)) {
+    const missingKeys = Array.isArray(error?.missingKeys) ? error.missingKeys.join(', ') : '';
+    return {
+      status: 503,
+      message: missingKeys
+        ? `SMS verification is not configured on the server yet. Missing or placeholder values: ${missingKeys}.`
+        : 'SMS verification is not configured on the server yet.',
+    };
+  }
+
+  const status = Number(error?.status || 0);
+  const code = Number(error?.code || 0);
+
+  if (status === 429) {
+    return { status: 429, message: 'Too many verification attempts. Please wait before trying again.' };
+  }
+
+  if (code === 60200 || code === 60202 || code === 20404) {
+    return { status: 400, message: 'Invalid or expired verification code.' };
+  }
+
+  return { status: 500, message: 'Phone verification failed. Please try again.' };
+}
+
+export const sendCustomerPhoneVerificationCode = async (req, res) => {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can verify phone numbers.' });
+    }
+
+    const customer = await CustomerAccount.findById(req.user.id);
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer account not found.' });
+    }
+
+    if (!customer.phoneNumber) {
+      return res.status(400).json({ message: 'Add a phone number to your profile before requesting a verification code.' });
+    }
+
+    if (customer.phoneVerified) {
+      return res.status(400).json({ message: 'This phone number is already verified.' });
+    }
+
+    await sendPhoneVerificationCode(customer.phoneNumber);
+
+    return res.json({
+      message: 'Verification code sent successfully.',
+      phoneNumber: customer.phoneNumber,
+    });
+  } catch (error) {
+    console.error('sendCustomerPhoneVerificationCode error:', error);
+    const mappedError = mapTwilioVerificationError(error);
+    return res.status(mappedError.status).json({ message: mappedError.message });
+  }
+};
+
+export const verifyCustomerPhoneVerificationCode = async (req, res) => {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can verify phone numbers.' });
+    }
+
+    const code = String(req.body?.code || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: 'Enter a valid 6-digit verification code.' });
+    }
+
+    const customer = await CustomerAccount.findById(req.user.id);
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer account not found.' });
+    }
+
+    if (!customer.phoneNumber) {
+      return res.status(400).json({ message: 'Add a phone number to your profile before verifying it.' });
+    }
+
+    const verificationCheck = await checkPhoneVerificationCode(customer.phoneNumber, code);
+    if (verificationCheck.status !== 'approved') {
+      return res.status(400).json({ message: 'Invalid or expired verification code.' });
+    }
+
+    customer.phoneVerified = true;
+    customer.phoneVerifiedAt = new Date();
+    await customer.save();
+
+    const detail = await CustomerDetail.findOneAndUpdate(
+      { email: customer.email },
+      {
+        $set: {
+          email: customer.email,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          phoneNumber: customer.phoneNumber,
+          phoneVerified: true,
+          phoneVerifiedAt: customer.phoneVerifiedAt,
+          address: customer.address || '',
+        },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return res.json({
+      message: 'Phone number verified successfully.',
+      customer: buildSafeCustomerProfile(customer.toObject(), detail),
+    });
+  } catch (error) {
+    console.error('verifyCustomerPhoneVerificationCode error:', error);
+    const mappedError = mapTwilioVerificationError(error);
+    return res.status(mappedError.status).json({ message: mappedError.message });
   }
 };
