@@ -32,6 +32,10 @@ interface CustomOrder {
   budget?: string;
   branch?: string;
   designImageUrl?: string;
+  consultationDate?: string | null;
+  consultationTime?: string | null;
+  consultationRescheduleReason?: string | null;
+  rejectionReason?: string | null;
 }
 
 export function CustomOrders({ user, token }: CustomOrdersProps) {
@@ -61,7 +65,19 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
   const [isMissingPhoneModalOpen, setIsMissingPhoneModalOpen] = useState(false);
   const [isOrderDetailsOpen, setIsOrderDetailsOpen] = useState(false);
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<CustomOrder | null>(null);
-  const isAnyCustomOrderModalOpen = isMissingPhoneModalOpen || isOrderDetailsOpen;
+  const [isScheduleConsultationModalOpen, setIsScheduleConsultationModalOpen] = useState(false);
+  const [isConfirmScheduleConsultationOpen, setIsConfirmScheduleConsultationOpen] = useState(false);
+  const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<CustomOrder | null>(null);
+  const [consultationDate, setConsultationDate] = useState('');
+  const [consultationTime, setConsultationTime] = useState('08:00');
+  const [consultationRescheduleReason, setConsultationRescheduleReason] = useState('');
+  const [consultationScheduleError, setConsultationScheduleError] = useState<string | null>(null);
+  const [isSavingConsultationSchedule, setIsSavingConsultationSchedule] = useState(false);
+  const isAnyCustomOrderModalOpen =
+    isMissingPhoneModalOpen ||
+    isOrderDetailsOpen ||
+    isScheduleConsultationModalOpen ||
+    isConfirmScheduleConsultationOpen;
 
   useModalInteractionLock(isAnyCustomOrderModalOpen, modalRef);
 
@@ -195,6 +211,25 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
     { key: 'completed', label: 'Completed' }
   ];
 
+  const consultationTimeOptions = useMemo(() => ([
+    { value: '08:00', label: '8:00 AM' },
+    { value: '09:00', label: '9:00 AM' },
+    { value: '10:00', label: '10:00 AM' },
+    { value: '11:00', label: '11:00 AM' },
+    { value: '12:00', label: '12:00 PM' },
+    { value: '13:00', label: '1:00 PM' },
+    { value: '14:00', label: '2:00 PM' },
+    { value: '15:00', label: '3:00 PM' },
+    { value: '16:00', label: '4:00 PM' },
+    { value: '17:00', label: '5:00 PM' },
+  ]), []);
+
+  const getTomorrowDateValue = () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().slice(0, 10);
+  };
+
   const getStatusIndex = (status: string) => {
     return statusSteps.findIndex(step => step.key === status);
   };
@@ -215,9 +250,126 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
     return status.charAt(0).toUpperCase() + status.slice(1);
   };
 
+  const getStatusBadgeClass = (status: CustomOrder['status']) => {
+    if (status === 'inquiry') return 'bg-amber-100 text-amber-800';
+    if (status === 'design-approval') return 'bg-violet-100 text-violet-800';
+    if (status === 'in-progress') return 'bg-blue-100 text-blue-800';
+    if (status === 'fitting') return 'bg-cyan-100 text-cyan-800';
+    if (status === 'rejected') return 'bg-red-100 text-red-800';
+    return 'bg-green-100 text-green-800';
+  };
+
+  const formatCustomOrderBudget = (value: string | number | undefined) => {
+    if (value === undefined || value === null) return 'N/A';
+
+    const rawValue = String(value).trim();
+    if (!rawValue) return 'N/A';
+
+    const normalizedValue = rawValue.replace(/[₱,\s]/g, '');
+    const numericValue = Number(normalizedValue);
+
+    if (Number.isFinite(numericValue) && /^-?\d+(\.\d+)?$/.test(normalizedValue)) {
+      return `₱${numericValue.toLocaleString()}`;
+    }
+
+    return rawValue;
+  };
+
+  const getConsultationDisplay = (order: CustomOrder) => {
+    if (!order.consultationDate) {
+      return 'Not scheduled yet';
+    }
+
+    return `${order.consultationDate}${order.consultationTime ? ` at ${order.consultationTime}` : ''}`;
+  };
+
   const openOrderDetails = (order: CustomOrder) => {
     setSelectedOrderDetails(order);
     setIsOrderDetailsOpen(true);
+  };
+
+  const openScheduleConsultationModal = (order: CustomOrder) => {
+    setSelectedScheduleOrder(order);
+    setConsultationDate(order.consultationDate || '');
+    setConsultationTime(order.consultationTime || '08:00');
+    setConsultationRescheduleReason('');
+    setConsultationScheduleError(null);
+    setIsScheduleConsultationModalOpen(true);
+  };
+
+  const closeScheduleConsultationModal = () => {
+    if (isSavingConsultationSchedule) return;
+    setIsScheduleConsultationModalOpen(false);
+    setIsConfirmScheduleConsultationOpen(false);
+    setSelectedScheduleOrder(null);
+    setConsultationDate('');
+    setConsultationTime('08:00');
+    setConsultationRescheduleReason('');
+    setConsultationScheduleError(null);
+  };
+
+  const requestSaveConsultationSchedule = () => {
+    const hasExistingSchedule = Boolean(selectedScheduleOrder?.consultationDate || selectedScheduleOrder?.consultationTime);
+    const isScheduleChanging =
+      (selectedScheduleOrder?.consultationDate || '') !== consultationDate ||
+      (selectedScheduleOrder?.consultationTime || '') !== consultationTime;
+
+    if (!consultationDate) {
+      setConsultationScheduleError('Please choose a consultation date.');
+      return;
+    }
+
+    if (!consultationTime) {
+      setConsultationScheduleError('Please choose a consultation time.');
+      return;
+    }
+
+    if (hasExistingSchedule && isScheduleChanging && !consultationRescheduleReason.trim()) {
+      setConsultationScheduleError('Please provide a reason for rescheduling.');
+      return;
+    }
+
+    setConsultationScheduleError(null);
+    setIsConfirmScheduleConsultationOpen(true);
+  };
+
+  const handleSaveConsultationSchedule = async () => {
+    if (!selectedScheduleOrder) return;
+
+    const orderId = selectedScheduleOrder.id || selectedScheduleOrder._id;
+    if (!orderId) {
+      setConsultationScheduleError('Unable to find this custom order.');
+      return;
+    }
+
+    setIsSavingConsultationSchedule(true);
+    setIsConfirmScheduleConsultationOpen(false);
+    setConsultationScheduleError(null);
+    try {
+      const response = await customerAPI.updateCustomOrderConsultationSchedule(token, orderId, {
+        consultationDate,
+        consultationTime,
+        consultationRescheduleReason: consultationRescheduleReason.trim() || undefined,
+      });
+      const updatedOrder = response?.order as CustomOrder | undefined;
+      if (updatedOrder) {
+        setOrders((prev) => prev.map((order) => {
+          const currentId = order.id || order._id;
+          return currentId === orderId ? updatedOrder : order;
+        }));
+        if (selectedOrderDetails && (selectedOrderDetails.id || selectedOrderDetails._id) === orderId) {
+          setSelectedOrderDetails(updatedOrder);
+        }
+      } else {
+        await fetchOrders();
+      }
+      toast.success('Design consultation schedule saved.');
+      closeScheduleConsultationModal();
+    } catch (error: any) {
+      setConsultationScheduleError(error?.message || 'Failed to save consultation schedule.');
+    } finally {
+      setIsSavingConsultationSchedule(false);
+    }
   };
 
   return (
@@ -489,6 +641,10 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                 )}
                 {!loadingOrders && currentOrders.map((order) => {
                   const currentStatusIndex = getStatusIndex(order.status);
+                  const canScheduleConsultation = order.status === 'design-approval';
+                  const consultationSummary = order.consultationDate && order.consultationTime
+                    ? `${order.consultationDate} at ${order.consultationTime}`
+                    : null;
                   return (
                     <div
                       key={order._id || order.id}
@@ -513,7 +669,24 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                           <p className="text-sm text-[#6B5D4F]">
                             {order.eventDate ? `Event: ${order.eventDate}` : ''}
                           </p>
+                          {consultationSummary && (
+                            <p className="text-sm text-[#6B5D4F] mt-1">
+                              Design Consultation: {consultationSummary}
+                            </p>
+                          )}
                         </div>
+                        {canScheduleConsultation && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openScheduleConsultationModal(order);
+                            }}
+                            className="self-start shrink-0 rounded-full border border-[#E8DCC8] px-4 py-2 text-sm font-medium text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-black"
+                          >
+                            {consultationSummary ? 'Reschedule Consultation' : 'Set Consultation'}
+                          </button>
+                        )}
                       </div>
                       {/* Progress Steps */}
                       <div className="relative">
@@ -646,13 +819,19 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
             <div
               ref={modalRef}
               tabIndex={-1}
-              className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl w-full px-6 pt-10 pb-4 overflow-y-auto"
+              style={{ maxWidth: '750px', height: '75vh' }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-start justify-between mb-6 gap-4">
-                <div>
-                  <h3 className="text-2xl font-light text-black">Custom Order Details</h3>
-                  <p className="text-sm text-[#6B5D4F] mt-1">Review your bespoke order information and current progress.</p>
+              <div style={{ height: '20px' }} />
+              <div className="flex justify-between items-start mb-6 pl-4 pr-2">
+                <div className="pr-4">
+                  <div className="flex items-center gap-3" style={{ paddingLeft: '32px', paddingTop: '16px' }}>
+                    <h3 className="text-2xl font-light text-black">Custom Order Details</h3>
+                    <span className={`inline-block px-3 py-1 text-xs rounded-full font-medium ${getStatusBadgeClass(selectedOrderDetails.status)}`}>
+                      {getStatusLabel(selectedOrderDetails.status)}
+                    </span>
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -664,124 +843,270 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                 </button>
               </div>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm mb-6">
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Order Type</span>
-                  <span className="text-right font-medium text-black">{selectedOrderDetails.orderType}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Status</span>
-                  <span className="text-right font-medium text-black">{getStatusLabel(selectedOrderDetails.status)}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Reference ID</span>
-                  <span className="text-right font-medium text-black">{selectedOrderDetails.referenceId || selectedOrderDetails._id || selectedOrderDetails.id}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Customer</span>
-                  <span className="text-right font-medium text-black">{selectedOrderDetails.customerName}</span>
-                </div>
-                {selectedOrderDetails.contactNumber && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Contact Number</span>
-                    <span className="text-right font-medium text-black">{selectedOrderDetails.contactNumber}</span>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) 340px',
+                  gap: '6px',
+                  alignItems: 'start',
+                }}
+              >
+                <div className="min-w-0 flex-1 space-y-5" style={{ paddingLeft: '32px' }}>
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-2">Order</p>
+                    <p className="text-lg font-medium text-[#3D2B1F]">{selectedOrderDetails.orderType || 'Custom Order'}</p>
+                    <div className="mt-3 grid gap-2 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Event Date:</span> {selectedOrderDetails.eventDate || 'Not set'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Branch:</span> {selectedOrderDetails.branch || 'No branch selected'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedOrderDetails.budget)}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedOrderDetails.referenceId || selectedOrderDetails.id || selectedOrderDetails._id || 'N/A'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {getConsultationDisplay(selectedOrderDetails)}</p>
+                    </div>
                   </div>
-                )}
-                {selectedOrderDetails.email && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Email</span>
-                    <span className="text-right font-medium text-black">{selectedOrderDetails.email}</span>
+
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Customer</p>
+                    <div className="grid gap-2 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Name:</span> {selectedOrderDetails.customerName}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Email:</span> {selectedOrderDetails.email || 'No email'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Phone:</span> {selectedOrderDetails.contactNumber || 'No phone'}</p>
+                    </div>
                   </div>
-                )}
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Branch</span>
-                  <span className="text-right font-medium text-black">{selectedOrderDetails.branch || 'Taguig Main'}</span>
+
+                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
+                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Design Notes</p>
+                    <div className="space-y-3 text-sm text-[#6B5D4F]">
+                      <p><span className="font-medium text-[#3D2B1F]">Preferred Colors:</span> {selectedOrderDetails.preferredColors || 'None provided'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Fabric Preference:</span> {selectedOrderDetails.fabricPreference || 'None provided'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Special Requests:</span> {selectedOrderDetails.specialRequests || 'None provided'}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Event Date</span>
-                  <span className="text-right font-medium text-black">{selectedOrderDetails.eventDate || 'Not set'}</span>
+
+                <div style={{ width: '180px' }} className="space-y-5">
+                  <div className="bg-[#FAF7F0] p-4 rounded-xl flex flex-col">
+                    <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Design Inspiration</p>
+                    {selectedOrderDetails.designImageUrl ? (
+                      <div
+                        className="rounded-xl border border-[#E8DCC8] bg-white overflow-y-auto overflow-x-hidden"
+                        style={{ height: '400px', width: '300px' }}
+                      >
+                        <ImageWithFallback
+                          src={selectedOrderDetails.designImageUrl}
+                          alt={`${selectedOrderDetails.orderType || 'Custom order'} inspiration`}
+                          className="block w-full object-contain bg-white"
+                          style={{ height: '600px' }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex-1 min-h-[12rem] rounded-xl border border-dashed border-[#D8C8B2] bg-white/60 flex items-center justify-center text-sm text-[#8A7A69] text-center px-6">
+                        No design inspiration image was provided for this custom order.
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {selectedOrderDetails.budget && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Budget Range</span>
-                    <span className="text-right font-medium text-black">{selectedOrderDetails.budget}</span>
-                  </div>
-                )}
-                {selectedOrderDetails.preferredColors && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Preferred Colors</span>
-                    <span className="text-right font-medium text-black">{selectedOrderDetails.preferredColors}</span>
-                  </div>
-                )}
-                {selectedOrderDetails.fabricPreference && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Fabric Preference</span>
-                    <span className="text-right font-medium text-black">{selectedOrderDetails.fabricPreference}</span>
-                  </div>
-                )}
-                {selectedOrderDetails.specialRequests && (
-                  <div className="flex justify-between gap-4 pt-2 border-t border-[#E8DCC8]">
-                    <span className="text-[#6B5D4F]">Special Requests</span>
-                    <span className="text-right font-medium text-black max-w-[60%]">{selectedOrderDetails.specialRequests}</span>
-                  </div>
-                )}
               </div>
 
-              {selectedOrderDetails.designImageUrl && (
-                <div className="mb-6">
-                  <h4 className="text-sm font-medium text-black mb-3">Design Inspiration</h4>
-                  <div className="rounded-xl overflow-hidden border border-[#E8DCC8] bg-[#FAF7F0]">
-                    <ImageWithFallback
-                      src={selectedOrderDetails.designImageUrl}
-                      alt={`${selectedOrderDetails.orderType} design inspiration`}
-                      className="w-full h-64 object-cover"
-                    />
+              {selectedOrderDetails.status === 'rejected' && selectedOrderDetails.rejectionReason && (
+                <div className="mt-6 px-8">
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <p className="font-semibold uppercase tracking-wide text-red-600">Reason for Rejection</p>
+                    <p className="mt-1 whitespace-pre-wrap">{selectedOrderDetails.rejectionReason}</p>
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
 
-              <div className="relative mb-6">
-                <div className="flex justify-between mb-2">
-                  {statusSteps.map((step, index) => {
-                    const currentStatusIndex = getStatusIndex(selectedOrderDetails.status);
-                    return (
-                      <div key={step.key} className="flex-1 relative">
-                        <div className="flex flex-col items-center">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 transition-colors ${
-                            index <= currentStatusIndex
-                              ? 'bg-[#D4AF37] text-white'
-                              : 'bg-[#E8DCC8] text-[#6B5D4F]'
-                          }`}>
-                            {index < currentStatusIndex ? (
-                              <CheckCircle2 className="w-5 h-5" />
-                            ) : (
-                              <span className="text-xs">{index + 1}</span>
-                            )}
-                          </div>
-                          <span className={`text-xs text-center ${
-                            index <= currentStatusIndex ? 'font-medium' : 'text-[#6B5D4F]'
-                          }`}>
-                            {step.label}
-                          </span>
-                        </div>
-                        {index < statusSteps.length - 1 && (
-                          <div className={`absolute top-4 left-1/2 w-full h-0.5 -z-10 ${
-                            index < currentStatusIndex ? 'bg-[#D4AF37]' : 'bg-[#E8DCC8]'
-                          }`} />
-                        )}
-                      </div>
-                    );
-                  })}
+        {isScheduleConsultationModalOpen && selectedScheduleOrder && !isConfirmScheduleConsultationOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Schedule design consultation"
+            onClick={closeScheduleConsultationModal}
+          >
+            <div
+              ref={modalRef}
+              tabIndex={-1}
+              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <div>
+                  <h3 className="text-2xl font-light text-black">Schedule Design Consultation</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Choose when you will visit {selectedScheduleOrder.branch || 'the store'} for your design consultation.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeScheduleConsultationModal}
+                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                  aria-label="Close consultation schedule modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-2 text-sm mb-6">
+                <p className="font-medium text-black">{selectedScheduleOrder.orderType}</p>
+                <p className="text-[#6B5D4F]">Reference ID: {selectedScheduleOrder.referenceId || selectedScheduleOrder._id || selectedScheduleOrder.id}</p>
+                <p className="text-[#6B5D4F]">Branch: {selectedScheduleOrder.branch || 'Taguig Main'}</p>
+              </div>
+
+              <div className="space-y-4">
+                {Boolean(selectedScheduleOrder.consultationDate || selectedScheduleOrder.consultationTime) && (
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Reason for Rescheduling *</label>
+                    <textarea
+                      value={consultationRescheduleReason}
+                      onChange={(e) => setConsultationRescheduleReason(e.target.value)}
+                      rows={3}
+                      placeholder="Tell us why you need to reschedule your consultation"
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                      disabled={isSavingConsultationSchedule}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Consultation Date</label>
+                  <input
+                    type="date"
+                    value={consultationDate}
+                    min={getTomorrowDateValue()}
+                    onChange={(e) => setConsultationDate(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    disabled={isSavingConsultationSchedule}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Consultation Time</label>
+                  <select
+                    value={consultationTime}
+                    onChange={(e) => setConsultationTime(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    disabled={isSavingConsultationSchedule}
+                  >
+                    {consultationTimeOptions.map((timeOption) => (
+                      <option key={timeOption.value} value={timeOption.value}>
+                        {timeOption.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsOrderDetailsOpen(false)}
-                className="w-full py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
-              >
-                Close
-              </button>
+              {consultationScheduleError && (
+                <p className="mt-4 text-sm text-red-600">{consultationScheduleError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={closeScheduleConsultationModal}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={requestSaveConsultationSchedule}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                >
+                  {isSavingConsultationSchedule ? 'Saving...' : 'Save Schedule'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isConfirmScheduleConsultationOpen && selectedScheduleOrder && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm consultation schedule"
+            onClick={() => {
+              if (isSavingConsultationSchedule) return;
+              setIsConfirmScheduleConsultationOpen(false);
+            }}
+          >
+            <div
+              ref={modalRef}
+              tabIndex={-1}
+              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h3 className="text-2xl font-light text-black">Confirm Schedule</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Please confirm your design consultation schedule.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmScheduleConsultationOpen(false)}
+                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                  aria-label="Close consultation schedule confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm mb-6">
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Order</span>
+                  <span className="text-right font-medium text-black">{selectedScheduleOrder.orderType}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Branch</span>
+                  <span className="text-right font-medium text-black">{selectedScheduleOrder.branch || 'Taguig Main'}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Date</span>
+                  <span className="text-right font-medium text-black">{consultationDate}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Time</span>
+                  <span className="text-right font-medium text-black">
+                    {consultationTimeOptions.find((option) => option.value === consultationTime)?.label || consultationTime}
+                  </span>
+                </div>
+                {Boolean(selectedScheduleOrder.consultationDate || selectedScheduleOrder.consultationTime) && consultationRescheduleReason.trim() && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[#6B5D4F]">Reason</span>
+                    <span className="text-right font-medium text-black max-w-[60%] whitespace-pre-wrap">{consultationRescheduleReason.trim()}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmScheduleConsultationOpen(false)}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveConsultationSchedule}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50"
+                  disabled={isSavingConsultationSchedule}
+                >
+                  {isSavingConsultationSchedule ? 'Saving...' : 'Confirm Save'}
+                </button>
+              </div>
             </div>
           </div>
         )}

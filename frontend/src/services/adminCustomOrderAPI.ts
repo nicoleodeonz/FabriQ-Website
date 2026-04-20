@@ -17,6 +17,9 @@ export interface AdminCustomOrderRecord {
   specialRequests?: string;
   budget?: string;
   branch?: string;
+  consultationDate?: string | null;
+  consultationTime?: string | null;
+  rejectionReason?: string | null;
   status: AdminCustomOrderStatus;
   designImageUrl?: string;
   createdAt?: string;
@@ -59,6 +62,7 @@ export const adminCustomOrderAPI = {
     token: string,
     id: string,
     status: AdminCustomOrderStatus,
+    reason?: string,
   ): Promise<AdminCustomOrderRecord> => {
     const response = await fetch(`${API_BASE_URL}/custom-orders/${id}/status`, {
       method: 'PATCH',
@@ -66,7 +70,7 @@ export const adminCustomOrderAPI = {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ status })
+      body: JSON.stringify({ status, reason })
     });
 
     if (!response.ok) {

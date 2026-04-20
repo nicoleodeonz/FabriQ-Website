@@ -552,9 +552,6 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
 
   const changeCollectionPage = (nextPage: number) => {
     setCollectionPage(nextPage);
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
   };
 
   const pickupTimeOptions = useMemo(() => ([

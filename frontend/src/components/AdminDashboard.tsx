@@ -91,6 +91,10 @@ type AddItemField =
 const INVENTORY_PREVIEW_DELAY_MS = 2000;
 const INVENTORY_PAGE_SIZE = 9;
 const APPOINTMENT_PAGE_SIZE = 3;
+const RENTAL_PAGE_SIZE = 5;
+const CUSTOM_ORDER_PAGE_SIZE = 3;
+const ADMIN_HISTORY_PAGE_SIZE = 8;
+const USER_PAGE_SIZE = 5;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
 
@@ -201,6 +205,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [searchQuery, setSearchQuery] = useState('');
   const [userFilter, setUserFilter] = useState<'all' | 'admin' | 'staff' | 'customer'>('all');
   const [showArchivedUsersOnly, setShowArchivedUsersOnly] = useState(false);
+  const [userPage, setUserPage] = useState(1);
   const [confirmUserArchive, setConfirmUserArchive] = useState<User | null>(null);
   const [isConfirmingUserArchive, setIsConfirmingUserArchive] = useState(false);
   const [confirmUserRestore, setConfirmUserRestore] = useState<User | null>(null);
@@ -218,6 +223,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adminHistoryTo, setAdminHistoryTo] = useState('');
   const [adminHistoryFromTime, setAdminHistoryFromTime] = useState('');
   const [adminHistoryToTime, setAdminHistoryToTime] = useState('');
+  const [adminHistoryPage, setAdminHistoryPage] = useState(1);
   const [newUserForm, setNewUserForm] = useState<NewUserForm>({
     role: 'Customer',
     email: '',
@@ -235,6 +241,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adminRentalsError, setAdminRentalsError] = useState<string | null>(null);
   const [rentalSearchQuery, setRentalSearchQuery] = useState('');
   const [rentalManagementView, setRentalManagementView] = useState<'active' | 'archive'>('active');
+  const [rentalPage, setRentalPage] = useState(1);
   const [appointmentManagementView, setAppointmentManagementView] = useState<'active' | 'archive'>('active');
   const [appointmentPage, setAppointmentPage] = useState(1);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'scheduled'>('pending');
@@ -256,6 +263,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adminCustomOrdersError, setAdminCustomOrdersError] = useState<string | null>(null);
   const [customOrderManagementView, setCustomOrderManagementView] = useState<'active' | 'archive'>('active');
   const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
+  const [customOrderPage, setCustomOrderPage] = useState(1);
   const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<AdminCustomOrderStatus>('inquiry');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
@@ -346,6 +354,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   useEffect(() => {
     if (activeTab !== 'bespoke') return;
     loadAdminCustomOrders();
+    loadAdminHistory();
   }, [activeTab]);
 
   useEffect(() => {
@@ -483,15 +492,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   }
 
-  async function handleCustomOrderStatusUpdate(id: string, status: AdminCustomOrderStatus) {
+  async function handleCustomOrderStatusUpdate(id: string, status: AdminCustomOrderStatus, reason?: string) {
     setCustomOrderStatusUpdatingId(id);
     setAdminCustomOrdersError(null);
     try {
-      const updated = await adminCustomOrderAPI.updateCustomOrderStatus(token, id, status);
+      const updated = await adminCustomOrderAPI.updateCustomOrderStatus(token, id, status, reason);
       setAdminCustomOrders((prev) => prev.map((order) => {
         const orderId = String(order.id || order._id || '');
         return orderId === id ? updated : order;
       }));
+      await Promise.all([loadAdminCustomOrders(), loadAdminHistory()]);
       return updated;
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to update custom order status');
@@ -512,13 +522,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       return;
     }
 
-    const updated = await handleCustomOrderStatusUpdate(orderId, 'rejected');
-    if (updated) {
-      setSelectedCustomOrder(updated);
-      setIsRejectCustomOrderConfirmOpen(false);
-      setRejectCustomOrderReason('');
-      setRejectCustomOrderError(null);
-    } else if (adminCustomOrdersError) {
+    setIsRejectCustomOrderConfirmOpen(false);
+    setSelectedCustomOrder(null);
+    setRejectCustomOrderReason('');
+    setRejectCustomOrderError(null);
+
+    const updated = await handleCustomOrderStatusUpdate(orderId, 'rejected', trimmedReason);
+    if (!updated && adminCustomOrdersError) {
       setRejectCustomOrderError(adminCustomOrdersError);
     }
   }
@@ -530,11 +540,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
     if (!orderId || !nextStatus) return;
 
-    const updated = await handleCustomOrderStatusUpdate(orderId, nextStatus);
-    if (updated) {
-      setSelectedCustomOrder(updated);
-      setIsApproveCustomOrderConfirmOpen(false);
-    }
+    setIsApproveCustomOrderConfirmOpen(false);
+    setSelectedCustomOrder(null);
+    await handleCustomOrderStatusUpdate(orderId, nextStatus);
   }
 
   async function handleAppointmentStatusUpdate(id: string, status: 'scheduled' | 'completed' | 'cancelled', reason?: string) {
@@ -543,6 +551,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     try {
       const updated = await appointmentAPI.updateAppointmentStatus(token, id, status, reason);
       setAdminAppointments((prev) => prev.map((item) => (item.id === id ? updated : item)));
+      await loadAdminHistory();
     } catch (err) {
       setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to update appointment');
     } finally {
@@ -931,6 +940,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
     return true;
   });
+  const adminHistoryTotalPages = Math.max(1, Math.ceil(filteredAdminHistory.length / ADMIN_HISTORY_PAGE_SIZE));
+  const safeAdminHistoryPage = Math.min(adminHistoryPage, adminHistoryTotalPages);
+  const paginatedAdminHistory = filteredAdminHistory.slice(
+    (safeAdminHistoryPage - 1) * ADMIN_HISTORY_PAGE_SIZE,
+    safeAdminHistoryPage * ADMIN_HISTORY_PAGE_SIZE,
+  );
 
   async function handleArchiveUser(user: User) {
     if (user.status === 'archived') {
@@ -1372,6 +1387,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       : user.status !== 'archived';
     return matchesSearch && matchesRole && matchesArchiveView;
   });
+  const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / USER_PAGE_SIZE));
+  const safeUserPage = Math.min(userPage, userTotalPages);
+  const paginatedUsers = filteredUsers.slice(
+    (safeUserPage - 1) * USER_PAGE_SIZE,
+    safeUserPage * USER_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setUserPage(1);
+  }, [searchQuery, userFilter, showArchivedUsersOnly]);
+
+  const changeUserPage = (nextPage: number) => {
+    setUserPage(nextPage);
+  };
 
   const inventoryQuery = inventorySearchQuery.trim().toLowerCase();
   const filteredInventory = inventory
@@ -1416,9 +1445,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const changeInventoryPage = (nextPage: number) => {
     setInventoryPage(nextPage);
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
   };
 
   const today = new Date();
@@ -1547,6 +1573,43 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(rentalQuery));
   });
+  const rentalItemsForCurrentView = rentalManagementView === 'archive'
+    ? filteredArchivedRentalCards
+    : rentalViewFilter === 'pending'
+      ? filteredPendingRentalCards
+      : rentalViewFilter === 'active'
+        ? filteredActiveRentalCards
+        : rentalViewFilter === 'for-payment'
+          ? filteredForPaymentRentals
+          : rentalViewFilter === 'for-pickup'
+            ? filteredForPickupRentals
+            : filteredPendingReturns;
+  const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
+  const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
+  const paginatedPendingRentalCards = filteredPendingRentalCards.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedActiveRentalCards = filteredActiveRentalCards.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedForPaymentRentals = filteredForPaymentRentals.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedForPickupRentals = filteredForPickupRentals.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedPendingReturns = filteredPendingReturns.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedArchivedRentalCards = filteredArchivedRentalCards.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
 
   const createRentalFollowUpTarget = (
     rental: Pick<AdminRentalCard, 'id' | 'gownName' | 'customerName' | 'endDate' | 'status'>
@@ -1619,9 +1682,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const changeAppointmentPage = (nextPage: number) => {
     setAppointmentPage(nextPage);
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
+  };
+
+  useEffect(() => {
+    setRentalPage(1);
+  }, [rentalSearchQuery, rentalManagementView, rentalViewFilter]);
+
+  const changeRentalPage = (nextPage: number) => {
+    setRentalPage(nextPage);
   };
 
   const customOrderQuery = customOrderSearchQuery.trim().toLowerCase();
@@ -1647,6 +1715,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(customOrderQuery));
   });
+  const customOrderTotalPages = Math.max(1, Math.ceil(filteredAdminCustomOrders.length / CUSTOM_ORDER_PAGE_SIZE));
+  const safeCustomOrderPage = Math.min(customOrderPage, customOrderTotalPages);
+  const paginatedAdminCustomOrders = filteredAdminCustomOrders.slice(
+    (safeCustomOrderPage - 1) * CUSTOM_ORDER_PAGE_SIZE,
+    safeCustomOrderPage * CUSTOM_ORDER_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setCustomOrderPage(1);
+  }, [customOrderSearchQuery, customOrderManagementView, customOrderStatusFilter]);
+
+  const changeCustomOrderPage = (nextPage: number) => {
+    setCustomOrderPage(nextPage);
+  };
 
   const getAppointmentTypeLabel = (type: string) => {
     if (type === 'consultation') return 'Design Consultation';
@@ -1699,8 +1781,129 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return rawValue;
   };
 
+  const formatConsultationTimeLabel = (value: string | undefined | null) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return '';
+
+    const match = rawValue.match(/^(\d{2}):(\d{2})$/);
+    if (!match) {
+      return rawValue;
+    }
+
+    const hours24 = Number(match[1]);
+    const minutes = match[2];
+    if (!Number.isInteger(hours24) || hours24 < 0 || hours24 > 23) {
+      return rawValue;
+    }
+
+    const meridiem = hours24 >= 12 ? 'PM' : 'AM';
+    const hours12 = hours24 % 12 || 12;
+    return `${hours12}:${minutes} ${meridiem}`;
+  };
+
+  const canAdvanceCustomOrderStatus = (order: AdminCustomOrderRecord | null) => {
+    if (!order) return false;
+
+    const nextStatus = getNextCustomOrderStatus(order.status);
+    if (!nextStatus) {
+      return false;
+    }
+
+    if (order.status !== 'design-approval') {
+      return true;
+    }
+
+    const consultationDate = String(order.consultationDate || '').trim();
+    if (!consultationDate) {
+      return false;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    return consultationDate <= today;
+  };
+
+  const getCustomOrderApproveDisabledReason = (order: AdminCustomOrderRecord | null) => {
+    if (!order || order.status !== 'design-approval') {
+      return '';
+    }
+
+    const consultationDate = String(order.consultationDate || '').trim();
+    const consultationTime = String(order.consultationTime || '').trim();
+    if (!consultationDate) {
+      return 'Waiting for the customer to schedule a design consultation.';
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (consultationDate > today) {
+      return `The design consultation is scheduled on ${consultationDate}${consultationTime ? ` at ${formatConsultationTimeLabel(consultationTime)}` : ''}.`;
+    }
+
+    return '';
+  };
+
+  const getCustomOrderConsultationScheduleMessage = (order: AdminCustomOrderRecord | null) => {
+    if (!order || order.status !== 'design-approval') {
+      return '';
+    }
+
+    const consultationDate = String(order.consultationDate || '').trim();
+    const consultationTime = String(order.consultationTime || '').trim();
+    if (!consultationDate) {
+      return '';
+    }
+
+    return `The design consultation is scheduled on ${consultationDate}${consultationTime ? ` at ${formatConsultationTimeLabel(consultationTime)}` : ''}.`;
+  };
+
+  const getCustomOrderRejectionReason = (order: AdminCustomOrderRecord | null) => {
+    if (!order) return '';
+
+    const directReason = String(order.rejectionReason || '').trim();
+    if (directReason) {
+      return directReason;
+    }
+
+    const orderId = String(order.id || order._id || '').trim();
+    const referenceId = String(order.referenceId || '').trim().toUpperCase();
+
+    const matchingHistoryEntry = adminHistory.find((entry) => {
+      if (entry.action !== 'custom_order_status_updated') {
+        return false;
+      }
+
+      const details = entry.details;
+      if (!details || typeof details !== 'object') {
+        return false;
+      }
+
+      const detailNewStatus = String(details.newStatus || '').trim().toLowerCase();
+      if (detailNewStatus !== 'rejected') {
+        return false;
+      }
+
+      const detailOrderId = String(details.customOrderId || '').trim();
+      const detailReferenceId = String(details.customOrderReferenceId || '').trim().toUpperCase();
+
+      return (orderId && detailOrderId === orderId) || (referenceId && detailReferenceId === referenceId);
+    });
+
+    if (!matchingHistoryEntry || !matchingHistoryEntry.details || typeof matchingHistoryEntry.details !== 'object') {
+      return '';
+    }
+
+    return String(matchingHistoryEntry.details.reason || '').trim();
+  };
+
   const adminHistoryActionButtonClass = 'px-4 inline-flex items-center justify-center rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors';
   const adminHistoryClearFiltersButtonClass = `${adminHistoryActionButtonClass} py-2 whitespace-nowrap`;
+
+  useEffect(() => {
+    setAdminHistoryPage(1);
+  }, [adminHistorySearchQuery, adminHistoryFrom, adminHistoryTo, adminHistoryFromTime, adminHistoryToTime]);
+
+  const changeAdminHistoryPage = (nextPage: number) => {
+    setAdminHistoryPage(nextPage);
+  };
 
   const notificationMethodText = notificationMethod === 'both'
     ? 'SMS and Email'
@@ -2285,7 +2488,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'pending' && (
                 <div className="space-y-3">
-                  {filteredPendingRentalCards.map((rental) => (
+                  {paginatedPendingRentalCards.map((rental) => (
                     <div
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
@@ -2337,7 +2540,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'active' && (
                 <div className="space-y-3">
-                  {filteredActiveRentalCards.map((rental) => (
+                  {paginatedActiveRentalCards.map((rental) => (
                     <div
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
@@ -2403,7 +2606,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'for-payment' && (
                 <div className="space-y-3">
-                  {filteredForPaymentRentals.map((rental) => (
+                  {paginatedForPaymentRentals.map((rental) => (
                     <div
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
@@ -2479,7 +2682,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'for-pickup' && (
                 <div className="space-y-3">
-                  {filteredForPickupRentals.map((rental) => (
+                  {paginatedForPickupRentals.map((rental) => (
                     <div
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
@@ -2555,7 +2758,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'returns' && (
                 <div className="space-y-3">
-                  {filteredPendingReturns.map((rental) => (
+                  {paginatedPendingReturns.map((rental) => (
                     <div
                       key={rental.id}
                       className={`p-4 rounded-lg border transition-colors ${
@@ -2638,7 +2841,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminRentalsLoading && rentalManagementView === 'archive' && (
                 <div className="space-y-3">
-                  {filteredArchivedRentalCards.map((rental) => (
+                  {paginatedArchivedRentalCards.map((rental) => (
                     <div
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
@@ -2711,6 +2914,32 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   {filteredArchivedRentalCards.length === 0 && (
                     <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rental records match your search' : 'No rental records found'}</p>
                   )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalItemsForCurrentView.length > RENTAL_PAGE_SIZE && (
+                <div className="mt-6 flex flex-col gap-3 pt-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-[#6B5D4F]">
+                    Page {safeRentalPage} of {rentalTotalPages}
+                  </p>
+                  <div className="flex justify-end gap-3 md:ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => changeRentalPage(Math.max(1, safeRentalPage - 1))}
+                      disabled={safeRentalPage === 1}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeRentalPage(Math.min(rentalTotalPages, safeRentalPage + 1))}
+                      disabled={safeRentalPage === rentalTotalPages}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -3141,7 +3370,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
               {!adminCustomOrdersLoading && filteredAdminCustomOrders.length > 0 && (
                 <div className="space-y-3">
-                  {filteredAdminCustomOrders.map((order) => {
+                  {paginatedAdminCustomOrders.map((order) => {
                     const orderId = String(order.id || order._id || '');
                     const orderReferenceId = String(order.referenceId || orderId || '').trim();
 
@@ -3198,6 +3427,32 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {!adminCustomOrdersLoading && filteredAdminCustomOrders.length > CUSTOM_ORDER_PAGE_SIZE && (
+                <div className="mt-6 flex flex-col gap-3 pt-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-[#6B5D4F]">
+                    Page {safeCustomOrderPage} of {customOrderTotalPages}
+                  </p>
+                  <div className="flex justify-end gap-3 md:ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => changeCustomOrderPage(Math.max(1, safeCustomOrderPage - 1))}
+                      disabled={safeCustomOrderPage === 1}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeCustomOrderPage(Math.min(customOrderTotalPages, safeCustomOrderPage + 1))}
+                      disabled={safeCustomOrderPage === customOrderTotalPages}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -3312,14 +3567,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             </div>
 
             {/* Users List */}
-            <div style={{ height: '650px' }} className="space-y-4 overflow-y-auto overflow-x-auto pr-1">
+            <div className="space-y-4">
               {usersLoading && (
                 <p className="text-center py-8 text-[#6B5D4F]">Loading users...</p>
               )}
               {!usersLoading && filteredUsers.length === 0 && (
                 <p className="text-center py-8 text-[#6B5D4F]">No users found for the selected filters.</p>
               )}
-              {filteredUsers.map((user) => (
+              {paginatedUsers.map((user) => (
                 <div key={user.id} className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4 flex-1">
@@ -3405,6 +3660,32 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </div>
                 </div>
               ))}
+
+              {filteredUsers.length > USER_PAGE_SIZE && (
+                <div className="flex flex-col gap-3 border-t border-[#E8DCC8] px-2 py-4 md:flex-row md:items-center md:justify-between">
+                  <p className="text-sm text-[#6B5D4F]">
+                    Page {safeUserPage} of {userTotalPages}
+                  </p>
+                  <div className="flex justify-end gap-3 md:ml-auto">
+                    <button
+                      type="button"
+                      onClick={() => changeUserPage(Math.max(1, safeUserPage - 1))}
+                      disabled={safeUserPage === 1}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeUserPage(Math.min(userTotalPages, safeUserPage + 1))}
+                      disabled={safeUserPage === userTotalPages}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3526,7 +3807,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E8DCC8]">
-                      {filteredAdminHistory.map((entry) => (
+                      {paginatedAdminHistory.map((entry) => (
                         <tr key={entry.id} className="hover:bg-[#FAF7F0] transition-colors align-top">
                           <td className="px-6 py-4 text-sm">
                             <p className="font-medium">{entry.adminLabel || 'Admin'}</p>
@@ -3544,6 +3825,32 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </tbody>
                   </table>
                 </div>
+
+                {filteredAdminHistory.length > ADMIN_HISTORY_PAGE_SIZE && (
+                  <div className="flex flex-col gap-3 border-t border-[#E8DCC8] px-6 py-4 md:flex-row md:items-center md:justify-between">
+                    <p className="text-sm text-[#6B5D4F]">
+                      Page {safeAdminHistoryPage} of {adminHistoryTotalPages}
+                    </p>
+                    <div className="flex justify-end gap-3 md:ml-auto">
+                      <button
+                        type="button"
+                        onClick={() => changeAdminHistoryPage(Math.max(1, safeAdminHistoryPage - 1))}
+                        disabled={safeAdminHistoryPage === 1}
+                        className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => changeAdminHistoryPage(Math.min(adminHistoryTotalPages, safeAdminHistoryPage + 1))}
+                        disabled={safeAdminHistoryPage === adminHistoryTotalPages}
+                        className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -4440,11 +4747,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         )}
 
         {/* Custom Order Details Modal */}
-        {selectedCustomOrder && (
+        {selectedCustomOrder && (() => {
+          const rejectionReason = getCustomOrderRejectionReason(selectedCustomOrder);
+
+          return (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
             <div
                 className="bg-white rounded-2xl w-full px-6 pt-10 pb-4 overflow-y-auto"
-                style={{ maxWidth: '750px', height: '75vh' }}
+              style={{ maxWidth: '750px', height: 'calc(75vh + 20px)' }}
             >
               <div style={{ height: '20px' }} />
               <div className="flex justify-between items-start mb-6 pl-4 pr-2">
@@ -4481,6 +4791,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       <p><span className="font-medium text-[#3D2B1F]">Branch:</span> {selectedCustomOrder.branch || 'No branch selected'}</p>
                       <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedCustomOrder.budget)}</p>
                       <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {selectedCustomOrder.consultationDate
+                        ? `${selectedCustomOrder.consultationDate}${selectedCustomOrder.consultationTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.consultationTime)}` : ''}`
+                        : 'Not scheduled yet'}</p>
                     </div>
                   </div>
 
@@ -4527,62 +4840,87 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </div>
               </div>
 
-              <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
-                <div
-                  className="absolute left-0 right-0 top-0 border-t border-[#E8DCC8]"
-                  style={{ transform: 'translateY(-30px)' }}
-                />
-                {(() => {
-                  const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
-                  const isUpdating = customOrderStatusUpdatingId === orderId;
-                  const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
-                  const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed';
+              {selectedCustomOrder.status === 'rejected' && rejectionReason && (
+                <div className="mt-6 px-8">
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <p className="font-semibold uppercase tracking-wide text-red-600">Reason for Rejection</p>
+                    <p className="mt-1 whitespace-pre-wrap">{rejectionReason}</p>
+                  </div>
+                </div>
+              )}
 
-                  return (
-                    <>
-                      <button
-                        onClick={() => setSelectedCustomOrder(null)}
-                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (!orderId || !canReject) return;
-                          setAdminCustomOrdersError(null);
-                          setRejectCustomOrderReason('');
-                          setRejectCustomOrderError(null);
-                          setIsRejectCustomOrderConfirmOpen(true);
-                        }}
-                        disabled={isUpdating || !canReject}
-                        className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {isUpdating && canReject ? 'Rejecting...' : 'Reject'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (!orderId || !nextStatus) return;
-                          setAdminCustomOrdersError(null);
-                          setIsApproveCustomOrderConfirmOpen(true);
-                        }}
-                        disabled={isUpdating || !nextStatus}
-                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {isUpdating && !!nextStatus ? 'Approving...' : 'Approve'}
-                      </button>
-                    </>
-                  );
-                })()}
-              </div>
+              {customOrderManagementView !== 'archive' && getCustomOrderConsultationScheduleMessage(selectedCustomOrder) && (
+                <div className="mt-6 px-8">
+                  <p className="text-sm text-[#6B5D4F]">
+                    {getCustomOrderConsultationScheduleMessage(selectedCustomOrder)}
+                  </p>
+                </div>
+              )}
+
+              {customOrderManagementView !== 'archive' && (
+                <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
+                  {(() => {
+                    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+                    const isUpdating = customOrderStatusUpdatingId === orderId;
+                    const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+                    const canAdvance = canAdvanceCustomOrderStatus(selectedCustomOrder);
+                    const approveDisabledReason = getCustomOrderApproveDisabledReason(selectedCustomOrder);
+                    const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed';
+                    const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+
+                    return (
+                      <>
+                        <button
+                          onClick={() => setSelectedCustomOrder(null)}
+                          className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!orderId || !canReject) return;
+                            setAdminCustomOrdersError(null);
+                            setRejectCustomOrderReason('');
+                            setRejectCustomOrderError(null);
+                            setIsRejectCustomOrderConfirmOpen(true);
+                          }}
+                          disabled={isUpdating || !canReject}
+                          className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isUpdating && canReject ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...') : (isInquiryStage ? 'Reject' : 'Cancel')}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (!orderId || !nextStatus || !canAdvance) return;
+                            setAdminCustomOrdersError(null);
+                            setIsApproveCustomOrderConfirmOpen(true);
+                          }}
+                          disabled={isUpdating || !nextStatus || !canAdvance}
+                          className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={approveDisabledReason || undefined}
+                        >
+                          {isUpdating && !!nextStatus ? 'Approving...' : 'Approve'}
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {isRejectCustomOrderConfirmOpen && selectedCustomOrder && (
           <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              {(() => {
+                const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+
+                return (
+                  <>
               <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Rejection</h3>
+                <h3 className="text-2xl font-light">{isInquiryStage ? 'Confirm Rejection' : 'Confirm Cancellation'}</h3>
                 <button
                   type="button"
                   disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
@@ -4599,7 +4937,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               </div>
 
               <p className="text-sm text-[#6B5D4F] mb-4">
-                Please provide a reason before rejecting this custom order.
+                {isInquiryStage
+                  ? 'Please provide a reason before rejecting this custom order.'
+                  : 'Please provide a reason before cancelling this custom order.'}
               </p>
 
               <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
@@ -4609,7 +4949,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <p className="text-sm text-[#6B5D4F]">Current Status: {getCustomOrderStatusLabel(selectedCustomOrder.status)}</p>
               </div>
 
-              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for rejection *</label>
+              <label className="block text-sm text-[#6B5D4F] mb-2">
+                {isInquiryStage ? 'Reason for rejection *' : 'Reason for cancellation *'}
+              </label>
               <textarea
                 value={rejectCustomOrderReason}
                 onChange={(e) => {
@@ -4617,7 +4959,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   if (rejectCustomOrderError) setRejectCustomOrderError(null);
                 }}
                 rows={4}
-                placeholder="State why this custom order is being rejected"
+                placeholder={isInquiryStage
+                  ? 'State why this custom order is being rejected'
+                  : 'State why this custom order is being cancelled'}
                 className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
                 disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
               />
@@ -4649,16 +4993,21 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   onClick={handleConfirmRejectCustomOrder}
                   className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
                 >
-                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '') ? 'Rejecting...' : 'Confirm Reject'}
+                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')
+                    ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...')
+                    : (isInquiryStage ? 'Confirm Reject' : 'Confirm Cancel')}
                 </button>
               </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         )}
 
         {isApproveCustomOrderConfirmOpen && selectedCustomOrder && (() => {
           const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
-          if (!nextStatus) return null;
+          if (!nextStatus || !canAdvanceCustomOrderStatus(selectedCustomOrder)) return null;
 
           const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
           const isUpdating = customOrderStatusUpdatingId === orderId;

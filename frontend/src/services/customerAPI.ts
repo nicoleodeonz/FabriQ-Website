@@ -205,6 +205,32 @@ export const customerAPI = {
     return response.json();
   },
 
+  updateCustomOrderConsultationSchedule: async (
+    token: string,
+    id: string,
+    data: { consultationDate: string; consultationTime: string; consultationRescheduleReason?: string }
+  ) => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders/${id}/consultation-schedule`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to save consultation schedule';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    return response.json();
+  },
+
   // Get all custom orders for the authenticated customer
   getMyCustomOrders: async (token: string) => {
     const response = await fetch(`${API_BASE_URL}/custom-orders/my-orders`, {

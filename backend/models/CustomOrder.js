@@ -12,6 +12,26 @@ const CustomOrderSchema = new mongoose.Schema({
   specialRequests: { type: String },
   budget: { type: String },
   branch: { type: String },
+  consultationDate: {
+    type: String,
+    default: null,
+    trim: true,
+  },
+  consultationTime: {
+    type: String,
+    default: null,
+    trim: true,
+  },
+  consultationRescheduleReason: {
+    type: String,
+    default: null,
+    trim: true,
+  },
+  rejectionReason: {
+    type: String,
+    default: null,
+    trim: true,
+  },
   referenceId: {
     type: String,
     uppercase: true,

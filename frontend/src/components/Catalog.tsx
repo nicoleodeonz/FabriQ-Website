@@ -131,6 +131,11 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
   const resultEnd = Math.min(safeCurrentPage * CATALOG_PAGE_SIZE, filteredGowns.length);
 
   const handleFavoriteClick = (gown: GownItem) => {
+    if (!isLoggedIn || isAdmin) {
+      navigateProtected('profile');
+      return;
+    }
+
     if (favoriteIds.includes(gown.id)) {
       setPendingFavoriteRemoval(gown);
       return;
@@ -172,9 +177,6 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
 
   const changePage = (nextPage: number) => {
     setCurrentPage(nextPage);
-    window.requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
   };
 
   return (
@@ -272,6 +274,9 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
 
                 {/* Favorite Button */}
                 <button
+                  type="button"
+                  aria-label={favoriteIds.includes(gown.id) ? `Unfavorite ${gown.name}` : `Add ${gown.name} to favorites`}
+                  title={favoriteIds.includes(gown.id) ? 'Unfavorite gown' : 'Add to favorites'}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleFavoriteClick(gown);
@@ -468,9 +473,9 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
             className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-8 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h3 className="mb-3 text-2xl font-light text-black">Remove from favorites?</h3>
+            <h3 className="mb-3 text-2xl font-light text-black">Unfavorite this gown?</h3>
             <p className="mb-6 text-sm leading-6 text-[#6B5D4F]">
-              Remove {pendingFavoriteRemoval.name} from your favorites list?
+              {pendingFavoriteRemoval.name} is already in your favorites. Do you want to unfavorite it?
             </p>
             <div className="flex gap-3">
               <button
@@ -478,14 +483,14 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
                 onClick={() => setPendingFavoriteRemoval(null)}
                 className="flex-1 rounded-full border border-[#E8DCC8] px-5 py-3 transition-colors hover:border-[#1a1a1a]"
               >
-                Cancel
+                Keep Favorite
               </button>
               <button
                 type="button"
                 onClick={confirmRemoveFavorite}
                 className="flex-1 rounded-full bg-black px-5 py-3 text-white transition-colors hover:bg-[#D4AF37] hover:text-black"
               >
-                Remove
+                Unfavorite
               </button>
             </div>
           </div>

@@ -380,6 +380,16 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
   }, [applyProfileState, token]);
 
   useEffect(() => {
+    if (selectedFavoriteGown && !favoriteGowns.some((item) => item.id === selectedFavoriteGown.id)) {
+      setSelectedFavoriteGown(null);
+    }
+
+    if (pendingFavoriteRemoval && !favoriteGowns.some((item) => item.id === pendingFavoriteRemoval.id)) {
+      setPendingFavoriteRemoval(null);
+    }
+  }, [favoriteGowns, pendingFavoriteRemoval, selectedFavoriteGown]);
+
+  useEffect(() => {
     if (isAdmin) return;
     const fetchMeasurements = async () => {
       setIsMeasurementsLoading(true);
@@ -939,6 +949,9 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
                 View
               </button>
               <button
+                type="button"
+                aria-label={`Unfavorite ${item.name}`}
+                title="Unfavorite gown"
                 onClick={() => setPendingFavoriteRemoval(item)}
                 className="p-2 text-red-600 hover:bg-red-50 rounded-full transition-colors"
               >
@@ -1641,9 +1654,9 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
         {pendingFavoriteRemoval && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-8 shadow-2xl">
-              <h3 className="mb-3 text-2xl font-light text-black">Remove from favorites?</h3>
+              <h3 className="mb-3 text-2xl font-light text-black">Unfavorite this gown?</h3>
               <p className="mb-6 text-sm leading-6 text-[#6B5D4F]">
-                Remove {pendingFavoriteRemoval.name} from your favorites list?
+                {pendingFavoriteRemoval.name} is already in your favorites. Do you want to unfavorite it?
               </p>
               <div className="flex gap-3">
                 <button
@@ -1651,14 +1664,14 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
                   onClick={() => setPendingFavoriteRemoval(null)}
                   className="flex-1 rounded-full border border-[#E8DCC8] px-5 py-3 transition-colors hover:border-[#1a1a1a]"
                 >
-                  Cancel
+                  Keep Favorite
                 </button>
                 <button
                   type="button"
                   onClick={confirmRemoveFavorite}
                   className="flex-1 rounded-full bg-black px-5 py-3 text-white transition-colors hover:bg-[#D4AF37] hover:text-black"
                 >
-                  Remove
+                  Unfavorite
                 </button>
               </div>
             </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Home } from './components/Home';
 import { Catalog } from './components/Catalog';
 import { Rentals } from './components/Rentals';
@@ -49,6 +49,8 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
 }>): FavoriteGown[] => {
   const inventoryById = new Map(inventoryItems.map((item) => [item.id, item]));
 
+  const seenIds = new Set<string>();
+
   return (Array.isArray(storedFavorites) ? storedFavorites : [])
     .map((favorite) => {
       const inventoryItem = favorite?.id ? inventoryById.get(String(favorite.id)) : undefined;
@@ -75,7 +77,11 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
         rating: Number(inventoryItem?.rating ?? favorite?.rating ?? 0),
       };
     })
-    .filter((favorite) => favorite.id && favorite.name)
+    .filter((favorite) => {
+      if (!favorite.id || !favorite.name || seenIds.has(favorite.id)) return false;
+      seenIds.add(favorite.id);
+      return true;
+    })
     .map((favorite) => ({
       ...favorite,
       price: Number.isFinite(favorite.price) ? favorite.price : 0,
@@ -95,6 +101,12 @@ export default function App() {
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
+  const favoriteGownsRef = useRef<FavoriteGown[]>([]);
+
+  const updateFavoriteGownsState = (nextFavorites: FavoriteGown[]) => {
+    favoriteGownsRef.current = nextFavorites;
+    setFavoriteGowns(nextFavorites);
+  };
 
   const clearStoredAuth = () => {
     localStorage.removeItem('authToken');
@@ -109,9 +121,13 @@ export default function App() {
     setAuthToken(null);
     setCurrentUser(null);
     setIsAdmin(false);
-    setFavoriteGowns([]);
+    updateFavoriteGownsState([]);
     clearStoredAuth();
   };
+
+  useEffect(() => {
+    favoriteGownsRef.current = favoriteGowns;
+  }, [favoriteGowns]);
 
   useEffect(() => {
     clearStoredAuth();
@@ -230,14 +246,36 @@ export default function App() {
     }
   };
 
+  const loadFavoriteGowns = async (token: string) => {
+    const [customer, inventoryItems] = await Promise.all([
+      customerAPI.getCustomer(token),
+      getPublicInventory().catch(() => []),
+    ]);
+
+    updateFavoriteGownsState(hydrateFavoriteGowns(customer.favoriteGowns, inventoryItems));
+    setCurrentUser((prev) => {
+      if (!prev) return prev;
+
+      return {
+        ...prev,
+        firstName: customer.firstName || prev.firstName,
+        lastName: customer.lastName || prev.lastName,
+        email: customer.email || prev.email,
+        phoneNumber: customer.phoneNumber || prev.phoneNumber,
+        phoneVerified: Boolean(customer.phoneVerified),
+        phoneVerifiedAt: customer.phoneVerifiedAt || null,
+      };
+    });
+  };
+
   useEffect(() => {
     if (!authToken || !currentUser) {
-      setFavoriteGowns([]);
+      updateFavoriteGownsState([]);
       return;
     }
 
     if (currentUser.role !== 'customer') {
-      setFavoriteGowns([]);
+      updateFavoriteGownsState([]);
       return;
     }
 
@@ -245,30 +283,11 @@ export default function App() {
 
     const loadCustomerState = async () => {
       try {
-        const [customer, inventoryItems] = await Promise.all([
-          customerAPI.getCustomer(authToken),
-          getPublicInventory().catch(() => []),
-        ]);
-        if (isCancelled) return;
-
-        setFavoriteGowns(hydrateFavoriteGowns(customer.favoriteGowns, inventoryItems));
-        setCurrentUser((prev) => {
-          if (!prev) return prev;
-
-          return {
-            ...prev,
-            firstName: customer.firstName || prev.firstName,
-            lastName: customer.lastName || prev.lastName,
-            email: customer.email || prev.email,
-            phoneNumber: customer.phoneNumber || prev.phoneNumber,
-            phoneVerified: Boolean(customer.phoneVerified),
-            phoneVerifiedAt: customer.phoneVerifiedAt || null,
-          };
-        });
+        await loadFavoriteGowns(authToken);
       } catch (error) {
         if (!isCancelled) {
           console.error('Failed to load customer favorites:', error);
-          setFavoriteGowns([]);
+          updateFavoriteGownsState([]);
         }
       }
     };
@@ -281,21 +300,49 @@ export default function App() {
   }, [authToken, currentUser?.id, currentUser?.role]);
 
   const persistFavoriteGowns = async (nextFavorites: FavoriteGown[], rollbackFavorites?: FavoriteGown[]) => {
-    setFavoriteGowns(nextFavorites);
+    updateFavoriteGownsState(nextFavorites);
 
     if (!authToken || currentUser?.role !== 'customer') {
+      if (rollbackFavorites) {
+        updateFavoriteGownsState(rollbackFavorites);
+      }
+      toast.error('Only logged-in customer accounts can manage favorites.');
       return;
     }
 
     try {
-      const result = await customerAPI.updateFavoriteGowns(authToken, nextFavorites);
-      setFavoriteGowns(Array.isArray(result.favoriteGowns) ? result.favoriteGowns : nextFavorites);
+      await customerAPI.updateFavoriteGowns(authToken, nextFavorites);
+      await loadFavoriteGowns(authToken);
     } catch (error) {
       if (rollbackFavorites) {
-        setFavoriteGowns(rollbackFavorites);
+        updateFavoriteGownsState(rollbackFavorites);
       }
       toast.error(error instanceof Error ? error.message : 'Failed to save favorites.');
     }
+  };
+
+  const handleAddFavorite = (gown: FavoriteGown) => {
+    const currentFavorites = favoriteGownsRef.current;
+    const nextFavorites = currentFavorites.some((item) => item.id === gown.id)
+      ? currentFavorites
+      : [...currentFavorites, gown];
+
+    if (nextFavorites === currentFavorites) {
+      return;
+    }
+
+    void persistFavoriteGowns(nextFavorites, currentFavorites);
+  };
+
+  const handleRemoveFavorite = (gownId: string) => {
+    const currentFavorites = favoriteGownsRef.current;
+    const nextFavorites = currentFavorites.filter((item) => item.id !== gownId);
+
+    if (nextFavorites.length === currentFavorites.length) {
+      return;
+    }
+
+    void persistFavoriteGowns(nextFavorites, currentFavorites);
   };
 
   const handleCurrentUserUpdate = (profile: Partial<CurrentUser>) => {
@@ -340,16 +387,8 @@ export default function App() {
             setSelectedGownId={setSelectedGownId}
             navigateWithGown={navigateWithGown}
             favoriteGowns={favoriteGowns}
-            onAddFavorite={(gown) => {
-              const nextFavorites = favoriteGowns.some((item) => item.id === gown.id)
-                ? favoriteGowns
-                : [...favoriteGowns, gown];
-              void persistFavoriteGowns(nextFavorites, favoriteGowns);
-            }}
-            onRemoveFavorite={(gownId) => {
-              const nextFavorites = favoriteGowns.filter((item) => item.id !== gownId);
-              void persistFavoriteGowns(nextFavorites, favoriteGowns);
-            }}
+            onAddFavorite={handleAddFavorite}
+            onRemoveFavorite={handleRemoveFavorite}
           />
         )}
         {currentView === 'rentals' && currentUser && authToken && (
@@ -365,10 +404,7 @@ export default function App() {
             user={currentUser}
             token={authToken}
             favoriteGowns={favoriteGowns}
-            onRemoveFavorite={(gownId) => {
-              const nextFavorites = favoriteGowns.filter((item) => item.id !== gownId);
-              void persistFavoriteGowns(nextFavorites, favoriteGowns);
-            }}
+            onRemoveFavorite={handleRemoveFavorite}
             navigateWithGown={navigateWithGown}
             isAdmin={isAdmin}
           />
