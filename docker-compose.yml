@@ -36,9 +36,3 @@ services:
 
 volumes:
   mongodb_data:
-
-# To use Docker Compose:
-# 1. Make sure Docker Desktop is installed
-# 2. Run: docker-compose up
-# 3. Backend will be available at http://localhost:5000
-# 4. MongoDB will be available at mongodb://localhost:27017
