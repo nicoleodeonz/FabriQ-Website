@@ -36,6 +36,9 @@ interface CustomOrder {
   consultationDate?: string | null;
   consultationTime?: string | null;
   consultationRescheduleReason?: string | null;
+  fittingDate?: string | null;
+  fittingTime?: string | null;
+  fittingRescheduleReason?: string | null;
   rejectionReason?: string | null;
 }
 
@@ -69,16 +72,32 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
   const [isScheduleConsultationModalOpen, setIsScheduleConsultationModalOpen] = useState(false);
   const [isConfirmScheduleConsultationOpen, setIsConfirmScheduleConsultationOpen] = useState(false);
   const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<CustomOrder | null>(null);
+  const [hadExistingConsultationSchedule, setHadExistingConsultationSchedule] = useState(false);
+  const [initialConsultationDate, setInitialConsultationDate] = useState('');
+  const [initialConsultationTime, setInitialConsultationTime] = useState('');
   const [consultationDate, setConsultationDate] = useState('');
   const [consultationTime, setConsultationTime] = useState('08:00');
   const [consultationRescheduleReason, setConsultationRescheduleReason] = useState('');
   const [consultationScheduleError, setConsultationScheduleError] = useState<string | null>(null);
   const [isSavingConsultationSchedule, setIsSavingConsultationSchedule] = useState(false);
+  const [isScheduleFittingModalOpen, setIsScheduleFittingModalOpen] = useState(false);
+  const [isConfirmScheduleFittingOpen, setIsConfirmScheduleFittingOpen] = useState(false);
+  const [selectedFittingOrder, setSelectedFittingOrder] = useState<CustomOrder | null>(null);
+  const [hadExistingFittingSchedule, setHadExistingFittingSchedule] = useState(false);
+  const [initialFittingDate, setInitialFittingDate] = useState('');
+  const [initialFittingTime, setInitialFittingTime] = useState('');
+  const [fittingDate, setFittingDate] = useState('');
+  const [fittingTime, setFittingTime] = useState('08:00');
+  const [fittingRescheduleReason, setFittingRescheduleReason] = useState('');
+  const [fittingScheduleError, setFittingScheduleError] = useState<string | null>(null);
+  const [isSavingFittingSchedule, setIsSavingFittingSchedule] = useState(false);
   const isAnyCustomOrderModalOpen =
     isMissingPhoneModalOpen ||
     isOrderDetailsOpen ||
     isScheduleConsultationModalOpen ||
-    isConfirmScheduleConsultationOpen;
+    isConfirmScheduleConsultationOpen ||
+    isScheduleFittingModalOpen ||
+    isConfirmScheduleFittingOpen;
 
   useModalInteractionLock(isAnyCustomOrderModalOpen, modalRef);
 
@@ -284,6 +303,14 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
     return `${order.consultationDate}${order.consultationTime ? ` at ${order.consultationTime}` : ''}`;
   };
 
+  const getFittingDisplay = (order: CustomOrder) => {
+    if (!order.fittingDate) {
+      return 'Not scheduled yet';
+    }
+
+    return `${order.fittingDate}${order.fittingTime ? ` at ${order.fittingTime}` : ''}`;
+  };
+
   const openOrderDetails = (order: CustomOrder) => {
     setSelectedOrderDetails(order);
     setIsOrderDetailsOpen(true);
@@ -291,6 +318,9 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
 
   const openScheduleConsultationModal = (order: CustomOrder) => {
     setSelectedScheduleOrder(order);
+    setHadExistingConsultationSchedule(Boolean(order.consultationDate || order.consultationTime));
+    setInitialConsultationDate(order.consultationDate || '');
+    setInitialConsultationTime(order.consultationTime || '');
     setConsultationDate(order.consultationDate || '');
     setConsultationTime(order.consultationTime || '08:00');
     setConsultationRescheduleReason('');
@@ -298,22 +328,51 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
     setIsScheduleConsultationModalOpen(true);
   };
 
+  const openScheduleFittingModal = (order: CustomOrder) => {
+    setSelectedFittingOrder(order);
+    setHadExistingFittingSchedule(Boolean(order.fittingDate || order.fittingTime));
+    setInitialFittingDate(order.fittingDate || '');
+    setInitialFittingTime(order.fittingTime || '');
+    setFittingDate(order.fittingDate || '');
+    setFittingTime(order.fittingTime || '08:00');
+    setFittingRescheduleReason('');
+    setFittingScheduleError(null);
+    setIsScheduleFittingModalOpen(true);
+  };
+
   const closeScheduleConsultationModal = () => {
     if (isSavingConsultationSchedule) return;
     setIsScheduleConsultationModalOpen(false);
     setIsConfirmScheduleConsultationOpen(false);
     setSelectedScheduleOrder(null);
+    setHadExistingConsultationSchedule(false);
+    setInitialConsultationDate('');
+    setInitialConsultationTime('');
     setConsultationDate('');
     setConsultationTime('08:00');
     setConsultationRescheduleReason('');
     setConsultationScheduleError(null);
   };
 
+  const closeScheduleFittingModal = () => {
+    if (isSavingFittingSchedule) return;
+    setIsScheduleFittingModalOpen(false);
+    setIsConfirmScheduleFittingOpen(false);
+    setSelectedFittingOrder(null);
+    setHadExistingFittingSchedule(false);
+    setInitialFittingDate('');
+    setInitialFittingTime('');
+    setFittingDate('');
+    setFittingTime('08:00');
+    setFittingRescheduleReason('');
+    setFittingScheduleError(null);
+  };
+
   const requestSaveConsultationSchedule = () => {
-    const hasExistingSchedule = Boolean(selectedScheduleOrder?.consultationDate || selectedScheduleOrder?.consultationTime);
+    const hasExistingSchedule = hadExistingConsultationSchedule;
     const isScheduleChanging =
-      (selectedScheduleOrder?.consultationDate || '') !== consultationDate ||
-      (selectedScheduleOrder?.consultationTime || '') !== consultationTime;
+      initialConsultationDate !== consultationDate ||
+      initialConsultationTime !== consultationTime;
 
     if (!consultationDate) {
       setConsultationScheduleError('Please choose a consultation date.');
@@ -322,6 +381,11 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
 
     if (!consultationTime) {
       setConsultationScheduleError('Please choose a consultation time.');
+      return;
+    }
+
+    if (hasExistingSchedule && !isScheduleChanging) {
+      setConsultationScheduleError('Please choose a different date or time for rescheduling.');
       return;
     }
 
@@ -340,6 +404,22 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
     const orderId = selectedScheduleOrder.id || selectedScheduleOrder._id;
     if (!orderId) {
       setConsultationScheduleError('Unable to find this custom order.');
+      return;
+    }
+
+    const isScheduleChanging =
+      initialConsultationDate !== consultationDate ||
+      initialConsultationTime !== consultationTime;
+
+    if (hadExistingConsultationSchedule && !isScheduleChanging) {
+      setIsConfirmScheduleConsultationOpen(false);
+      setConsultationScheduleError('Please choose a different date or time for rescheduling.');
+      return;
+    }
+
+    if (hadExistingConsultationSchedule && isScheduleChanging && !consultationRescheduleReason.trim()) {
+      setIsConfirmScheduleConsultationOpen(false);
+      setConsultationScheduleError('Please provide a reason for rescheduling.');
       return;
     }
 
@@ -370,6 +450,91 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
       setConsultationScheduleError(error?.message || 'Failed to save consultation schedule.');
     } finally {
       setIsSavingConsultationSchedule(false);
+    }
+  };
+
+  const requestSaveFittingSchedule = () => {
+    const hasExistingSchedule = hadExistingFittingSchedule;
+    const isScheduleChanging =
+      initialFittingDate !== fittingDate ||
+      initialFittingTime !== fittingTime;
+
+    if (!fittingDate) {
+      setFittingScheduleError('Please choose a fitting date.');
+      return;
+    }
+
+    if (!fittingTime) {
+      setFittingScheduleError('Please choose a fitting time.');
+      return;
+    }
+
+    if (hasExistingSchedule && !isScheduleChanging) {
+      setFittingScheduleError('Please choose a different date or time for rescheduling.');
+      return;
+    }
+
+    if (hasExistingSchedule && isScheduleChanging && !fittingRescheduleReason.trim()) {
+      setFittingScheduleError('Please provide a reason for rescheduling.');
+      return;
+    }
+
+    setFittingScheduleError(null);
+    setIsConfirmScheduleFittingOpen(true);
+  };
+
+  const handleSaveFittingSchedule = async () => {
+    if (!selectedFittingOrder) return;
+
+    const orderId = selectedFittingOrder.id || selectedFittingOrder._id;
+    if (!orderId) {
+      setFittingScheduleError('Unable to find this custom order.');
+      return;
+    }
+
+    const isScheduleChanging =
+      initialFittingDate !== fittingDate ||
+      initialFittingTime !== fittingTime;
+
+    if (hadExistingFittingSchedule && !isScheduleChanging) {
+      setIsConfirmScheduleFittingOpen(false);
+      setFittingScheduleError('Please choose a different date or time for rescheduling.');
+      return;
+    }
+
+    if (hadExistingFittingSchedule && isScheduleChanging && !fittingRescheduleReason.trim()) {
+      setIsConfirmScheduleFittingOpen(false);
+      setFittingScheduleError('Please provide a reason for rescheduling.');
+      return;
+    }
+
+    setIsSavingFittingSchedule(true);
+    setIsConfirmScheduleFittingOpen(false);
+    setFittingScheduleError(null);
+    try {
+      const response = await customerAPI.updateCustomOrderFittingSchedule(token, orderId, {
+        fittingDate,
+        fittingTime,
+        fittingRescheduleReason: fittingRescheduleReason.trim() || undefined,
+      });
+      const updatedOrder = response?.order as CustomOrder | undefined;
+      if (updatedOrder) {
+        setOrders((prev) => prev.map((order) => {
+          const currentId = order.id || order._id;
+          return currentId === orderId ? updatedOrder : order;
+        }));
+        if (selectedOrderDetails && (selectedOrderDetails.id || selectedOrderDetails._id) === orderId) {
+          setSelectedOrderDetails(updatedOrder);
+        }
+      } else {
+        await fetchOrders();
+      }
+      toast.success('Fitting appointment schedule saved.');
+      closeScheduleFittingModal();
+    } catch (error: any) {
+      setFittingScheduleError(error?.message || 'Failed to save fitting schedule.');
+    } finally {
+      setIsSavingFittingSchedule(false);
     }
   };
 
@@ -643,8 +808,12 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                 {!loadingOrders && currentOrders.map((order) => {
                   const currentStatusIndex = getStatusIndex(order.status);
                   const canScheduleConsultation = order.status === 'design-approval';
+                  const canScheduleFitting = order.status === 'fitting';
                   const consultationSummary = order.consultationDate && order.consultationTime
                     ? `${order.consultationDate} at ${order.consultationTime}`
+                    : null;
+                  const fittingSummary = order.fittingDate && order.fittingTime
+                    ? `${order.fittingDate} at ${order.fittingTime}`
                     : null;
                   return (
                     <div
@@ -670,9 +839,24 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                           <p className="text-sm text-[#6B5D4F]">
                             {order.eventDate ? `Event: ${order.eventDate}` : ''}
                           </p>
-                          {consultationSummary && (
-                            <p className="text-sm text-[#6B5D4F] mt-1">
-                              Design Consultation: {consultationSummary}
+                          {consultationSummary && order.status !== 'fitting' && (
+                            <p
+                              className="text-sm mt-1 px-3 py-1 rounded-full font-semibold inline-block shadow-sm border border-[#D4AF37] bg-[#FFFBEA] text-[#B89C2C] animate-pulse"
+                              style={{ boxShadow: '0 0 0 2px #D4AF3733' }}
+                              title="Your design consultation is scheduled!"
+                            >
+                              <span className="mr-1">Design Consultation:</span>
+                              <span className="font-bold">{consultationSummary}</span>
+                            </p>
+                          )}
+                          {fittingSummary && (
+                            <p
+                              className="text-sm mt-1 px-3 py-1 rounded-full font-semibold inline-block shadow-sm border border-[#67C6D8] bg-[#ECFBFF] text-[#0E7490] animate-pulse"
+                              style={{ boxShadow: '0 0 0 2px #67C6D833' }}
+                              title="Your fitting appointment is scheduled!"
+                            >
+                              <span className="mr-1">Fitting Appointment:</span>
+                              <span className="font-bold">{fittingSummary}</span>
                             </p>
                           )}
                         </div>
@@ -683,9 +867,33 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                               event.stopPropagation();
                               openScheduleConsultationModal(order);
                             }}
-                            className="self-start shrink-0 rounded-full border border-[#E8DCC8] px-4 py-2 text-sm font-medium text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-black"
+                            className={
+                              `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
+                              (consultationSummary
+                                ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
+                                : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
+                            }
+                            style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
                           >
                             {consultationSummary ? 'Reschedule Consultation' : 'Set Consultation'}
+                          </button>
+                        )}
+                        {canScheduleFitting && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openScheduleFittingModal(order);
+                            }}
+                            className={
+                              `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
+                              (fittingSummary
+                                ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
+                                : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
+                            }
+                            style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
+                          >
+                            {fittingSummary ? 'Reschedule Fitting Appointment' : 'Schedule Fitting Appointment'}
                           </button>
                         )}
                       </div>
@@ -862,6 +1070,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                       <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedOrderDetails.budget)}</p>
                       <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedOrderDetails.referenceId || selectedOrderDetails.id || selectedOrderDetails._id || 'N/A'}</p>
                       <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {getConsultationDisplay(selectedOrderDetails)}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Fitting Appointment:</span> {getFittingDisplay(selectedOrderDetails)}</p>
                     </div>
                   </div>
 
@@ -959,7 +1168,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
               </div>
 
               <div className="space-y-4">
-                {Boolean(selectedScheduleOrder.consultationDate || selectedScheduleOrder.consultationTime) && (
+                {hadExistingConsultationSchedule && (
                   <div>
                     <label className="block text-sm text-[#6B5D4F] mb-2">Reason for Rescheduling *</label>
                     <textarea
@@ -1030,10 +1239,10 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
 
         {isConfirmScheduleConsultationOpen && selectedScheduleOrder && (
           <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Confirm consultation schedule"
+            aria-label="Confirm save consultation schedule"
             onClick={() => {
               if (isSavingConsultationSchedule) return;
               setIsConfirmScheduleConsultationOpen(false);
@@ -1047,9 +1256,9 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
             >
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
-                  <h3 className="text-2xl font-light text-black">Confirm Schedule</h3>
+                  <h3 className="text-2xl font-light text-black">Confirm Save Schedule</h3>
                   <p className="text-sm text-[#6B5D4F] mt-1">
-                    Please confirm your design consultation schedule.
+                    Review the consultation details before saving this schedule.
                   </p>
                 </div>
                 <button
@@ -1057,7 +1266,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                   onClick={() => setIsConfirmScheduleConsultationOpen(false)}
                   className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors disabled:opacity-50"
                   disabled={isSavingConsultationSchedule}
-                  aria-label="Close consultation schedule confirmation"
+                  aria-label="Close save schedule confirmation"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1082,7 +1291,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                     {consultationTimeOptions.find((option) => option.value === consultationTime)?.label || consultationTime}
                   </span>
                 </div>
-                {Boolean(selectedScheduleOrder.consultationDate || selectedScheduleOrder.consultationTime) && consultationRescheduleReason.trim() && (
+                {hadExistingConsultationSchedule && consultationRescheduleReason.trim() && (
                   <div className="flex justify-between gap-4">
                     <span className="text-[#6B5D4F]">Reason</span>
                     <span className="text-right font-medium text-black max-w-[60%] whitespace-pre-wrap">{consultationRescheduleReason.trim()}</span>
@@ -1097,7 +1306,7 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                   className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
                   disabled={isSavingConsultationSchedule}
                 >
-                  Back
+                  Cancel
                 </button>
                 <button
                   type="button"
@@ -1105,7 +1314,199 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
                   className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50"
                   disabled={isSavingConsultationSchedule}
                 >
-                  {isSavingConsultationSchedule ? 'Saving...' : 'Confirm Save'}
+                  {isSavingConsultationSchedule ? 'Saving...' : 'Save Schedule'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isScheduleFittingModalOpen && selectedFittingOrder && !isConfirmScheduleFittingOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Schedule fitting appointment"
+            onClick={closeScheduleFittingModal}
+          >
+            <div
+              ref={modalRef}
+              tabIndex={-1}
+              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <div>
+                  <h3 className="text-2xl font-light text-black">Schedule Fitting Appointment</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Choose when you will visit {selectedFittingOrder.branch || 'the store'} for your fitting appointment.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeScheduleFittingModal}
+                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                  aria-label="Close fitting schedule modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-2 text-sm mb-6">
+                <p className="font-medium text-black">{selectedFittingOrder.orderType}</p>
+                <p className="text-[#6B5D4F]">Reference ID: {selectedFittingOrder.referenceId || selectedFittingOrder._id || selectedFittingOrder.id}</p>
+                <p className="text-[#6B5D4F]">Branch: {selectedFittingOrder.branch || 'Taguig Main'}</p>
+              </div>
+
+              <div className="space-y-4">
+                {hadExistingFittingSchedule && (
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Reason for Rescheduling *</label>
+                    <textarea
+                      value={fittingRescheduleReason}
+                      onChange={(e) => setFittingRescheduleReason(e.target.value)}
+                      rows={3}
+                      placeholder="Tell us why you need to reschedule your fitting"
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                      disabled={isSavingFittingSchedule}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Fitting Date</label>
+                  <input
+                    type="date"
+                    value={fittingDate}
+                    min={getTomorrowDateValue()}
+                    onChange={(e) => setFittingDate(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    disabled={isSavingFittingSchedule}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Fitting Time</label>
+                  <select
+                    value={fittingTime}
+                    onChange={(e) => setFittingTime(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                    disabled={isSavingFittingSchedule}
+                  >
+                    {consultationTimeOptions.map((timeOption) => (
+                      <option key={timeOption.value} value={timeOption.value}>
+                        {timeOption.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {fittingScheduleError && (
+                <p className="mt-4 text-sm text-red-600">{fittingScheduleError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={closeScheduleFittingModal}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={requestSaveFittingSchedule}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                >
+                  {isSavingFittingSchedule ? 'Saving...' : 'Save Schedule'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isConfirmScheduleFittingOpen && selectedFittingOrder && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm save fitting schedule"
+            onClick={() => {
+              if (isSavingFittingSchedule) return;
+              setIsConfirmScheduleFittingOpen(false);
+            }}
+          >
+            <div
+              ref={modalRef}
+              tabIndex={-1}
+              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h3 className="text-2xl font-light text-black">Confirm Save Schedule</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Review the fitting details before saving this schedule.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmScheduleFittingOpen(false)}
+                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                  aria-label="Close save fitting schedule confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm mb-6">
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Order</span>
+                  <span className="text-right font-medium text-black">{selectedFittingOrder.orderType}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Branch</span>
+                  <span className="text-right font-medium text-black">{selectedFittingOrder.branch || 'Taguig Main'}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Date</span>
+                  <span className="text-right font-medium text-black">{fittingDate}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Time</span>
+                  <span className="text-right font-medium text-black">
+                    {consultationTimeOptions.find((option) => option.value === fittingTime)?.label || fittingTime}
+                  </span>
+                </div>
+                {hadExistingFittingSchedule && fittingRescheduleReason.trim() && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[#6B5D4F]">Reason</span>
+                    <span className="text-right font-medium text-black max-w-[60%] whitespace-pre-wrap">{fittingRescheduleReason.trim()}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsConfirmScheduleFittingOpen(false)}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveFittingSchedule}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50"
+                  disabled={isSavingFittingSchedule}
+                >
+                  {isSavingFittingSchedule ? 'Saving...' : 'Save Schedule'}
                 </button>
               </div>
             </div>

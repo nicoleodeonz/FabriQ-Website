@@ -71,6 +71,86 @@ function mapCustomOrder(doc) {
   };
 }
 
+function validateScheduledDateTime(scheduleDate, scheduleTime, label) {
+  const allowedTimes = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduleDate)) {
+    return `A valid ${label.toLowerCase()} date is required.`;
+  }
+
+  if (!allowedTimes.includes(scheduleTime)) {
+    return `${label} time must be between 8:00 AM and 5:00 PM.`;
+  }
+
+  const today = new Date();
+  const todayDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const tomorrowDate = new Date(todayDate);
+  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
+  const requestedDate = new Date(`${scheduleDate}T00:00:00.000Z`);
+  if (Number.isNaN(requestedDate.getTime()) || requestedDate < tomorrowDate) {
+    return `${label} date must be at least one day after today.`;
+  }
+
+  return null;
+}
+
+async function updateCustomOrderVisitSchedule(req, res, config) {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication required.' });
+    }
+
+    const { id } = req.params;
+    const scheduleDate = String(req.body?.[config.dateField] || '').trim();
+    const scheduleTime = String(req.body?.[config.timeField] || '').trim();
+    const scheduleReason = String(req.body?.[config.reasonField] || '').trim();
+
+    const validationMessage = validateScheduledDateTime(scheduleDate, scheduleTime, config.label);
+    if (validationMessage) {
+      return res.status(400).json({ message: validationMessage });
+    }
+
+    const order = await CustomOrder.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Custom order not found.' });
+    }
+
+    if (String(order.customerId || '') !== userId) {
+      return res.status(403).json({ message: 'You can only update your own custom orders.' });
+    }
+
+    if (String(order.status || '').trim().toLowerCase() !== config.requiredStatus) {
+      return res.status(400).json({ message: `${config.label} schedule can only be set during ${config.statusLabel}.` });
+    }
+
+    const existingDate = String(order[config.dateField] || '').trim();
+    const existingTime = String(order[config.timeField] || '').trim();
+    const hadExistingSchedule = Boolean(existingDate || existingTime);
+    const isScheduleChanging = existingDate !== scheduleDate || existingTime !== scheduleTime;
+
+    if (hadExistingSchedule && !isScheduleChanging) {
+      return res.status(400).json({ message: `Please choose a different date or time for your ${config.label.toLowerCase()}.` });
+    }
+
+    if (hadExistingSchedule && isScheduleChanging && !scheduleReason) {
+      return res.status(400).json({ message: `A reason is required when rescheduling your ${config.label.toLowerCase()}.` });
+    }
+
+    order[config.dateField] = scheduleDate;
+    order[config.timeField] = scheduleTime;
+    order[config.reasonField] = hadExistingSchedule && isScheduleChanging
+      ? scheduleReason
+      : order[config.reasonField] || null;
+    order.updatedAt = new Date();
+    await order.save();
+
+    return res.json({ order: mapCustomOrder(order) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || `Failed to save ${config.label.toLowerCase()} schedule.` });
+  }
+}
+
 export const getAllCustomOrders = async (req, res) => {
   try {
     if (!req.user || !isElevatedRole(String(req.user.role || '').toLowerCase())) {
@@ -150,69 +230,25 @@ export const getMyCustomOrders = async (req, res) => {
 };
 
 export const updateCustomOrderConsultationSchedule = async (req, res) => {
-  try {
-    const userId = String(req.user?.id || '').trim();
-    if (!userId) {
-      return res.status(401).json({ message: 'Authentication required.' });
-    }
+  return updateCustomOrderVisitSchedule(req, res, {
+    label: 'Consultation',
+    statusLabel: 'design approval',
+    requiredStatus: 'design-approval',
+    dateField: 'consultationDate',
+    timeField: 'consultationTime',
+    reasonField: 'consultationRescheduleReason',
+  });
+};
 
-    const { id } = req.params;
-    const consultationDate = String(req.body?.consultationDate || '').trim();
-    const consultationTime = String(req.body?.consultationTime || '').trim();
-    const consultationRescheduleReason = String(req.body?.consultationRescheduleReason || '').trim();
-    const allowedTimes = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
-
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(consultationDate)) {
-      return res.status(400).json({ message: 'A valid consultation date is required.' });
-    }
-
-    if (!allowedTimes.includes(consultationTime)) {
-      return res.status(400).json({ message: 'Consultation time must be between 8:00 AM and 5:00 PM.' });
-    }
-
-    const today = new Date();
-    const todayDate = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-    const tomorrowDate = new Date(todayDate);
-    tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
-    const requestedDate = new Date(`${consultationDate}T00:00:00.000Z`);
-    if (Number.isNaN(requestedDate.getTime()) || requestedDate < tomorrowDate) {
-      return res.status(400).json({ message: 'Consultation date must be at least one day after today.' });
-    }
-
-    const order = await CustomOrder.findById(id);
-    if (!order) {
-      return res.status(404).json({ message: 'Custom order not found.' });
-    }
-
-    if (String(order.customerId || '') !== userId) {
-      return res.status(403).json({ message: 'You can only update your own custom orders.' });
-    }
-
-    if (String(order.status || '').trim().toLowerCase() !== 'design-approval') {
-      return res.status(400).json({ message: 'Consultation schedule can only be set during design approval.' });
-    }
-
-    const hadExistingSchedule = Boolean(String(order.consultationDate || '').trim() || String(order.consultationTime || '').trim());
-    const isScheduleChanging =
-      String(order.consultationDate || '').trim() !== consultationDate ||
-      String(order.consultationTime || '').trim() !== consultationTime;
-
-    if (hadExistingSchedule && isScheduleChanging && !consultationRescheduleReason) {
-      return res.status(400).json({ message: 'A reason is required when rescheduling your consultation.' });
-    }
-
-    order.consultationDate = consultationDate;
-    order.consultationTime = consultationTime;
-    order.consultationRescheduleReason = hadExistingSchedule && isScheduleChanging
-      ? consultationRescheduleReason
-      : order.consultationRescheduleReason || null;
-    order.updatedAt = new Date();
-    await order.save();
-
-    return res.json({ order: mapCustomOrder(order) });
-  } catch (error) {
-    return res.status(500).json({ message: error.message || 'Failed to save consultation schedule.' });
-  }
+export const updateCustomOrderFittingSchedule = async (req, res) => {
+  return updateCustomOrderVisitSchedule(req, res, {
+    label: 'Fitting',
+    statusLabel: 'fitting appointment',
+    requiredStatus: 'fitting',
+    dateField: 'fittingDate',
+    timeField: 'fittingTime',
+    reasonField: 'fittingRescheduleReason',
+  });
 };
 
 export const updateCustomOrderStatus = async (req, res) => {
@@ -249,6 +285,19 @@ export const updateCustomOrderStatus = async (req, res) => {
 
       if (consultationDate > todayDate) {
         return res.status(400).json({ message: 'This custom order can only move to In Progress on or after the scheduled consultation date.' });
+      }
+    }
+
+    if (previousStatus === 'fitting' && nextStatus === 'completed') {
+      const fittingDate = String(order.fittingDate || '').trim();
+      const todayDate = new Date().toISOString().slice(0, 10);
+
+      if (!fittingDate) {
+        return res.status(400).json({ message: 'Customer fitting schedule is required before marking this custom order as completed.' });
+      }
+
+      if (fittingDate > todayDate) {
+        return res.status(400).json({ message: 'This custom order can only be marked as completed on or after the scheduled fitting date.' });
       }
     }
 

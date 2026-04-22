@@ -231,6 +231,32 @@ export const customerAPI = {
     return response.json();
   },
 
+  updateCustomOrderFittingSchedule: async (
+    token: string,
+    id: string,
+    data: { fittingDate: string; fittingTime: string; fittingRescheduleReason?: string }
+  ) => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders/${id}/fitting-schedule`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to save fitting schedule';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    return response.json();
+  },
+
   // Get all custom orders for the authenticated customer
   getMyCustomOrders: async (token: string) => {
     const response = await fetch(`${API_BASE_URL}/custom-orders/my-orders`, {

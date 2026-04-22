@@ -27,6 +27,21 @@ const CustomOrderSchema = new mongoose.Schema({
     default: null,
     trim: true,
   },
+  fittingDate: {
+    type: String,
+    default: null,
+    trim: true,
+  },
+  fittingTime: {
+    type: String,
+    default: null,
+    trim: true,
+  },
+  fittingRescheduleReason: {
+    type: String,
+    default: null,
+    trim: true,
+  },
   rejectionReason: {
     type: String,
     default: null,

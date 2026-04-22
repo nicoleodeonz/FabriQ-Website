@@ -92,7 +92,7 @@ const INVENTORY_PREVIEW_DELAY_MS = 2000;
 const INVENTORY_PAGE_SIZE = 9;
 const APPOINTMENT_PAGE_SIZE = 3;
 const RENTAL_PAGE_SIZE = 5;
-const CUSTOM_ORDER_PAGE_SIZE = 3;
+const CUSTOM_ORDER_PAGE_SIZE = 4;
 const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
@@ -268,6 +268,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
+  const [isDoneCustomOrderConfirmOpen, setIsDoneCustomOrderConfirmOpen] = useState(false);
   const [isRejectCustomOrderConfirmOpen, setIsRejectCustomOrderConfirmOpen] = useState(false);
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
@@ -1809,33 +1810,42 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       return false;
     }
 
-    if (order.status !== 'design-approval') {
+    if (order.status !== 'design-approval' && order.status !== 'fitting') {
       return true;
     }
 
-    const consultationDate = String(order.consultationDate || '').trim();
-    if (!consultationDate) {
+    const scheduledDate = order.status === 'design-approval'
+      ? String(order.consultationDate || '').trim()
+      : String(order.fittingDate || '').trim();
+    if (!scheduledDate) {
       return false;
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    return consultationDate <= today;
+    return scheduledDate <= today;
   };
 
   const getCustomOrderApproveDisabledReason = (order: AdminCustomOrderRecord | null) => {
-    if (!order || order.status !== 'design-approval') {
+    if (!order || (order.status !== 'design-approval' && order.status !== 'fitting')) {
       return '';
     }
 
-    const consultationDate = String(order.consultationDate || '').trim();
-    const consultationTime = String(order.consultationTime || '').trim();
-    if (!consultationDate) {
-      return 'Waiting for the customer to schedule a design consultation.';
+    const isDesignApproval = order.status === 'design-approval';
+    const scheduledDate = isDesignApproval
+      ? String(order.consultationDate || '').trim()
+      : String(order.fittingDate || '').trim();
+    const scheduledTime = isDesignApproval
+      ? String(order.consultationTime || '').trim()
+      : String(order.fittingTime || '').trim();
+    const scheduleLabel = isDesignApproval ? 'design consultation' : 'fitting appointment';
+
+    if (!scheduledDate) {
+      return `Waiting for the customer to schedule a ${scheduleLabel}.`;
     }
 
     const today = new Date().toISOString().slice(0, 10);
-    if (consultationDate > today) {
-      return `The design consultation is scheduled on ${consultationDate}${consultationTime ? ` at ${formatConsultationTimeLabel(consultationTime)}` : ''}.`;
+    if (scheduledDate > today) {
+      return `The ${scheduleLabel} is scheduled on ${scheduledDate}${scheduledTime ? ` at ${formatConsultationTimeLabel(scheduledTime)}` : ''}.`;
     }
 
     return '';
@@ -1852,7 +1862,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       return '';
     }
 
-    return `The design consultation is scheduled on ${consultationDate}${consultationTime ? ` at ${formatConsultationTimeLabel(consultationTime)}` : ''}.`;
+   
+  };
+
+  const getCustomOrderFittingScheduleMessage = (order: AdminCustomOrderRecord | null) => {
+    if (!order || order.status !== 'fitting') {
+      return '';
+    }
+
+    const fittingDate = String(order.fittingDate || '').trim();
+    const fittingTime = String(order.fittingTime || '').trim();
+    if (!fittingDate) {
+      return '';
+    }
+
   };
 
   const getCustomOrderRejectionReason = (order: AdminCustomOrderRecord | null) => {
@@ -4794,6 +4817,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {selectedCustomOrder.consultationDate
                         ? `${selectedCustomOrder.consultationDate}${selectedCustomOrder.consultationTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.consultationTime)}` : ''}`
                         : 'Not scheduled yet'}</p>
+                      <p><span className="font-medium text-[#3D2B1F]">Fitting Appointment:</span> {selectedCustomOrder.fittingDate
+                        ? `${selectedCustomOrder.fittingDate}${selectedCustomOrder.fittingTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.fittingTime)}` : ''}`
+                        : 'Not scheduled yet'}</p>
                     </div>
                   </div>
 
@@ -4857,6 +4883,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </div>
               )}
 
+              {customOrderManagementView !== 'archive' && getCustomOrderFittingScheduleMessage(selectedCustomOrder) && (
+                <div className="mt-6 px-8">
+                  <p className="text-sm text-[#6B5D4F]">
+                    {getCustomOrderFittingScheduleMessage(selectedCustomOrder)}
+                  </p>
+                </div>
+              )}
+
               {customOrderManagementView !== 'archive' && (
                 <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
                   {(() => {
@@ -4893,14 +4927,81 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           onClick={() => {
                             if (!orderId || !nextStatus || !canAdvance) return;
                             setAdminCustomOrdersError(null);
-                            setIsApproveCustomOrderConfirmOpen(true);
+                            setIsDoneCustomOrderConfirmOpen(true);
                           }}
                           disabled={isUpdating || !nextStatus || !canAdvance}
                           className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                           title={approveDisabledReason || undefined}
                         >
-                          {isUpdating && !!nextStatus ? 'Approving...' : 'Approve'}
+                          {isUpdating && !!nextStatus
+                            ? 'Approving...'
+                            : selectedCustomOrder?.status === 'inquiry'
+                              ? 'Approve'
+                              : 'Done'}
                         </button>
+                              {isDoneCustomOrderConfirmOpen && selectedCustomOrder && (() => {
+                                const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+                                if (!nextStatus || !canAdvanceCustomOrderStatus(selectedCustomOrder)) return null;
+
+                                const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+                                const isUpdating = customOrderStatusUpdatingId === orderId;
+
+                                return (
+                                  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                                    <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+                                      <div className="flex justify-between items-start mb-4">
+                                        <h3 className="text-2xl font-light">Confirm Mark as Done</h3>
+                                        <button
+                                          type="button"
+                                          disabled={isUpdating}
+                                          onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
+                                          className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                                          aria-label="Close done confirmation"
+                                        >
+                                          <X className="w-5 h-5" />
+                                        </button>
+                                      </div>
+
+                                      <p className="text-sm text-[#6B5D4F] mb-4">
+                                        This will move the custom order to {getCustomOrderStatusLabel(nextStatus)}.
+                                      </p>
+
+                                      <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                                        <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
+                                        <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                                        <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
+                                        <p className="text-sm text-[#6B5D4F]">Next Status: {getCustomOrderStatusLabel(nextStatus)}</p>
+                                      </div>
+
+                                      {adminCustomOrdersError && (
+                                        <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
+                                      )}
+
+                                      <div className="mt-6 flex gap-3">
+                                        <button
+                                          type="button"
+                                          disabled={isUpdating}
+                                          onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
+                                          className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={isUpdating}
+                                          onClick={async () => {
+                                            setIsDoneCustomOrderConfirmOpen(false);
+                                            await handleConfirmApproveCustomOrder();
+                                          }}
+                                          className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                                        >
+                                          {isUpdating ? 'Processing...' : 'Yes, Approve'}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                       </>
                     );
                   })()}

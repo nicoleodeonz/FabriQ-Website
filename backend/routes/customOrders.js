@@ -1,5 +1,5 @@
 import express from 'express';
-import { createCustomOrder, getMyCustomOrders, getAllCustomOrders, updateCustomOrderConsultationSchedule, updateCustomOrderStatus } from '../controllers/customOrderController.js';
+import { createCustomOrder, getMyCustomOrders, getAllCustomOrders, updateCustomOrderConsultationSchedule, updateCustomOrderFittingSchedule, updateCustomOrderStatus } from '../controllers/customOrderController.js';
 import { upload } from '../config/upload.js';
 import { uploadDesignImage } from '../controllers/customOrderController.js';
 import { authenticate } from '../middleware/authMiddleware.js';
@@ -20,6 +20,9 @@ router.get('/my-orders', authenticate, getMyCustomOrders);
 
 // Customer: Set or reschedule design consultation visit
 router.patch('/:id/consultation-schedule', authenticate, updateCustomOrderConsultationSchedule);
+
+// Customer: Set or reschedule fitting appointment visit
+router.patch('/:id/fitting-schedule', authenticate, updateCustomOrderFittingSchedule);
 
 // Admin: Update custom order status
 router.patch('/:id/status', authenticate, updateCustomOrderStatus);

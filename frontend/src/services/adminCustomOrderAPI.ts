@@ -19,6 +19,10 @@ export interface AdminCustomOrderRecord {
   branch?: string;
   consultationDate?: string | null;
   consultationTime?: string | null;
+  consultationRescheduleReason?: string | null;
+  fittingDate?: string | null;
+  fittingTime?: string | null;
+  fittingRescheduleReason?: string | null;
   rejectionReason?: string | null;
   status: AdminCustomOrderStatus;
   designImageUrl?: string;
