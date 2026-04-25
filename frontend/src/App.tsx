@@ -80,6 +80,41 @@ type CurrentUser = {
   phoneVerifiedAt?: string | null;
 };
 
+function readStoredAuth() {
+  try {
+    const token = localStorage.getItem('authToken')?.trim() || null;
+    const rawUser = localStorage.getItem('authUser');
+
+    if (!token || !rawUser) {
+      return { token: null, user: null as CurrentUser | null };
+    }
+
+    const parsedUser = JSON.parse(rawUser) as Partial<CurrentUser>;
+    if (!parsedUser || typeof parsedUser !== 'object') {
+      return { token: null, user: null as CurrentUser | null };
+    }
+
+    const user: CurrentUser = {
+      id: String(parsedUser.id || '').trim(),
+      firstName: String(parsedUser.firstName || '').trim(),
+      lastName: String(parsedUser.lastName || '').trim(),
+      email: String(parsedUser.email || '').trim(),
+      role: String(parsedUser.role || '').trim(),
+      phoneNumber: parsedUser.phoneNumber ? String(parsedUser.phoneNumber).trim() : undefined,
+      phoneVerified: Boolean(parsedUser.phoneVerified),
+      phoneVerifiedAt: parsedUser.phoneVerifiedAt ? String(parsedUser.phoneVerifiedAt) : null,
+    };
+
+    if (!user.id || !user.email || !user.role) {
+      return { token: null, user: null as CurrentUser | null };
+    }
+
+    return { token, user };
+  } catch {
+    return { token: null, user: null as CurrentUser | null };
+  }
+}
+
 const hasAdminAccess = (role?: string | null) => role === 'admin' || role === 'staff';
 
 const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventoryItems: Array<{
@@ -137,13 +172,14 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
 };
 
 export default function App() {
+  const storedAuth = readStoredAuth();
   const [currentView, setCurrentView] = useState<View>(() => parseHashRoute(window.location.hash).view);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(() => hasAdminAccess(storedAuth.user?.role));
   const [showLanding, setShowLanding] = useState(true);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => Boolean(storedAuth.token && storedAuth.user));
+  const [authToken, setAuthToken] = useState<string | null>(storedAuth.token);
   const [selectedGownId, setSelectedGownId] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedGownId);
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(storedAuth.user);
   const [showAuth, setShowAuth] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -201,6 +237,11 @@ export default function App() {
     document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
   };
 
+  const persistStoredAuth = (user: CurrentUser, token: string) => {
+    localStorage.setItem('authToken', token);
+    localStorage.setItem('authUser', JSON.stringify(user));
+  };
+
   const clearAuthState = () => {
     setIsLoggedIn(false);
     setAuthToken(null);
@@ -215,10 +256,47 @@ export default function App() {
   }, [favoriteGowns]);
 
   useEffect(() => {
-    clearStoredAuth();
-
     if (sessionStorage.getItem('hasSeenLanding')) setShowLanding(false);
   }, []);
+
+  useEffect(() => {
+    if (!authToken || !currentUser) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const restoreSession = async () => {
+      try {
+        const response = await authAPI.getMe(authToken);
+        if (isCancelled) {
+          return;
+        }
+
+        const nextUser: CurrentUser = {
+          ...currentUser,
+          ...response.user,
+        };
+
+        setCurrentUser(nextUser);
+        setIsLoggedIn(true);
+        setIsAdmin(hasAdminAccess(nextUser.role));
+        persistStoredAuth(nextUser, authToken);
+      } catch {
+        if (isCancelled) {
+          return;
+        }
+
+        clearAuthState();
+      }
+    };
+
+    void restoreSession();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [authToken]);
 
   useEffect(() => {
     const applyHashRoute = () => {
@@ -311,6 +389,7 @@ export default function App() {
   };
 
   const handleAuthSuccess = (user: CurrentUser, token: string) => {
+    persistStoredAuth(user, token);
     setAuthToken(token);
     setCurrentUser(user);
     setIsLoggedIn(true);
