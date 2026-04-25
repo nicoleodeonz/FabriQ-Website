@@ -214,13 +214,14 @@ export async function getUsers(req, res) {
     }
 
     const [admins, staffs, customers] = await Promise.all([
-      AdminAccount.find({}, { email: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
-      StaffAccount.find({}, { email: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
+      AdminAccount.find({}, { firstName: 1, lastName: 1, email: 1, preferredBranch: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
+      StaffAccount.find({}, { firstName: 1, lastName: 1, email: 1, preferredBranch: 1, status: 1, createdAt: 1, updatedAt: 1 }).lean(),
       CustomerAccount.find({}, {
         firstName: 1,
         lastName: 1,
         email: 1,
         phoneNumber: 1,
+        preferredBranch: 1,
         status: 1,
         createdAt: 1,
         updatedAt: 1
@@ -233,6 +234,7 @@ export async function getUsers(req, res) {
       lastName: String(admin.lastName || '').trim() || 'Admin',
       email: admin.email,
       phoneNumber: '',
+      preferredBranch: String(admin.preferredBranch || '').trim(),
       role: 'Admin',
       status: admin.status || 'active',
       createdAt: admin.createdAt,
@@ -245,6 +247,7 @@ export async function getUsers(req, res) {
       lastName: String(staff.lastName || '').trim() || 'Staff',
       email: staff.email,
       phoneNumber: '',
+      preferredBranch: String(staff.preferredBranch || '').trim(),
       role: 'Staff',
       status: staff.status || 'active',
       createdAt: staff.createdAt,
@@ -257,6 +260,7 @@ export async function getUsers(req, res) {
       lastName: customer.lastName,
       email: customer.email,
       phoneNumber: customer.phoneNumber,
+      preferredBranch: String(customer.preferredBranch || '').trim(),
       role: 'Customer',
       status: customer.status || 'active',
       createdAt: customer.createdAt,

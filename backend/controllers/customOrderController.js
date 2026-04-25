@@ -331,3 +331,52 @@ export const updateCustomOrderStatus = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+export const archiveCustomOrder = async (req, res) => {
+  try {
+    if (!req.user || !isElevatedRole(String(req.user.role || '').toLowerCase())) {
+      return res.status(403).json({ message: 'Forbidden: Admin or staff only.' });
+    }
+
+    const { id } = req.params;
+    const order = await CustomOrder.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Custom order not found.' });
+    }
+
+    const normalizedStatus = String(order.status || '').trim().toLowerCase();
+    if (normalizedStatus !== 'completed') {
+      return res.status(400).json({ message: 'Only completed custom orders can be archived.' });
+    }
+
+    if (order.isArchived) {
+      return res.status(400).json({ message: 'Custom order is already archived.' });
+    }
+
+    order.isArchived = true;
+    order.archivedAt = new Date();
+    order.updatedAt = new Date();
+    await order.save();
+
+    await logAdminAction(req, {
+      action: 'custom_order_archived',
+      targetUserId: String(order.customerId || order.email || ''),
+      targetRole: 'Customer',
+      details: {
+        customOrderId: String(order._id),
+        customOrderReferenceId: order.referenceId || buildFallbackCustomOrderReferenceId(order._id),
+        customerName: order.customerName || '',
+        email: order.email || '',
+        orderType: order.orderType || '',
+        branch: order.branch || '',
+        eventDate: order.eventDate || '',
+        status: normalizedStatus,
+        archivedAt: order.archivedAt,
+      },
+    });
+
+    return res.json({ order: mapCustomOrder(order) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Failed to archive custom order.' });
+  }
+};

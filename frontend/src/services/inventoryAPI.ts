@@ -52,6 +52,17 @@ export interface BranchPerformanceSummary {
 
 export type InventoryItemInput = Omit<InventoryItem, 'id' | 'sku' | 'createdAt' | 'updatedAt'>;
 
+async function parseJsonSafe(response: Response): Promise<any | null> {
+  const raw = await response.text();
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(
   url: string,
   token: string,
@@ -65,9 +76,9 @@ async function request<T>(
       ...(options.headers ?? {})
     }
   });
-  const data = await res.json();
+  const data = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(data.message || `Request failed: ${res.status}`);
+    throw new Error(data?.message || `Request failed: ${res.status}`);
   }
   return data as T;
 }
@@ -80,9 +91,9 @@ async function requestPublic<T>(url: string, options: RequestInit = {}): Promise
       ...(options.headers ?? {})
     }
   });
-  const data = await res.json();
+  const data = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(data.message || `Request failed: ${res.status}`);
+    throw new Error(data?.message || `Request failed: ${res.status}`);
   }
   return data as T;
 }
@@ -161,9 +172,9 @@ export async function uploadImage(token: string, file: File): Promise<string> {
     headers: { Authorization: `Bearer ${token}` },
     body: formData
   });
-  const data = await res.json();
+  const data = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(data.message || 'Image upload failed');
+    throw new Error(data?.message || 'Image upload failed');
   }
-  return data.url as string;
+  return data?.url as string;
 }

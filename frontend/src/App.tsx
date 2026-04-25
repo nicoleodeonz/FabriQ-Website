@@ -22,6 +22,53 @@ export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointme
 
 export type FavoriteGown = GownDetails;
 
+const VIEW_SEGMENTS: Record<View, string> = {
+  home: '',
+  catalog: 'catalog',
+  rentals: 'rentals',
+  'custom-orders': 'custom-orders',
+  appointments: 'appointments',
+  profile: 'profile',
+  admin: 'admin',
+};
+
+const SEGMENT_TO_VIEW = Object.entries(VIEW_SEGMENTS).reduce<Record<string, View>>((accumulator, [view, segment]) => {
+  accumulator[segment] = view as View;
+  return accumulator;
+}, {});
+
+const PROTECTED_VIEWS = new Set<View>(['rentals', 'custom-orders', 'appointments', 'profile', 'admin']);
+
+function parseHashRoute(hash: string) {
+  const normalizedHash = hash.replace(/^#\/?/, '');
+  const [pathPart = '', searchPart = ''] = normalizedHash.split('?');
+  const normalizedSegment = pathPart.replace(/^\/+|\/+$/g, '');
+  const view = SEGMENT_TO_VIEW[normalizedSegment] ?? 'home';
+  const searchParams = new URLSearchParams(searchPart);
+  const selectedGownId = (view === 'rentals' || view === 'appointments')
+    ? searchParams.get('gown')?.trim() || null
+    : null;
+  const adminTab = view === 'admin' ? searchParams.get('tab')?.trim() || null : null;
+
+  return { view, selectedGownId, adminTab };
+}
+
+function buildHashRoute(view: View, options?: { selectedGownId?: string | null; adminTab?: string | null }) {
+  const segment = VIEW_SEGMENTS[view];
+  const searchParams = new URLSearchParams();
+
+  if ((view === 'rentals' || view === 'appointments') && options?.selectedGownId) {
+    searchParams.set('gown', options.selectedGownId);
+  }
+
+  if (view === 'admin' && options?.adminTab) {
+    searchParams.set('tab', options.adminTab);
+  }
+
+  const queryString = searchParams.toString();
+  return `#/${segment}${queryString ? `?${queryString}` : ''}`;
+}
+
 type CurrentUser = {
   id: string;
   firstName: string;
@@ -90,18 +137,56 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
 };
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('home');
+  const [currentView, setCurrentView] = useState<View>(() => parseHashRoute(window.location.hash).view);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showLanding, setShowLanding] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
-  const [selectedGownId, setSelectedGownId] = useState<string | null>(null);
+  const [selectedGownId, setSelectedGownId] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedGownId);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
   const favoriteGownsRef = useRef<FavoriteGown[]>([]);
+
+  const syncHashRoute = (
+    view: View,
+    options?: { history?: 'push' | 'replace'; selectedGownId?: string | null }
+  ) => {
+    const { adminTab } = parseHashRoute(window.location.hash);
+    const nextHash = buildHashRoute(view, {
+      selectedGownId: options?.selectedGownId,
+      adminTab: view === 'admin' ? adminTab : null,
+    });
+
+    if (window.location.hash === nextHash) {
+      return;
+    }
+
+    if (options?.history === 'replace') {
+      window.history.replaceState(null, '', nextHash);
+      return;
+    }
+
+    window.history.pushState(null, '', nextHash);
+  };
+
+  const setAppView = (
+    view: View,
+    options?: { history?: 'push' | 'replace'; selectedGownId?: string | null }
+  ) => {
+    const nextSelectedGownId = view === 'rentals' || view === 'appointments'
+      ? (options?.selectedGownId === undefined ? selectedGownId : options.selectedGownId)
+      : null;
+
+    setSelectedGownId(nextSelectedGownId);
+    setCurrentView(view);
+    syncHashRoute(view, {
+      history: options?.history,
+      selectedGownId: nextSelectedGownId,
+    });
+  };
 
   const updateFavoriteGownsState = (nextFavorites: FavoriteGown[]) => {
     favoriteGownsRef.current = nextFavorites;
@@ -136,6 +221,36 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const applyHashRoute = () => {
+      const route = parseHashRoute(window.location.hash);
+      const hasAccess = route.view === 'admin'
+        ? isLoggedIn && isAdmin
+        : !PROTECTED_VIEWS.has(route.view) || isLoggedIn;
+
+      if (!hasAccess) {
+        setSelectedGownId(null);
+        setCurrentView('home');
+
+        const fallbackHash = buildHashRoute('home');
+        if (window.location.hash !== fallbackHash) {
+          window.history.replaceState(null, '', fallbackHash);
+        }
+        return;
+      }
+
+      setSelectedGownId(route.selectedGownId);
+      setCurrentView(route.view);
+    };
+
+    applyHashRoute();
+    window.addEventListener('hashchange', applyHashRoute);
+
+    return () => {
+      window.removeEventListener('hashchange', applyHashRoute);
+    };
+  }, [isAdmin, isLoggedIn]);
+
+  useEffect(() => {
     const frameId = window.requestAnimationFrame(() => {
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     });
@@ -162,19 +277,37 @@ export default function App() {
       return;
     }
 
-    setCurrentView(view);
+    setAppView(view);
   };
 
   const navigateProtectedFromHeader = (view: View) => {
     if (view === 'rentals' || view === 'appointments') {
-      setSelectedGownId(null);
+      navigateProtectedWithOptions(view, { selectedGownId: null });
+      return;
     }
     navigateProtected(view);
   };
 
+  const navigateProtectedWithOptions = (
+    view: View,
+    options?: { selectedGownId?: string | null }
+  ) => {
+    if (view === 'admin' && !isAdmin) {
+      toast.error('Admin or staff access required.');
+      return;
+    }
+
+    if (!isLoggedIn) {
+      setPendingView(view);
+      setShowAuth(true);
+      return;
+    }
+
+    setAppView(view, { selectedGownId: options?.selectedGownId });
+  };
+
   const navigateWithGown = (view: 'rentals' | 'appointments', gownId: string) => {
-    setSelectedGownId(gownId);
-    navigateProtected(view);
+    navigateProtectedWithOptions(view, { selectedGownId: gownId });
   };
 
   const handleAuthSuccess = (user: CurrentUser, token: string) => {
@@ -184,8 +317,7 @@ export default function App() {
     setIsAdmin(hasAdminAccess(user.role));
     setShowAuth(false);
     setPendingView(null);
-    setSelectedGownId(null);
-    setCurrentView('home');
+    setAppView('home', { history: 'replace', selectedGownId: null });
   };
 
   const handleSignIn = async (email: string, password: string) => {
@@ -232,12 +364,12 @@ export default function App() {
     }
 
     clearAuthState();
-    setCurrentView('home');
+    setAppView('home', { history: 'replace', selectedGownId: null });
   };
 
   const handleForceReauth = (message?: string) => {
     clearAuthState();
-    setCurrentView('home');
+    setAppView('home', { history: 'replace', selectedGownId: null });
     setPendingView('profile');
     setShowAuth(true);
 
@@ -362,7 +494,7 @@ export default function App() {
     <div className="min-h-screen bg-[#FAF7F0]">
       <Navigation
         currentView={currentView}
-        setCurrentView={setCurrentView}
+        setCurrentView={setAppView}
         isAdmin={isAdmin}
         setIsAdmin={setIsAdmin}
         isLoggedIn={isLoggedIn}
@@ -372,7 +504,7 @@ export default function App() {
       <main className="pt-20">
         {currentView === 'home' && (
           <Home
-            setCurrentView={setCurrentView}
+            setCurrentView={setAppView}
             isLoggedIn={isLoggedIn}
             isAdmin={isAdmin}
             onOpenAuthModal={() => setShowAuth(true)} 
@@ -380,7 +512,7 @@ export default function App() {
         )}
         {currentView === 'catalog' && (
           <Catalog
-            setCurrentView={setCurrentView}
+            setCurrentView={setAppView}
             isLoggedIn={isLoggedIn}
             isAdmin={isAdmin}
             navigateProtected={navigateProtected}

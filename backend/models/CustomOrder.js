@@ -59,6 +59,14 @@ const CustomOrderSchema = new mongoose.Schema({
     index: true,
   },
   status: { type: String, enum: ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'], default: 'inquiry' },
+  isArchived: {
+    type: Boolean,
+    default: false,
+  },
+  archivedAt: {
+    type: Date,
+    default: null,
+  },
   designImageUrl: { type: String },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }

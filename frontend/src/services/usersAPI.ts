@@ -10,6 +10,7 @@ export interface ManagedUser {
   lastName: string;
   email: string;
   phoneNumber: string;
+  preferredBranch?: string;
   role: ManagedUserRole;
   status: 'active' | 'archived';
   createdAt?: string;
@@ -51,6 +52,17 @@ export interface AdminActionEntry {
   createdAt?: string;
 }
 
+async function parseJsonSafe(response: Response): Promise<any | null> {
+  const raw = await response.text();
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(
   url: string,
   token: string,
@@ -65,9 +77,9 @@ async function request<T>(
     }
   });
 
-  const data = await res.json();
+  const data = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(data.message || `Request failed: ${res.status}`);
+    throw new Error(data?.message || `Request failed: ${res.status}`);
   }
 
   return data as T;

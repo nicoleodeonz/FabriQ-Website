@@ -25,6 +25,8 @@ export interface AdminCustomOrderRecord {
   fittingRescheduleReason?: string | null;
   rejectionReason?: string | null;
   status: AdminCustomOrderStatus;
+  isArchived?: boolean;
+  archivedAt?: string | null;
   designImageUrl?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -85,6 +87,27 @@ export const adminCustomOrderAPI = {
     const data = await parseJsonSafe(response);
     if (!data?.order) {
       throw new Error('Failed to update custom order status: empty server response.');
+    }
+
+    return data.order as AdminCustomOrderRecord;
+  },
+
+  archiveCustomOrder: async (token: string, id: string): Promise<AdminCustomOrderRecord> => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders/${id}/archive`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const body = await parseJsonSafe(response);
+      throw new Error(getErrorMessage('Failed to archive custom order', body));
+    }
+
+    const data = await parseJsonSafe(response);
+    if (!data?.order) {
+      throw new Error('Failed to archive custom order: empty server response.');
     }
 
     return data.order as AdminCustomOrderRecord;

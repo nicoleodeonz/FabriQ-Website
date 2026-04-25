@@ -23,6 +23,7 @@ interface User {
   lastName: string;
   email: string;
   phone: string;
+  branch: string;
   role: ManagedUserRole;
   joinDate: string;
   status: 'active' | 'archived';
@@ -77,6 +78,8 @@ interface AdminDashboardProps {
   currentUser?: CurrentAdminUser | null;
 }
 
+type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
+
 type AddItemField =
   | 'name'
   | 'category'
@@ -97,6 +100,30 @@ const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
+const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
+
+function parseAdminTabFromHash(hash: string): AdminTab {
+  const normalizedHash = hash.replace(/^#\/?/, '');
+  const [pathPart = '', searchPart = ''] = normalizedHash.split('?');
+  const normalizedPath = pathPart.replace(/^\/+|\/+$/g, '');
+
+  if (normalizedPath !== 'admin') {
+    return 'overview';
+  }
+
+  const nextTab = new URLSearchParams(searchPart).get('tab');
+  return ADMIN_TABS.includes(nextTab as AdminTab) ? (nextTab as AdminTab) : 'overview';
+}
+
+function buildAdminHash(tab: AdminTab) {
+  const searchParams = new URLSearchParams();
+  if (tab !== 'overview') {
+    searchParams.set('tab', tab);
+  }
+
+  const queryString = searchParams.toString();
+  return `#/admin${queryString ? `?${queryString}` : ''}`;
+}
 
 function compareInventoryItemsAscending(left: InventoryItem, right: InventoryItem) {
   const leftKey = (left.sku || left.id || '').trim();
@@ -122,6 +149,21 @@ function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
   };
 }
 
+function normalizeBranchName(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.startsWith('taguig main')) return 'Taguig Main';
+  if (normalized === 'bgc branch') return 'BGC Branch';
+  if (normalized === 'makati branch') return 'Makati Branch';
+  if (normalized === 'quezon city') return 'Quezon City';
+  return String(value || '').trim();
+}
+
+function matchesSelectedBranch(branch: string | null | undefined, selectedBranch: string): boolean {
+  if (selectedBranch === 'All Branches') return true;
+  return normalizeBranchName(branch) === normalizeBranchName(selectedBranch);
+}
+
 export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
   const getCurrentUserId = (jwtToken: string) => {
     try {
@@ -143,8 +185,24 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     | { type: 'restore'; item: InventoryItem }
     | null;
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history'>('overview');
+  const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
   const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
+
+  const setActiveTabWithHash = (tab: AdminTab, history: 'push' | 'replace' = 'push') => {
+    setActiveTab(tab);
+
+    const nextHash = buildAdminHash(tab);
+    if (window.location.hash === nextHash) {
+      return;
+    }
+
+    if (history === 'replace') {
+      window.history.replaceState(null, '', nextHash);
+      return;
+    }
+
+    window.history.pushState(null, '', nextHash);
+  };
   
   // Inventory State
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -235,6 +293,19 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
   const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
 
+  useEffect(() => {
+    const syncActiveTabFromHash = () => {
+      setActiveTab(parseAdminTabFromHash(window.location.hash));
+    };
+
+    syncActiveTabFromHash();
+    window.addEventListener('hashchange', syncActiveTabFromHash);
+
+    return () => {
+      window.removeEventListener('hashchange', syncActiveTabFromHash);
+    };
+  }, []);
+
   // Rental Management State
   const [adminRentals, setAdminRentals] = useState<AdminRentalDetail[]>([]);
   const [adminRentalsLoading, setAdminRentalsLoading] = useState(false);
@@ -269,6 +340,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
   const [isDoneCustomOrderConfirmOpen, setIsDoneCustomOrderConfirmOpen] = useState(false);
+  const [isArchiveCompletedCustomOrderConfirmOpen, setIsArchiveCompletedCustomOrderConfirmOpen] = useState(false);
   const [isRejectCustomOrderConfirmOpen, setIsRejectCustomOrderConfirmOpen] = useState(false);
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
@@ -316,6 +388,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     isCancelAppointmentConfirmOpen ||
     selectedCustomOrder ||
     isApproveCustomOrderConfirmOpen ||
+    isArchiveCompletedCustomOrderConfirmOpen ||
     isRejectCustomOrderConfirmOpen
   );
 
@@ -546,6 +619,31 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     await handleCustomOrderStatusUpdate(orderId, nextStatus);
   }
 
+  async function handleConfirmArchiveCompletedCustomOrder() {
+    if (!selectedCustomOrder) return;
+
+    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+    if (!orderId) return;
+
+    setCustomOrderStatusUpdatingId(orderId);
+    setAdminCustomOrdersError(null);
+    try {
+      const updated = await adminCustomOrderAPI.archiveCustomOrder(token, orderId);
+      setAdminCustomOrders((prev) => prev.map((order) => {
+        const currentOrderId = String(order.id || order._id || '');
+        return currentOrderId === orderId ? updated : order;
+      }));
+      setIsArchiveCompletedCustomOrderConfirmOpen(false);
+      setSelectedCustomOrder(null);
+      setCustomOrderManagementView('archive');
+      await loadAdminHistory();
+    } catch (err) {
+      setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to archive custom order');
+    } finally {
+      setCustomOrderStatusUpdatingId(null);
+    }
+  }
+
   async function handleAppointmentStatusUpdate(id: string, status: 'scheduled' | 'completed' | 'cancelled', reason?: string) {
     setAppointmentStatusUpdatingId(id);
     setAdminAppointmentsError(null);
@@ -599,6 +697,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       lastName: user.lastName || '',
       email: user.email || '',
       phone: user.phoneNumber || 'N/A',
+      branch: user.preferredBranch || '',
       role: user.role,
       joinDate: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A',
       status: user.status || 'active',
@@ -1386,7 +1485,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     const matchesArchiveView = showArchivedUsersOnly
       ? user.status === 'archived'
       : user.status !== 'archived';
-    return matchesSearch && matchesRole && matchesArchiveView;
+    const matchesBranch = matchesSelectedBranch(user.branch, selectedBranch);
+    return matchesSearch && matchesRole && matchesArchiveView && matchesBranch;
   });
   const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / USER_PAGE_SIZE));
   const safeUserPage = Math.min(userPage, userTotalPages);
@@ -1397,7 +1497,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   useEffect(() => {
     setUserPage(1);
-  }, [searchQuery, userFilter, showArchivedUsersOnly]);
+  }, [searchQuery, userFilter, showArchivedUsersOnly, selectedBranch]);
 
   const changeUserPage = (nextPage: number) => {
     setUserPage(nextPage);
@@ -1406,6 +1506,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const inventoryQuery = inventorySearchQuery.trim().toLowerCase();
   const filteredInventory = inventory
     .filter((item) => {
+      if (!matchesSelectedBranch(item.branch, selectedBranch)) return false;
       if (!inventoryQuery) return true;
       return (
         item.name.toLowerCase().includes(inventoryQuery) ||
@@ -1420,6 +1521,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const filteredArchivedItems = archivedItems
     .filter((item) => {
+      if (!matchesSelectedBranch(item.branch, selectedBranch)) return false;
       if (!inventoryQuery) return true;
       return (
         item.name.toLowerCase().includes(inventoryQuery) ||
@@ -1433,7 +1535,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   useEffect(() => {
     setInventoryPage(1);
-  }, [inventorySearchQuery, inventoryView]);
+  }, [inventorySearchQuery, inventoryView, selectedBranch]);
 
   const inventoryItemsForCurrentView = inventoryView === 'archive' ? filteredArchivedItems : filteredInventory;
   const inventoryTotalPages = Math.max(1, Math.ceil(inventoryItemsForCurrentView.length / INVENTORY_PAGE_SIZE));
@@ -1527,11 +1629,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       .some((value) => String(value).toLowerCase().includes(rentalQuery));
   };
 
-  const filteredPendingRentalCards = pendingRentalCards.filter((rental) => matchesRentalSearch(rental));
-  const filteredActiveRentalCards = activeRentalCards.filter((rental) => matchesRentalSearch(rental));
-  const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesRentalSearch(rental));
-  const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesRentalSearch(rental));
-  const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesRentalSearch(rental));
+  const filteredPendingRentalCards = pendingRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredActiveRentalCards = activeRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
 
   const pendingReturns: PendingReturn[] = activeRentalCards
     .map((rental) => {
@@ -1569,6 +1671,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const filteredPendingReturns = pendingReturns.filter((rental) => {
+    const rentalBranch = activeRentalCards.find((activeRental) => activeRental.id === rental.id)?.branch;
+    if (!matchesSelectedBranch(rentalBranch, selectedBranch)) return false;
     if (!rentalQuery) return true;
     return [rental.id, rental.gownName, rental.customer, rental.dueDate]
       .filter(Boolean)
@@ -1639,6 +1743,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const appointmentQuery = appointmentSearchQuery.trim().toLowerCase();
   const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
+    if (!matchesSelectedBranch(appointment.branch, selectedBranch)) return false;
     if (!appointmentQuery) return true;
 
     return [
@@ -1679,7 +1784,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   useEffect(() => {
     setAppointmentPage(1);
-  }, [appointmentSearchQuery, appointmentManagementView, appointmentStatusFilter]);
+  }, [appointmentSearchQuery, appointmentManagementView, appointmentStatusFilter, selectedBranch]);
 
   const changeAppointmentPage = (nextPage: number) => {
     setAppointmentPage(nextPage);
@@ -1687,7 +1792,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   useEffect(() => {
     setRentalPage(1);
-  }, [rentalSearchQuery, rentalManagementView, rentalViewFilter]);
+  }, [rentalSearchQuery, rentalManagementView, rentalViewFilter, selectedBranch]);
 
   const changeRentalPage = (nextPage: number) => {
     setRentalPage(nextPage);
@@ -1695,9 +1800,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const customOrderQuery = customOrderSearchQuery.trim().toLowerCase();
   const filteredAdminCustomOrders = adminCustomOrders.filter((order) => {
+    const isArchivedOrder = Boolean(order.isArchived);
+    if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
     const matchesStatus = customOrderManagementView === 'archive'
-      ? order.status === 'completed' || order.status === 'rejected'
-      : order.status === customOrderStatusFilter;
+      ? isArchivedOrder || order.status === 'rejected'
+      : !isArchivedOrder && order.status === customOrderStatusFilter;
     if (!matchesStatus) return false;
     if (!customOrderQuery) return true;
 
@@ -1725,7 +1832,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   useEffect(() => {
     setCustomOrderPage(1);
-  }, [customOrderSearchQuery, customOrderManagementView, customOrderStatusFilter]);
+  }, [customOrderSearchQuery, customOrderManagementView, customOrderStatusFilter, selectedBranch]);
 
   const changeCustomOrderPage = (nextPage: number) => {
     setCustomOrderPage(nextPage);
@@ -1993,7 +2100,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         {/* Tabs */}
         <div className="flex gap-2 mb-8 border-b border-[#E8DCC8]">
           <button
-            onClick={() => setActiveTab('overview')}
+            onClick={() => setActiveTabWithHash('overview')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'overview'
                 ? 'border-[#D4AF37] font-medium'
@@ -2003,7 +2110,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             Overview
           </button>
           <button
-            onClick={() => setActiveTab('inventory')}
+            onClick={() => setActiveTabWithHash('inventory')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'inventory'
                 ? 'border-[#D4AF37] font-medium'
@@ -2013,7 +2120,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             Inventory
           </button>
           <button
-            onClick={() => setActiveTab('rentals')}
+            onClick={() => setActiveTabWithHash('rentals')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'rentals'
                 ? 'border-[#D4AF37] font-medium'
@@ -2023,7 +2130,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             Rentals
           </button>
           <button
-            onClick={() => setActiveTab('appointments')}
+            onClick={() => setActiveTabWithHash('appointments')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'appointments'
                 ? 'border-[#D4AF37] font-medium'
@@ -2033,7 +2140,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             Appointments
           </button>
           <button
-            onClick={() => setActiveTab('bespoke')}
+            onClick={() => setActiveTabWithHash('bespoke')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'bespoke'
                 ? 'border-[#D4AF37] font-medium'
@@ -2043,7 +2150,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             Bespoke
           </button>
           <button
-            onClick={() => setActiveTab('users')}
+            onClick={() => setActiveTabWithHash('users')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'users'
                 ? 'border-[#D4AF37] font-medium'
@@ -2053,7 +2160,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             User Management
           </button>
           <button
-            onClick={() => setActiveTab('history')}
+            onClick={() => setActiveTabWithHash('history')}
             className={`px-6 py-3 border-b-2 transition-colors ${
               activeTab === 'history'
                 ? 'border-[#D4AF37] font-medium'
@@ -4891,7 +4998,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </div>
               )}
 
-              {customOrderManagementView !== 'archive' && (
+              {(customOrderManagementView !== 'archive' || selectedCustomOrder.status === 'completed') && (
                 <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
                   {(() => {
                     const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
@@ -4901,6 +5008,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     const approveDisabledReason = getCustomOrderApproveDisabledReason(selectedCustomOrder);
                     const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed';
                     const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+                    const isCompletedOrder = selectedCustomOrder.status === 'completed';
+                    const isArchivedCompletedOrder = isCompletedOrder && Boolean(selectedCustomOrder.isArchived);
 
                     return (
                       <>
@@ -4908,36 +5017,51 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           onClick={() => setSelectedCustomOrder(null)}
                           className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
                         >
-                          Cancel
+                          Close
                         </button>
+                        {canReject && (
+                          <button
+                            onClick={() => {
+                              if (!orderId || !canReject) return;
+                              setAdminCustomOrdersError(null);
+                              setRejectCustomOrderReason('');
+                              setRejectCustomOrderError(null);
+                              setIsRejectCustomOrderConfirmOpen(true);
+                            }}
+                            disabled={isUpdating || !canReject}
+                            className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                              {isUpdating && canReject ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...') : (isInquiryStage ? 'Reject' : 'Cancel')}
+                          </button>
+                        )}
                         <button
                           onClick={() => {
-                            if (!orderId || !canReject) return;
-                            setAdminCustomOrdersError(null);
-                            setRejectCustomOrderReason('');
-                            setRejectCustomOrderError(null);
-                            setIsRejectCustomOrderConfirmOpen(true);
-                          }}
-                          disabled={isUpdating || !canReject}
-                          className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {isUpdating && canReject ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...') : (isInquiryStage ? 'Reject' : 'Cancel')}
-                        </button>
-                        <button
-                          onClick={() => {
+                            if (isArchivedCompletedOrder) {
+                              setSelectedCustomOrder(null);
+                              return;
+                            }
+                            if (isCompletedOrder) {
+                              setAdminCustomOrdersError(null);
+                              setIsArchiveCompletedCustomOrderConfirmOpen(true);
+                              return;
+                            }
                             if (!orderId || !nextStatus || !canAdvance) return;
                             setAdminCustomOrdersError(null);
                             setIsDoneCustomOrderConfirmOpen(true);
                           }}
-                          disabled={isUpdating || !nextStatus || !canAdvance}
+                          disabled={isArchivedCompletedOrder ? false : isCompletedOrder ? isUpdating : isUpdating || !nextStatus || !canAdvance}
                           className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={approveDisabledReason || undefined}
+                          title={isCompletedOrder ? undefined : approveDisabledReason || undefined}
                         >
-                          {isUpdating && !!nextStatus
-                            ? 'Approving...'
-                            : selectedCustomOrder?.status === 'inquiry'
-                              ? 'Approve'
-                              : 'Done'}
+                          {isArchivedCompletedOrder
+                            ? 'Done'
+                            : isCompletedOrder
+                            ? 'Done'
+                            : isUpdating && !!nextStatus
+                              ? 'Approving...'
+                              : selectedCustomOrder?.status === 'inquiry'
+                                ? 'Approve'
+                                : 'Done'}
                         </button>
                               {isDoneCustomOrderConfirmOpen && selectedCustomOrder && (() => {
                                 const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
@@ -5160,6 +5284,64 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
                   >
                     {isUpdating ? 'Approving...' : `Confirm`}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {isArchiveCompletedCustomOrderConfirmOpen && selectedCustomOrder && selectedCustomOrder.status === 'completed' && (() => {
+          const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+          const isUpdating = customOrderStatusUpdatingId === orderId;
+
+          return (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-start mb-4">
+                  <h3 className="text-2xl font-light">Confirm Completed Order</h3>
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={() => setIsArchiveCompletedCustomOrderConfirmOpen(false)}
+                    className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                    aria-label="Close completed custom order confirmation"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <p className="text-sm text-[#6B5D4F] mb-4">
+                  Is this order complete? If confirmed, it will be moved to the bespoke management archive.
+                </p>
+
+                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
+                  <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                  <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
+                  <p className="text-sm text-[#6B5D4F]">Reference ID: {selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                </div>
+
+                {adminCustomOrdersError && (
+                  <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
+                )}
+
+                <div className="mt-6 flex gap-3">
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={() => setIsArchiveCompletedCustomOrderConfirmOpen(false)}
+                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isUpdating}
+                    onClick={handleConfirmArchiveCompletedCustomOrder}
+                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  >
+                    {isUpdating ? 'Archiving...' : 'Confirm'}
                   </button>
                 </div>
               </div>

@@ -1,5 +1,5 @@
 import express from 'express';
-import { createCustomOrder, getMyCustomOrders, getAllCustomOrders, updateCustomOrderConsultationSchedule, updateCustomOrderFittingSchedule, updateCustomOrderStatus } from '../controllers/customOrderController.js';
+import { archiveCustomOrder, createCustomOrder, getMyCustomOrders, getAllCustomOrders, updateCustomOrderConsultationSchedule, updateCustomOrderFittingSchedule, updateCustomOrderStatus } from '../controllers/customOrderController.js';
 import { upload } from '../config/upload.js';
 import { uploadDesignImage } from '../controllers/customOrderController.js';
 import { authenticate } from '../middleware/authMiddleware.js';
@@ -26,5 +26,8 @@ router.patch('/:id/fitting-schedule', authenticate, updateCustomOrderFittingSche
 
 // Admin: Update custom order status
 router.patch('/:id/status', authenticate, updateCustomOrderStatus);
+
+// Admin: Archive completed custom orders
+router.patch('/:id/archive', authenticate, archiveCustomOrder);
 
 export default router;
