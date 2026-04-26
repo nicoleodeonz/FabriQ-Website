@@ -252,6 +252,27 @@ export async function scheduleRentalPickup(req, res) {
     rental.status = 'for_pickup';
     await rental.save();
 
+    try {
+      const deliveryResult = await sendNotificationEmail({
+        email: rental.customerEmail || rental.email || '',
+        type: 'rental',
+        status: rental.status,
+        name: rental.customerName || '',
+        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+        date: rental.pickupScheduleDate
+          ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
+          : '',
+        time: rental.pickupScheduleTime || '',
+        location: rental.branch || '',
+      });
+
+      if (!deliveryResult?.delivered) {
+        console.warn('rental pickup schedule notification not delivered:', deliveryResult);
+      }
+    } catch (notificationError) {
+      console.error('rental pickup schedule notification error:', notificationError);
+    }
+
     return res.json({ rental: mapRental(req, rental.toJSON()) });
   } catch (error) {
     console.error('scheduleRentalPickup error:', error);
