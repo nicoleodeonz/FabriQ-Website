@@ -130,7 +130,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         if (!/[a-z]/.test(value)) passwordErrors.push('At least one lowercase letter.');
         if (!/[A-Z]/.test(value)) passwordErrors.push('At least one uppercase letter.');
         if (!/\d/.test(value)) passwordErrors.push('At least one number.');
-        if (!/[@$!%*?&]/.test(value)) passwordErrors.push('At least one special character (@$!%*?&).');
+        if (!/[^A-Za-z0-9]/.test(value)) passwordErrors.push('At least one special character.');
         return passwordErrors;
       }
 

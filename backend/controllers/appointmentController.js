@@ -2,6 +2,7 @@ import AppointmentDetail from '../models/AppointmentDetail.js';
 import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import AdminAction from '../models/AdminAction.js';
+import { sendNotificationEmail } from '../services/emailService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
 function buildAdminName(email) {
@@ -40,6 +41,18 @@ function mapAppointment(doc) {
     ...doc,
     date: doc.date ? new Date(doc.date).toISOString().slice(0, 10) : null,
   };
+}
+
+function getAppointmentServiceLabel(appointment) {
+  const type = String(appointment.type || '').trim().toLowerCase();
+  if (type === 'fitting') {
+    const gownName = String(appointment.selectedGownName || '').trim();
+    return gownName ? `Gown Fitting - ${gownName}` : 'Gown Fitting';
+  }
+  if (type === 'consultation') return 'Design Consultation';
+  if (type === 'measurement') return 'Measurement Session';
+  if (type === 'pickup') return 'Pickup Appointment';
+  return 'Appointment Service';
 }
 
 async function findAppointmentConflict({ date, time, branch, excludeId }) {
@@ -345,6 +358,23 @@ export async function updateAppointmentStatus(req, res) {
     appointment.status = nextStatus;
     appointment.cancellationReason = nextStatus === 'cancelled' ? reason : appointment.cancellationReason;
     await appointment.save();
+
+    if (nextStatus === 'scheduled') {
+      try {
+        await sendNotificationEmail({
+          email: appointment.customerEmail || appointment.email || '',
+          type: 'appointment',
+          status: nextStatus,
+          name: appointment.customerName || '',
+          itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
+          date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
+          time: appointment.time || '',
+          location: appointment.branch || '',
+        });
+      } catch (notificationError) {
+        console.error('appointment approval notification error:', notificationError);
+      }
+    }
 
     await logAdminAction(req, {
       action: 'appointment_status_updated',

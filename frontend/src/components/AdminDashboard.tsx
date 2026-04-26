@@ -13,6 +13,7 @@ import { appointmentAPI } from '../services/appointmentAPI';
 import type { AdminAppointmentDetail } from '../services/appointmentAPI';
 import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
 import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
+import { notificationAPI } from '../services/notificationAPI';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 
 export type { InventoryItem };
@@ -343,6 +344,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [isDoneCustomOrderConfirmOpen, setIsDoneCustomOrderConfirmOpen] = useState(false);
   const [isArchiveCompletedCustomOrderConfirmOpen, setIsArchiveCompletedCustomOrderConfirmOpen] = useState(false);
   const [isRejectCustomOrderConfirmOpen, setIsRejectCustomOrderConfirmOpen] = useState(false);
+  const [isAdjustCustomOrderConfirmOpen, setIsAdjustCustomOrderConfirmOpen] = useState(false);
+  const [adjustCustomOrderReason, setAdjustCustomOrderReason] = useState('');
+  const [adjustCustomOrderError, setAdjustCustomOrderError] = useState<string | null>(null);
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
   const [rentalViewFilter, setRentalViewFilter] = useState<'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('pending');
@@ -362,7 +366,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   // Notification State
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [selectedRental, setSelectedRental] = useState<RentalFollowUpTarget | null>(null);
-  const [notificationMethod, setNotificationMethod] = useState<'sms' | 'email' | 'both'>('both');
+  const [notificationMethod, setNotificationMethod] = useState<'sms' | 'email' | 'both'>('email');
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [notificationSending, setNotificationSending] = useState(false);
 
   const [isSendReminderConfirmOpen, setIsSendReminderConfirmOpen] = useState(false);
   const [isReminderSentSuccessOpen, setIsReminderSentSuccessOpen] = useState(false);
@@ -389,6 +395,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     isCancelAppointmentConfirmOpen ||
     selectedCustomOrder ||
     isApproveCustomOrderConfirmOpen ||
+    isAdjustCustomOrderConfirmOpen ||
     isArchiveCompletedCustomOrderConfirmOpen ||
     isRejectCustomOrderConfirmOpen
   );
@@ -605,6 +612,28 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     const updated = await handleCustomOrderStatusUpdate(orderId, 'rejected', trimmedReason);
     if (!updated && adminCustomOrdersError) {
       setRejectCustomOrderError(adminCustomOrdersError);
+    }
+  }
+
+  async function handleConfirmAdjustCustomOrder() {
+    if (!selectedCustomOrder) return;
+
+    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+    const trimmedReason = adjustCustomOrderReason.trim();
+    if (!orderId) return;
+    if (!trimmedReason) {
+      setAdjustCustomOrderError('Adjustment reason is required.');
+      return;
+    }
+
+    setIsAdjustCustomOrderConfirmOpen(false);
+    setSelectedCustomOrder(null);
+    setAdjustCustomOrderReason('');
+    setAdjustCustomOrderError(null);
+
+    const updated = await handleCustomOrderStatusUpdate(orderId, 'in-progress', trimmedReason);
+    if (!updated && adminCustomOrdersError) {
+      setAdjustCustomOrderError(adminCustomOrdersError);
     }
   }
 
@@ -1986,6 +2015,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   };
 
+  const canAdjustCustomOrder = (order: AdminCustomOrderRecord | null) => {
+    if (!order || order.status !== 'fitting') {
+      return false;
+    }
+
+    const fittingDate = String(order.fittingDate || '').trim();
+    if (!fittingDate) {
+      return false;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    return fittingDate === today;
+  };
+
   const getCustomOrderRejectionReason = (order: AdminCustomOrderRecord | null) => {
     if (!order) return '';
 
@@ -2055,23 +2098,45 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   // Notification Handler
   const handleSendNotification = () => {
     if (!selectedRental) return;
+    if (notificationMethod !== 'email') {
+      setNotificationError('Email notifications are currently available. Please choose Email Only.');
+      return;
+    }
 
+    setNotificationError(null);
     setShowNotificationModal(false);
     setIsSendReminderConfirmOpen(true);
   };
 
-  const handleConfirmSendNotification = () => {
+  const handleConfirmSendNotification = async () => {
     if (!selectedRental) return;
 
-    setIsSendReminderConfirmOpen(false);
-    setShowNotificationModal(false);
-    setIsReminderSentSuccessOpen(true);
+    setNotificationSending(true);
+    setNotificationError(null);
+
+    try {
+      await notificationAPI.sendNotification(token, {
+        type: 'rental',
+        recordId: selectedRental.id,
+      });
+
+      setIsSendReminderConfirmOpen(false);
+      setShowNotificationModal(false);
+      setIsReminderSentSuccessOpen(true);
+    } catch (error) {
+      setNotificationError(error instanceof Error ? error.message : 'Failed to send notification email.');
+      setIsSendReminderConfirmOpen(false);
+      setShowNotificationModal(true);
+    } finally {
+      setNotificationSending(false);
+    }
   };
 
   const handleDismissReminderSentSuccess = () => {
     setIsReminderSentSuccessOpen(false);
     setSelectedRental(null);
-    setNotificationMethod('both');
+    setNotificationMethod('email');
+    setNotificationError(null);
   };
 
   return (
@@ -5007,10 +5072,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
                     const canAdvance = canAdvanceCustomOrderStatus(selectedCustomOrder);
                     const approveDisabledReason = getCustomOrderApproveDisabledReason(selectedCustomOrder);
-                    const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed';
+                    const isFittingStage = selectedCustomOrder.status === 'fitting';
+                    const canAdjust = canAdjustCustomOrder(selectedCustomOrder);
+                    const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed' && !isFittingStage;
                     const isInquiryStage = selectedCustomOrder.status === 'inquiry';
                     const isCompletedOrder = selectedCustomOrder.status === 'completed';
                     const isArchivedCompletedOrder = isCompletedOrder && Boolean(selectedCustomOrder.isArchived);
+                    const isDoneDisabled = isArchivedCompletedOrder ? false : isCompletedOrder ? isUpdating : isUpdating || !nextStatus || !canAdvance;
 
                     return (
                       <>
@@ -5020,7 +5088,22 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         >
                           Close
                         </button>
-                        {canReject && (
+                        {isFittingStage ? (
+                          <button
+                            onClick={() => {
+                              if (!orderId || !canAdjust) return;
+                              setAdminCustomOrdersError(null);
+                              setAdjustCustomOrderReason('');
+                              setAdjustCustomOrderError(null);
+                              setIsAdjustCustomOrderConfirmOpen(true);
+                            }}
+                            disabled={isUpdating || !canAdjust}
+                            title={canAdjust ? undefined : 'Adjustment is only available on the scheduled fitting appointment date.'}
+                            className="flex-1 min-w-[140px] py-3 border-2 border-orange-200 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isUpdating ? 'Adjusting...' : 'Adjustment'}
+                          </button>
+                        ) : canReject && (
                           <button
                             onClick={() => {
                               if (!orderId || !canReject) return;
@@ -5050,8 +5133,19 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             setAdminCustomOrdersError(null);
                             setIsDoneCustomOrderConfirmOpen(true);
                           }}
-                          disabled={isArchivedCompletedOrder ? false : isCompletedOrder ? isUpdating : isUpdating || !nextStatus || !canAdvance}
-                          className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isDoneDisabled}
+                          className={`flex-1 min-w-[140px] py-3 border-2 rounded-xl font-semibold ${
+                            isDoneDisabled
+                              ? ''
+                              : 'transition-colors border-[#E8DCC8] bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:border-[#D4AF37]'
+                          }`}
+                          style={isDoneDisabled ? {
+                            borderColor: '#fed7aa',
+                            backgroundColor: '#fff7ed',
+                            color: '#c2410c',
+                            opacity: 0.3,
+                            cursor: 'not-allowed',
+                          } : undefined}
                           title={isCompletedOrder ? undefined : approveDisabledReason || undefined}
                         >
                           {isArchivedCompletedOrder
@@ -5227,6 +5321,89 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </>
                 );
               })()}
+            </div>
+          </div>
+        )}
+
+        {isAdjustCustomOrderConfirmOpen && selectedCustomOrder && selectedCustomOrder.status === 'fitting' && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="text-2xl font-light">Confirm Adjustment</h3>
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={() => {
+                    setIsAdjustCustomOrderConfirmOpen(false);
+                    setAdjustCustomOrderReason('');
+                    setAdjustCustomOrderError(null);
+                  }}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
+                  aria-label="Close custom order adjustment confirmation"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-sm text-[#6B5D4F] mb-4">
+                Please provide the reason for the adjustment. This will move the custom order back to In Progress.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
+                <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
+                <p className="text-sm text-[#6B5D4F]">Current Status: {getCustomOrderStatusLabel(selectedCustomOrder.status)}</p>
+                <p className="text-sm text-[#6B5D4F]">Next Status: In Progress</p>
+              </div>
+
+              <label className="block text-sm text-[#6B5D4F] mb-2">
+                Reason for adjustment *
+              </label>
+              <textarea
+                value={adjustCustomOrderReason}
+                onChange={(e) => {
+                  setAdjustCustomOrderReason(e.target.value);
+                  if (adjustCustomOrderError) setAdjustCustomOrderError(null);
+                }}
+                rows={4}
+                placeholder="State why this custom order needs adjustment"
+                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
+                disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+              />
+
+              {adjustCustomOrderError && (
+                <p className="mt-3 text-sm text-red-600">{adjustCustomOrderError}</p>
+              )}
+
+              {adminCustomOrdersError && !adjustCustomOrderError && (
+                <p className="mt-3 text-sm text-red-600">{adminCustomOrdersError}</p>
+              )}
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={() => {
+                    setIsAdjustCustomOrderConfirmOpen(false);
+                    setAdjustCustomOrderReason('');
+                    setAdjustCustomOrderError(null);
+                  }}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
+                  onClick={handleConfirmAdjustCustomOrder}
+                  className="flex-1 py-3 border-2 border-orange-200 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition-colors font-semibold disabled:opacity-50"
+                >
+                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')
+                    ? 'Adjusting...'
+                    : 'Confirm Adjustment'}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -5901,6 +6078,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               </div>
 
               <div className="space-y-6">
+                {notificationError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {notificationError}
+                  </div>
+                )}
+
                 {/* Rental Info */}
                 <div className="bg-[#FAF7F0] p-4 rounded-lg">
                   <h4 className="font-medium mb-2">{selectedRental.gownName}</h4>
@@ -5921,10 +6104,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 {/* Notification Method */}
                 <div>
                   <label className="block text-sm text-[#6B5D4F] mb-3">Select Notification Method</label>
+                  <p className="mb-3 text-xs text-[#8A7763]">Email delivery is currently available for follow ups.</p>
                   <div className="space-y-3">
                     <button
-                      onClick={() => setNotificationMethod('sms')}
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
+                      type="button"
+                      disabled
+                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 opacity-50 cursor-not-allowed ${
                         notificationMethod === 'sms'
                           ? 'border-[#D4AF37] bg-[#FAF7F0]'
                           : 'border-[#E8DCC8] hover:border-[#D4AF37]'
@@ -5938,6 +6123,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </button>
 
                     <button
+                      type="button"
                       onClick={() => setNotificationMethod('email')}
                       className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
                         notificationMethod === 'email'
@@ -5953,8 +6139,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </button>
 
                     <button
-                      onClick={() => setNotificationMethod('both')}
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
+                      type="button"
+                      disabled
+                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 opacity-50 cursor-not-allowed ${
                         notificationMethod === 'both'
                           ? 'border-[#D4AF37] bg-[#FAF7F0]'
                           : 'border-[#E8DCC8] hover:border-[#D4AF37]'
@@ -5977,7 +6164,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       setIsReminderSentSuccessOpen(false);
                       setShowNotificationModal(false);
                       setSelectedRental(null);
-                      setNotificationMethod('both');
+                      setNotificationMethod('email');
+                      setNotificationError(null);
                     }}
                     className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
                   >
@@ -5985,6 +6173,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                   <button
                     onClick={handleSendNotification}
+                    disabled={notificationSending}
                     className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2"
                   >
                     <Send className="w-5 h-5" />
@@ -6031,6 +6220,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 Follow up will be sent to {selectedRental.customer} via {notificationMethodText}.
               </p>
 
+              {notificationError && (
+                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {notificationError}
+                </div>
+              )}
+
               <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
                 <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Message</p>
                 <p className="text-sm text-[#3D2B1F] leading-relaxed">{reminderMessage}</p>
@@ -6050,9 +6245,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <button
                   type="button"
                   onClick={handleConfirmSendNotification}
+                  disabled={notificationSending}
                   className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
                 >
-                  Send Follow Up
+                  {notificationSending ? 'Sending...' : 'Send Follow Up'}
                 </button>
               </div>
             </div>

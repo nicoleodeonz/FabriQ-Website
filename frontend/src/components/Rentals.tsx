@@ -130,6 +130,14 @@ function formatDateLabel(value?: string) {
   });
 }
 
+function addDaysToDateString(value: string, days: number) {
+  const parsed = parseDateOnly(value);
+  if (!parsed) return '';
+
+  parsed.setDate(parsed.getDate() + days);
+  return formatDateOnly(parsed);
+}
+
 export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -143,7 +151,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     const daysToAdd = now.getHours() >= 17 ? 2 : 1;
     const date = new Date();
     date.setDate(date.getDate() + daysToAdd);
-    return date.toLocaleDateString('en-CA');
+    return formatDateOnly(date);
   }, []);
   const availabilityWindowEnd = useMemo(() => {
     const endDate = parseDateOnly(tomorrow) || new Date();
@@ -434,9 +442,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   };
 
   const handleStartDateChange = (value: string) => {
-    const nextDay = new Date(value);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const minimumEndDate = value ? nextDay.toLocaleDateString('en-CA') : '';
+    const minimumEndDate = value ? addDaysToDateString(value, 1) : '';
 
     setFormData((prev) => ({
       ...prev,
@@ -473,9 +479,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
 
   const minimumEndDate = useMemo(() => {
     if (!formData.startDate) return tomorrow;
-    const nextDay = new Date(formData.startDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    return nextDay.toLocaleDateString('en-CA');
+    return addDaysToDateString(formData.startDate, 1) || tomorrow;
   }, [formData.startDate, tomorrow]);
 
   const unavailableDateSet = useMemo(() => new Set(unavailableRentalDates), [unavailableRentalDates]);
@@ -578,11 +582,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
       if (nextState.endDate) {
         const startValue = nextState.startDate;
         const nextMinimumEndDate = startValue
-          ? (() => {
-              const nextDay = new Date(startValue);
-              nextDay.setDate(nextDay.getDate() + 1);
-              return nextDay.toLocaleDateString('en-CA');
-            })()
+          ? addDaysToDateString(startValue, 1)
           : tomorrow;
 
         const nextFirstUnavailableEndDate = startValue

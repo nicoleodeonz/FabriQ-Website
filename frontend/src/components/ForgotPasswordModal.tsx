@@ -17,7 +17,7 @@ const PASSWORD_RULES = {
   lowercase: /[a-z]/,
   uppercase: /[A-Z]/,
   number: /\d/,
-  special: /[!@#$!%*?&]/,
+  special: /[^A-Za-z0-9]/,
 } as const;
 
 const PASSWORD_REQUIREMENT_LABELS = {
@@ -25,7 +25,7 @@ const PASSWORD_REQUIREMENT_LABELS = {
   uppercase: 'At least one uppercase letter',
   lowercase: 'At least one lowercase letter',
   number: 'At least one number',
-  special: 'At least one special character (!@#$%*?&)',
+  special: 'At least one special character',
 } as const;
 
 export function ForgotPasswordModal({ isOpen, onClose, onSuccess, onBackToLogin }: ForgotPasswordModalProps) {

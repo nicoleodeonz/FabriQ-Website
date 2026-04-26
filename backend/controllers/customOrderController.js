@@ -2,6 +2,7 @@ import CustomOrder from '../models/CustomOrder.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
+import { sendNotificationEmail } from '../services/emailService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
 const CUSTOM_ORDER_STATUSES = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
@@ -145,6 +146,17 @@ async function updateCustomOrderVisitSchedule(req, res, config) {
     order.updatedAt = new Date();
     await order.save();
 
+    if (typeof config.buildNotificationPayload === 'function') {
+      try {
+        const notificationPayload = config.buildNotificationPayload(order);
+        if (notificationPayload?.email) {
+          await sendNotificationEmail(notificationPayload);
+        }
+      } catch (notificationError) {
+        console.error(`${config.label.toLowerCase()} schedule notification error:`, notificationError);
+      }
+    }
+
     return res.json({ order: mapCustomOrder(order) });
   } catch (error) {
     return res.status(500).json({ message: error.message || `Failed to save ${config.label.toLowerCase()} schedule.` });
@@ -237,6 +249,16 @@ export const updateCustomOrderConsultationSchedule = async (req, res) => {
     dateField: 'consultationDate',
     timeField: 'consultationTime',
     reasonField: 'consultationRescheduleReason',
+    buildNotificationPayload: (order) => ({
+      email: order.email || '',
+      type: 'bespoke',
+      status: 'design-approval',
+      name: order.customerName || '',
+      itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+      date: String(order.consultationDate || '').trim(),
+      time: String(order.consultationTime || '').trim(),
+      location: String(order.branch || '').trim(),
+    }),
   });
 };
 
@@ -248,6 +270,16 @@ export const updateCustomOrderFittingSchedule = async (req, res) => {
     dateField: 'fittingDate',
     timeField: 'fittingTime',
     reasonField: 'fittingRescheduleReason',
+    buildNotificationPayload: (order) => ({
+      email: order.email || '',
+      type: 'bespoke',
+      status: 'fitting-scheduled',
+      name: order.customerName || '',
+      itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+      date: String(order.fittingDate || '').trim(),
+      time: String(order.fittingTime || '').trim(),
+      location: String(order.branch || '').trim(),
+    }),
   });
 };
 
@@ -275,6 +307,25 @@ export const updateCustomOrderStatus = async (req, res) => {
     }
 
     const previousStatus = String(order.status || '').trim().toLowerCase();
+    const isAdjustmentTransition = previousStatus === 'fitting' && nextStatus === 'in-progress';
+
+    if (isAdjustmentTransition && !reason) {
+      return res.status(400).json({ message: 'Adjustment reason is required.' });
+    }
+
+    if (isAdjustmentTransition) {
+      const fittingDate = String(order.fittingDate || '').trim();
+      const todayDate = new Date().toISOString().slice(0, 10);
+
+      if (!fittingDate) {
+        return res.status(400).json({ message: 'A scheduled fitting appointment is required before requesting an adjustment.' });
+      }
+
+      if (fittingDate !== todayDate) {
+        return res.status(400).json({ message: 'Adjustments can only be requested on the scheduled fitting appointment date.' });
+      }
+    }
+
     if (previousStatus === 'design-approval' && nextStatus === 'in-progress') {
       const consultationDate = String(order.consultationDate || '').trim();
       const todayDate = new Date().toISOString().slice(0, 10);
@@ -301,10 +352,84 @@ export const updateCustomOrderStatus = async (req, res) => {
       }
     }
 
+    if (isAdjustmentTransition) {
+      order.fittingDate = null;
+      order.fittingTime = null;
+      order.fittingRescheduleReason = null;
+    }
+
     order.status = nextStatus;
     order.rejectionReason = nextStatus === 'rejected' ? reason : null;
     order.updatedAt = new Date();
     await order.save();
+
+    if (previousStatus === 'inquiry' && nextStatus === 'design-approval') {
+      try {
+        await sendNotificationEmail({
+          email: order.email || '',
+          type: 'bespoke',
+          status: nextStatus,
+          name: order.customerName || '',
+          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+          date: String(order.consultationDate || order.eventDate || '').trim(),
+          time: String(order.consultationTime || '').trim(),
+          location: String(order.branch || '').trim(),
+        });
+      } catch (notificationError) {
+        console.error('custom order inquiry approval notification error:', notificationError);
+      }
+    }
+
+    if (previousStatus === 'design-approval' && nextStatus === 'in-progress') {
+      try {
+        await sendNotificationEmail({
+          email: order.email || '',
+          type: 'bespoke',
+          status: nextStatus,
+          name: order.customerName || '',
+          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+          date: String(order.consultationDate || order.eventDate || '').trim(),
+          time: String(order.consultationTime || '').trim(),
+          location: String(order.branch || '').trim(),
+        });
+      } catch (notificationError) {
+        console.error('custom order in-progress notification error:', notificationError);
+      }
+    }
+
+    if (previousStatus === 'fitting' && nextStatus === 'in-progress') {
+      try {
+        await sendNotificationEmail({
+          email: order.email || '',
+          type: 'bespoke',
+          status: nextStatus,
+          name: order.customerName || '',
+          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+          date: String(order.eventDate || '').trim(),
+          time: '',
+          location: String(order.branch || '').trim(),
+        });
+      } catch (notificationError) {
+        console.error('custom order adjustment in-progress notification error:', notificationError);
+      }
+    }
+
+    if (previousStatus === 'in-progress' && nextStatus === 'fitting') {
+      try {
+        await sendNotificationEmail({
+          email: order.email || '',
+          type: 'bespoke',
+          status: nextStatus,
+          name: order.customerName || '',
+          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+          date: String(order.fittingDate || order.eventDate || '').trim(),
+          time: String(order.fittingTime || '').trim(),
+          location: String(order.branch || '').trim(),
+        });
+      } catch (notificationError) {
+        console.error('custom order fitting notification error:', notificationError);
+      }
+    }
 
     await logAdminAction(req, {
       action: 'custom_order_status_updated',
@@ -322,7 +447,7 @@ export const updateCustomOrderStatus = async (req, res) => {
         consultationTime: order.consultationTime || '',
         previousStatus,
         newStatus: nextStatus,
-        reason: order.rejectionReason || '',
+        reason: reason || order.rejectionReason || '',
       },
     });
 
@@ -357,6 +482,22 @@ export const archiveCustomOrder = async (req, res) => {
     order.archivedAt = new Date();
     order.updatedAt = new Date();
     await order.save();
+
+    try {
+      const now = new Date();
+      await sendNotificationEmail({
+        email: order.email || '',
+        type: 'bespoke',
+        status: 'completed',
+        name: order.customerName || '',
+        itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+        date: now.toISOString().slice(0, 10),
+        time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        location: String(order.branch || '').trim(),
+      });
+    } catch (notificationError) {
+      console.error('custom order archive completion notification error:', notificationError);
+    }
 
     await logAdminAction(req, {
       action: 'custom_order_archived',

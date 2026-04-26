@@ -11,6 +11,7 @@ import userRoutes from './routes/users.js';
 import rentalRoutes from './routes/rentals.js';
 import appointmentRoutes from './routes/appointments.js';
 import customOrderRoutes from './routes/customOrders.js';
+import notificationRoutes from './routes/notifications.js';
 
 loadEnvironment();
 
@@ -48,6 +49,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/rentals', rentalRoutes);
 app.use('/api/appointments', appointmentRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/custom-orders', customOrderRoutes);
 

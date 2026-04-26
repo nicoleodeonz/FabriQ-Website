@@ -2,6 +2,7 @@ import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
 import AdminAction from '../models/AdminAction.js';
+import { sendNotificationEmail } from '../services/emailService.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
 
@@ -300,6 +301,19 @@ export async function submitRentalPayment(req, res) {
 
     await rental.save();
 
+    try {
+      await sendNotificationEmail({
+        email: rental.customerEmail || rental.email || '',
+        type: 'rental',
+        status: rental.status,
+        name: rental.customerName || '',
+        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+        location: rental.branch || '',
+      });
+    } catch (notificationError) {
+      console.error('rental payment notification error:', notificationError);
+    }
+
     return res.json({ rental: mapRental(req, rental.toJSON()) });
   } catch (error) {
     console.error('submitRentalPayment error:', error);
@@ -462,6 +476,23 @@ export async function updateRentalStatus(req, res) {
 
     await rental.save();
     await syncProductAvailabilityByCapacity(rental.productId);
+
+    try {
+      await sendNotificationEmail({
+        email: rental.customerEmail || rental.email || '',
+        type: 'rental',
+        status,
+        name: rental.customerName || '',
+        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+        date: rental.pickupScheduleDate
+          ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
+          : '',
+        time: rental.pickupScheduleTime || '',
+        location: rental.branch || '',
+      });
+    } catch (notificationError) {
+      console.error('rental status notification error:', notificationError);
+    }
 
     const normalizedReferenceId = String(rental.referenceId || '')
       .toUpperCase()
