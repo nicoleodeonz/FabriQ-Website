@@ -52,7 +52,7 @@ function getNotificationSubject(type, status) {
     if (normalizedStatus === 'pending') return 'Rental Request Received';
     if (normalizedStatus === 'for_payment') return 'Rental Payment Required';
     if (normalizedStatus === 'paid_for_confirmation') return 'Rental Payment Under Review';
-    if (normalizedStatus === 'for_pickup') return 'Rental Ready for Pickup';
+    if (normalizedStatus === 'for_pickup') return 'Rental Payment Confirmed';
     if (normalizedStatus === 'active') return 'Rental Active';
     if (normalizedStatus === 'completed') return 'Rental Completed';
     if (normalizedStatus === 'cancelled') return 'Rental Cancelled';
@@ -93,8 +93,8 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign) {
   if (normalizedType === 'rental') {
     if (normalizedStatus === 'pending') return `Your rental request for ${itemLabel} is pending review. Please wait for the next update from our team.`;
     if (normalizedStatus === 'for_payment') return `Your rental for ${itemLabel} is now awaiting payment. Please complete the required payment so we can proceed with your booking.`;
-    if (normalizedStatus === 'paid_for_confirmation') return `We received your payment submission for ${itemLabel}. Please wait while we review and confirm your rental.`;
-    if (normalizedStatus === 'for_pickup') return `Your rental for ${itemLabel} is ready for pickup. Please prepare for collection and contact us if you need any changes.`;
+    if (normalizedStatus === 'paid_for_confirmation') return `We received your payment submission for ${itemLabel}. Your payment is awaiting confirmation before proceeding to the next step.`;
+    if (normalizedStatus === 'for_pickup') return `Your payment is confirmed for ${itemLabel}. Please set the scheduled time for the pickup of the rented item.`;
     if (normalizedStatus === 'active') return `Your rental for ${itemLabel} is currently active. Please keep the item in good condition and return it on time.`;
     if (normalizedStatus === 'completed') return `Your rental for ${itemLabel} has been completed. Thank you for choosing our service.`;
     if (normalizedStatus === 'cancelled') return `Your rental for ${itemLabel} has been cancelled. Please contact us if you need help with a new booking.`;

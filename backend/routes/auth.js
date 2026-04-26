@@ -15,6 +15,13 @@ import { authenticate } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
+function methodNotAllowed(res, allowedMethod) {
+	return res.status(405).json({
+		message: `Use ${allowedMethod} ${res.req.baseUrl}${res.req.path} for this endpoint.`,
+	});
+}
+
+router.get('/signup', (req, res) => methodNotAllowed(res, 'POST'));
 router.post('/signup', signUp);
 router.post('/signup/verify', verifySignUp);
 router.post('/login', login);

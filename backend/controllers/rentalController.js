@@ -302,7 +302,7 @@ export async function submitRentalPayment(req, res) {
     await rental.save();
 
     try {
-      await sendNotificationEmail({
+      const deliveryResult = await sendNotificationEmail({
         email: rental.customerEmail || rental.email || '',
         type: 'rental',
         status: rental.status,
@@ -310,6 +310,10 @@ export async function submitRentalPayment(req, res) {
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
         location: rental.branch || '',
       });
+
+      if (!deliveryResult?.delivered) {
+        console.warn('rental payment notification not delivered:', deliveryResult);
+      }
     } catch (notificationError) {
       console.error('rental payment notification error:', notificationError);
     }
