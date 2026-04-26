@@ -20,8 +20,14 @@ function getErrorMessage(fallback: string, body: any | null): string {
 
 export type NotificationType = 'rental' | 'appointment' | 'bespoke';
 
+export interface SendNotificationPayload {
+  type: NotificationType;
+  recordId: string;
+  messageBody?: string;
+}
+
 export const notificationAPI = {
-  sendNotification: async (token: string, payload: { type: NotificationType; recordId: string }) => {
+  sendNotification: async (token: string, payload: SendNotificationPayload) => {
     const response = await fetch(`${API_BASE_URL}/notifications/send`, {
       method: 'POST',
       headers: {

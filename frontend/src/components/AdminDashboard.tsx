@@ -2118,6 +2118,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       await notificationAPI.sendNotification(token, {
         type: 'rental',
         recordId: selectedRental.id,
+        messageBody: reminderMessage,
       });
 
       setIsSendReminderConfirmOpen(false);

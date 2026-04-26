@@ -62,8 +62,9 @@ function getRentalNotificationStatus(rental) {
   return status;
 }
 
-async function buildNotificationInput(type, recordId) {
+async function buildNotificationInput(type, recordId, options = {}) {
   const normalizedType = String(type || '').trim().toLowerCase();
+  const messageBody = String(options.messageBody || '').trim();
 
   if (normalizedType === 'rental') {
     const rental = await RentalDetail.findById(recordId).lean();
@@ -90,6 +91,7 @@ async function buildNotificationInput(type, recordId) {
         status,
         name: rental.customerName || '',
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+        messageBody,
         date: status === 'for_pickup' ? pickupDate || formatDateOnly(rental.startDate) : formatDateOnly(rental.endDate),
         time: status === 'for_pickup' ? String(rental.pickupScheduleTime || '').trim() : '',
         location: String(rental.branch || '').trim(),
@@ -118,6 +120,7 @@ async function buildNotificationInput(type, recordId) {
         status: String(appointment.status || ''),
         name: appointment.customerName || '',
         itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
+        messageBody,
         date: formatDateOnly(appointment.date),
         time: String(appointment.time || '').trim(),
         location: String(appointment.branch || '').trim(),
@@ -159,6 +162,7 @@ async function buildNotificationInput(type, recordId) {
         status,
         name: order.customerName || '',
         itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+        messageBody,
         date,
         time,
         location: String(order.branch || '').trim(),
@@ -177,12 +181,13 @@ export async function sendServiceNotification(req, res) {
 
     const type = String(req.body?.type || '').trim().toLowerCase();
     const recordId = String(req.body?.recordId || '').trim();
+    const messageBody = String(req.body?.messageBody || '').trim();
 
     if (!type || !recordId) {
       return res.status(400).json({ message: 'type and recordId are required.' });
     }
 
-    const notificationInput = await buildNotificationInput(type, recordId);
+    const notificationInput = await buildNotificationInput(type, recordId, { messageBody });
     if (!notificationInput) {
       return res.status(404).json({ message: 'Notification target not found.' });
     }

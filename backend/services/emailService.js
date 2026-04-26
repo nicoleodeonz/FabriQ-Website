@@ -125,9 +125,11 @@ export function buildNotificationEmailPayload({
   location,
   businessName,
   contactInfo,
+  messageBody,
 }) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
+  const normalizedMessageBody = String(messageBody || '').trim();
   const detailsLabel = normalizedType === 'appointment'
     ? 'Service'
     : normalizedType === 'bespoke'
@@ -140,7 +142,7 @@ export function buildNotificationEmailPayload({
   return {
     subject: getNotificationSubject(normalizedType, status),
     name: String(name || '').trim() || 'Customer',
-    message_body: getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign),
+    message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign),
     details: detailsValue,
     date: String(date || '').trim(),
     time: String(time || '').trim(),
@@ -316,6 +318,7 @@ export async function sendNotificationEmail({
   location,
   businessName,
   contactInfo,
+  messageBody,
 }) {
   const configStatus = ensureEmailConfig('notification');
 
@@ -342,6 +345,7 @@ export async function sendNotificationEmail({
     location,
     businessName,
     contactInfo,
+    messageBody,
   });
 
   const templateParams = {

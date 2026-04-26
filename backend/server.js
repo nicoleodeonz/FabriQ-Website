@@ -19,11 +19,29 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Parse CORS origins from environment variable
-const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:3001,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:3001,http://[::1]:3000,http://[::1]:3001')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const defaultCorsOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'http://[::1]:3000',
+  'http://[::1]:3001',
+  'https://hannahvanessa.com',
+  'https://www.hannahvanessa.com'
+];
+
+const corsOrigins = Array.from(
+  new Set(
+    [
+      ...defaultCorsOrigins,
+      ...String(process.env.CORS_ORIGIN || '')
+        .split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    ]
+  )
+);
 
 // Middleware
 app.use(cors({
