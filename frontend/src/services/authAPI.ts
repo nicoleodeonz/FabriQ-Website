@@ -33,15 +33,23 @@ const parseError = async (response: Response) => {
 
 export const authAPI = {
   signUp: async (payload: { firstName: string; lastName: string; email: string; password: string; phoneNumber?: string }) => {
-    const response = await fetch(`${API_BASE_URL}/auth/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      throw new Error(await parseError(response));
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await parseError(response));
+      }
+      return (await response.json()) as PendingAuthResponse;
+    } catch (error) {
+      if (error instanceof TypeError) {
+        throw new Error('Unable to reach the signup service. Check the API URL and backend deployment.');
+      }
+
+      throw error;
     }
-    return (await response.json()) as PendingAuthResponse;
   },
 
   verifySignUp: async (payload: { email: string; code: string }) => {
