@@ -95,6 +95,7 @@ const INVENTORY_PREVIEW_DELAY_MS = 2000;
 const INVENTORY_PAGE_SIZE = 9;
 const APPOINTMENT_PAGE_SIZE = 3;
 const RENTAL_PAGE_SIZE = 5;
+const RENTAL_LATE_FEE_PER_DAY = 200;
 const CUSTOM_ORDER_PAGE_SIZE = 4;
 const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
@@ -2048,7 +2049,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is currently awaiting payment. Please settle the required payment so we can proceed with the next step. Thank you!`
         : selectedRental.status === 'for-pickup'
           ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is ready for pickup. Please check your scheduled pickup details and coordinate with Hannah Vanessa Boutique if you need any changes. Thank you!`
-      : `Dear ${selectedRental.customer}, this is a friendly reminder that your rented gown '${selectedRental.gownName}' is due for return on ${selectedRental.dueDate}. ${selectedRental.daysLate > 0 ? `You currently have a late fee of ₱${(selectedRental.daysLate * 500).toLocaleString()}. ` : ''}Please return it to Hannah Vanessa Boutique at your earliest convenience. Thank you!`
+      : `Dear ${selectedRental.customer}, this is a friendly reminder that your rented gown '${selectedRental.gownName}' is due for return on ${selectedRental.dueDate}. ${selectedRental.daysLate > 0 ? `You currently have a late fee of ₱${(selectedRental.daysLate * RENTAL_LATE_FEE_PER_DAY).toLocaleString()}. ` : ''}Please return it to Hannah Vanessa Boutique at your earliest convenience. Thank you!`
     : '';
 
   // Notification Handler
@@ -2923,7 +2924,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             <div className="text-right">
                               <p className="text-xs text-[#6B5D4F] mb-1">Late Fee</p>
                               <p className="text-lg font-light text-red-600">
-                                ₱{(rental.daysLate * 500).toLocaleString()}
+                                ₱{(rental.daysLate * RENTAL_LATE_FEE_PER_DAY).toLocaleString()}
                               </p>
                             </div>
                           )}
@@ -5911,7 +5912,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     )}
                     {selectedRental.status === 'active' && selectedRental.daysLate > 0 && (
                       <p className="text-red-600 font-medium">
-                        {selectedRental.daysLate} {selectedRental.daysLate === 1 ? 'day' : 'days'} late • ₱{(selectedRental.daysLate * 500).toLocaleString()} late fee
+                        {selectedRental.daysLate} {selectedRental.daysLate === 1 ? 'day' : 'days'} late • ₱{(selectedRental.daysLate * RENTAL_LATE_FEE_PER_DAY).toLocaleString()} late fee
                       </p>
                     )}
                   </div>

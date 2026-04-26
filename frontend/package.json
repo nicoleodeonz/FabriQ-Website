@@ -59,6 +59,6 @@
       "scripts": {
             "dev": "vite",
             "build": "vite build",
-            "start": "serve -s dist -l $PORT"
+            "start": "serve -s build -l $PORT"
       }
 }

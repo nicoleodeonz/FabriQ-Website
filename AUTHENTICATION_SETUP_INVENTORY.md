@@ -92,9 +92,10 @@ This document describes the actual authentication implementation in this reposit
 
 ### `backend/services/emailService.js`
 - Server-side EmailJS integration through the EmailJS REST API.
-- Supports two template keys:
-  - `signup`
-  - `password-reset`
+- Uses one EmailJS template for both account verification and password reset emails.
+- Distinguishes content with a `purpose` template param:
+  - `account_verification`
+  - `password_reset`
 - Supports test mode by logging the outgoing code payload instead of sending email.
 
 ### `backend/models/Customer.js`
@@ -173,8 +174,7 @@ This document describes the actual authentication implementation in this reposit
   - `EMAILJS_TEST_MODE`
   - `EMAILJS_PUBLIC_KEY`
   - `EMAILJS_SERVICE_ID`
-  - `EMAILJS_SIGNUP_TEMPLATE_ID`
-  - `EMAILJS_RESET_TEMPLATE_ID`
+  - `EMAILJS_TEMPLATE_ID`
   - `EMAILJS_FROM_NAME`
   - `EMAIL_APP_NAME`
 
@@ -183,35 +183,23 @@ This document describes the actual authentication implementation in this reposit
 
 ## Email Templates
 
-The backend expects two EmailJS templates.
+The backend expects one EmailJS template.
 
-### Signup Verification Template
-- Environment variable: `EMAILJS_SIGNUP_TEMPLATE_ID`
+### Shared Verification Template
+- Environment variable: `EMAILJS_TEMPLATE_ID`
 - Supported template params:
   - `to_email`
   - `email`
-  - `code`
-  - `verification_code`
-  - `from_name`
+  - `purpose`
   - `subject`
-  - `app_name`
-  - `first_name`
-  - `last_name`
-  - `expiry_hours`
-
-### Password Reset Template
-- Environment variable: `EMAILJS_RESET_TEMPLATE_ID`
-- Supported template params:
-  - `to_email`
-  - `email`
+  - `message_body`
   - `code`
-  - `reset_code`
+  - `name`
+  - `business_name`
   - `from_name`
-  - `subject`
   - `app_name`
-  - `first_name`
-  - `last_name`
   - `expiry_minutes`
+  - `expiry_hours`
 
 ## Data Structures
 

@@ -6,6 +6,8 @@ import type { InventoryItem } from '../services/inventoryAPI';
 import { rentalAPI } from '../services/rentalAPI';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
+import { Calendar as DateCalendar } from './ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 interface Rental {
   id: string;
@@ -71,6 +73,8 @@ interface RentalInventoryItem {
 }
 
 const RENTAL_COLLECTION_PAGE_SIZE = 9;
+const RENTAL_HISTORY_PAGE_SIZE = 4;
+const RENTAL_AVAILABILITY_LOOKAHEAD_DAYS = 365;
 
 function normalizeBranch(branch?: string) {
   if (!branch) return 'Taguig Main';
@@ -98,6 +102,34 @@ function formatPhilippinePhoneNumber(value?: string) {
   return formatted.trim();
 }
 
+function parseDateOnly(value?: string | null) {
+  if (!value) return null;
+
+  const [year, month, day] = String(value).split('-').map(Number);
+  if (!year || !month || !day) return null;
+
+  const parsed = new Date(year, month - 1, day);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateOnly(value: Date) {
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, '0');
+  const day = `${value.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateLabel(value?: string) {
+  const parsed = parseDateOnly(value);
+  if (!parsed) return 'Select date';
+
+  return parsed.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -113,6 +145,11 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     date.setDate(date.getDate() + daysToAdd);
     return date.toLocaleDateString('en-CA');
   }, []);
+  const availabilityWindowEnd = useMemo(() => {
+    const endDate = parseDateOnly(tomorrow) || new Date();
+    endDate.setDate(endDate.getDate() + RENTAL_AVAILABILITY_LOOKAHEAD_DAYS);
+    return formatDateOnly(endDate);
+  }, [tomorrow]);
   const [formData, setFormData] = useState<RentalFormData>({
     gownId: '',
     startDate: '',
@@ -133,8 +170,15 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const [inventoryItems, setInventoryItems] = useState<RentalInventoryItem[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(true);
   const [inventoryError, setInventoryError] = useState('');
+  const [unavailableRentalDates, setUnavailableRentalDates] = useState<string[]>([]);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState('');
+  const [isStartDatePopoverOpen, setIsStartDatePopoverOpen] = useState(false);
+  const [isEndDatePopoverOpen, setIsEndDatePopoverOpen] = useState(false);
+  const [shouldAutoOpenEndDate, setShouldAutoOpenEndDate] = useState(false);
   const [selectedCollectionCategory, setSelectedCollectionCategory] = useState('All');
   const [collectionPage, setCollectionPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
   const [isBookingFormOpen, setIsBookingFormOpen] = useState(Boolean(selectedGownId));
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
   const [isMissingPhoneModalOpen, setIsMissingPhoneModalOpen] = useState(false);
@@ -285,7 +329,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
         if (!isMounted) return;
 
         const rentableItems = items
-          .filter((item) => item.status === 'available')
+          .filter((item) => item.status !== 'archived' && item.status !== 'maintenance')
           .map((item) => ({
             id: item.id,
             name: item.name,
@@ -324,6 +368,46 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (!formData.gownId) {
+      setUnavailableRentalDates([]);
+      setAvailabilityError('');
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadAvailability = async () => {
+      setAvailabilityLoading(true);
+      setAvailabilityError('');
+
+      try {
+        const availability = await rentalAPI.getAvailability(token, {
+          gownId: formData.gownId,
+          startDate: tomorrow,
+          endDate: availabilityWindowEnd,
+        });
+
+        if (!isMounted) return;
+        setUnavailableRentalDates(availability.unavailableDates);
+      } catch (error) {
+        if (!isMounted) return;
+        setUnavailableRentalDates([]);
+        setAvailabilityError(error instanceof Error ? error.message : 'Failed to load gown availability.');
+      } finally {
+        if (isMounted) {
+          setAvailabilityLoading(false);
+        }
+      }
+    };
+
+    void loadAvailability();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [availabilityWindowEnd, formData.gownId, token, tomorrow]);
+
   // Prefill gown when selectedGownId is provided
   useEffect(() => {
     if (selectedGownId) {
@@ -359,6 +443,32 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
       startDate: value,
       endDate: prev.endDate && prev.endDate < minimumEndDate ? '' : prev.endDate,
     }));
+
+    setIsStartDatePopoverOpen(false);
+    setShouldAutoOpenEndDate(Boolean(value));
+  };
+
+  useEffect(() => {
+    if (!shouldAutoOpenEndDate) return;
+    if (!formData.gownId || !formData.startDate || availabilityLoading) return;
+
+    const openTimer = window.setTimeout(() => {
+      setIsEndDatePopoverOpen(true);
+      setShouldAutoOpenEndDate(false);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(openTimer);
+    };
+  }, [availabilityLoading, formData.gownId, formData.startDate, shouldAutoOpenEndDate]);
+
+  const handleEndDatePopoverOpenChange = (open: boolean) => {
+    if (!formData.startDate || !formData.gownId || availabilityLoading) {
+      setIsEndDatePopoverOpen(false);
+      return;
+    }
+
+    setIsEndDatePopoverOpen(open);
   };
 
   const minimumEndDate = useMemo(() => {
@@ -367,6 +477,26 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     nextDay.setDate(nextDay.getDate() + 1);
     return nextDay.toLocaleDateString('en-CA');
   }, [formData.startDate, tomorrow]);
+
+  const unavailableDateSet = useMemo(() => new Set(unavailableRentalDates), [unavailableRentalDates]);
+  const firstUnavailableEndDate = useMemo(() => {
+    if (!formData.startDate) return null;
+
+    return unavailableRentalDates.find((value) => value >= minimumEndDate) || null;
+  }, [formData.startDate, minimumEndDate, unavailableRentalDates]);
+
+  const isStartDateDisabled = (date: Date) => {
+    const normalized = formatDateOnly(date);
+    return normalized < tomorrow || unavailableDateSet.has(normalized);
+  };
+
+  const isEndDateDisabled = (date: Date) => {
+    const normalized = formatDateOnly(date);
+    if (normalized < minimumEndDate) return true;
+    if (unavailableDateSet.has(normalized)) return true;
+    if (firstUnavailableEndDate && normalized >= firstUnavailableEndDate) return true;
+    return false;
+  };
 
   const selectedGown = useMemo(
     () => inventoryItems.find((item) => item.id === formData.gownId) ?? null,
@@ -419,6 +549,59 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     () => rentals.filter((rental) => rental.status === 'completed' || rental.status === 'cancelled'),
     [rentals]
   );
+  const totalHistoryPages = Math.max(1, Math.ceil(rentalHistory.length / RENTAL_HISTORY_PAGE_SIZE));
+  const safeHistoryPage = Math.min(historyPage, totalHistoryPages);
+  const paginatedRentalHistory = rentalHistory.slice(
+    (safeHistoryPage - 1) * RENTAL_HISTORY_PAGE_SIZE,
+    safeHistoryPage * RENTAL_HISTORY_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setHistoryPage(1);
+  }, [activeTab, rentalHistory.length]);
+
+  useEffect(() => {
+    setFormData((prev) => {
+      if (!prev.startDate && !prev.endDate) {
+        return prev;
+      }
+
+      const nextState = { ...prev };
+      let hasChanges = false;
+
+      if (prev.startDate && (prev.startDate < tomorrow || unavailableDateSet.has(prev.startDate))) {
+        nextState.startDate = '';
+        nextState.endDate = '';
+        hasChanges = true;
+      }
+
+      if (nextState.endDate) {
+        const startValue = nextState.startDate;
+        const nextMinimumEndDate = startValue
+          ? (() => {
+              const nextDay = new Date(startValue);
+              nextDay.setDate(nextDay.getDate() + 1);
+              return nextDay.toLocaleDateString('en-CA');
+            })()
+          : tomorrow;
+
+        const nextFirstUnavailableEndDate = startValue
+          ? unavailableRentalDates.find((value) => value >= nextMinimumEndDate) || null
+          : null;
+
+        if (
+          nextState.endDate < nextMinimumEndDate ||
+          unavailableDateSet.has(nextState.endDate) ||
+          (nextFirstUnavailableEndDate && nextState.endDate >= nextFirstUnavailableEndDate)
+        ) {
+          nextState.endDate = '';
+          hasChanges = true;
+        }
+      }
+
+      return hasChanges ? nextState : prev;
+    });
+  }, [tomorrow, unavailableDateSet, unavailableRentalDates]);
 
   useEffect(() => {
     if (!selectedGown) return;
@@ -550,8 +733,28 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     setActiveTab('existing');
   };
 
-  const changeCollectionPage = (nextPage: number) => {
+  const scrollPageToTop = () => {
+    const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+
+    window.requestAnimationFrame(() => {
+      scrollingElement.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  };
+
+  const changeCollectionPage = (nextPage: number, button?: HTMLButtonElement | null) => {
+    button?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     setCollectionPage(nextPage);
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollPageToTop();
+      });
+    });
   };
 
   const pickupTimeOptions = useMemo(() => ([
@@ -768,7 +971,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => changeCollectionPage(Math.max(1, safeCollectionPage - 1))}
+                      onClick={(event) => changeCollectionPage(Math.max(1, safeCollectionPage - 1), event.currentTarget)}
                       disabled={safeCollectionPage === 1}
                       className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -776,13 +979,25 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => changeCollectionPage(Math.min(totalCollectionPages, safeCollectionPage + 1))}
+                      onClick={(event) => changeCollectionPage(Math.min(totalCollectionPages, safeCollectionPage + 1), event.currentTarget)}
                       disabled={safeCollectionPage === totalCollectionPages}
                       className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Next
                     </button>
                   </div>
+                </div>
+              )}
+
+              {!inventoryLoading && !inventoryError && visibleCollectionItems.length > 0 && (
+                <div className="mt-8 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={scrollPageToTop}
+                    className="px-6 py-3 border border-[#E8DCC8] rounded-full text-sm text-[#6B5D4F] hover:border-[#1a1a1a] hover:text-black transition-colors"
+                  >
+                    Back to Top
+                  </button>
                 </div>
               )}
             </section>
@@ -873,7 +1088,14 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 <select
                   required
                   value={formData.gownId}
-                  onChange={(e) => updateField('gownId', e.target.value)}
+                  onChange={(e) => {
+                    updateField('gownId', e.target.value);
+                    setFormData((prev) => ({
+                      ...prev,
+                      startDate: '',
+                      endDate: '',
+                    }));
+                  }}
                   className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
                   aria-label="Gown selection"
                   disabled={inventoryLoading}
@@ -889,7 +1111,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 </select>
                 {!inventoryLoading && !inventoryError && inventoryItems.length === 0 && (
                   <p className="mt-2 text-sm text-[#6B5D4F]" role="status" aria-live="polite">
-                    No available gowns are currently listed in inventory management.
+                    No rentable gowns are currently listed in inventory management.
                   </p>
                 )}
               </div>
@@ -897,28 +1119,73 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm text-[#6B5D4F] mb-2">Start Date *</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.startDate}
-                    onChange={(e) => handleStartDateChange(e.target.value)}
-                    min={tomorrow}
-                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                  />
+                  <Popover open={isStartDatePopoverOpen} onOpenChange={setIsStartDatePopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] text-left focus:outline-none focus:border-[#D4AF37] transition-colors disabled:cursor-not-allowed disabled:bg-[#F7F1E7] disabled:text-[#9C8B7A]"
+                        disabled={!formData.gownId || availabilityLoading}
+                      >
+                        <span className={formData.startDate ? 'text-black' : 'text-[#8D7B68]'}>
+                          {availabilityLoading ? 'Loading availability...' : formatDateLabel(formData.startDate)}
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto border border-[#E8DCC8] bg-white p-0 opacity-100 shadow-xl" align="start">
+                      <DateCalendar
+                        className="rounded-md bg-white"
+                        mode="single"
+                        selected={parseDateOnly(formData.startDate) || undefined}
+                        onSelect={(date: Date | undefined) => {
+                          if (!date) return;
+                          handleStartDateChange(formatDateOnly(date));
+                        }}
+                        disabled={isStartDateDisabled}
+                        defaultMonth={parseDateOnly(formData.startDate) || parseDateOnly(tomorrow) || undefined}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <input type="hidden" name="startDate" value={formData.startDate} required />
                 </div>
                 
                 <div>
                   <label className="block text-sm text-[#6B5D4F] mb-2">End Date *</label>
-                  <input
-                    type="date"
-                    required
-                    value={formData.endDate}
-                    onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                    min={minimumEndDate}
-                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                  />
+                  <Popover open={isEndDatePopoverOpen} onOpenChange={handleEndDatePopoverOpenChange}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] text-left focus:outline-none focus:border-[#D4AF37] transition-colors disabled:cursor-not-allowed disabled:bg-[#F7F1E7] disabled:text-[#9C8B7A]"
+                        disabled={!formData.gownId || !formData.startDate || availabilityLoading}
+                      >
+                        <span className={formData.endDate ? 'text-black' : 'text-[#8D7B68]'}>
+                          {availabilityLoading ? 'Loading availability...' : formatDateLabel(formData.endDate)}
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto border border-[#E8DCC8] bg-white p-0 opacity-100 shadow-xl" align="start">
+                      <DateCalendar
+                        className="rounded-md bg-white"
+                        mode="single"
+                        selected={parseDateOnly(formData.endDate) || undefined}
+                        onSelect={(date: Date | undefined) => {
+                          if (!date) return;
+                          setFormData((prev) => ({ ...prev, endDate: formatDateOnly(date) }));
+                          setIsEndDatePopoverOpen(false);
+                        }}
+                        disabled={isEndDateDisabled}
+                        defaultMonth={parseDateOnly(formData.endDate) || parseDateOnly(minimumEndDate) || undefined}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  <input type="hidden" name="endDate" value={formData.endDate} required />
                 </div>
               </div>
+
+              {availabilityError && (
+                <div className="rounded-lg border border-[#E8DCC8] bg-[#FCFAF5] px-4 py-3 text-sm text-[#6B5D4F]">
+                  <p>{availabilityError}</p>
+                </div>
+              )}
 
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
@@ -1130,7 +1397,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
               </div>
             )}
 
-            {!rentalsLoading && rentalHistory.map((rental) => (
+            {!rentalsLoading && paginatedRentalHistory.map((rental) => (
               <div
                 key={rental.id}
                 className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors cursor-pointer"
@@ -1192,6 +1459,32 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 </div>
               </div>
             ))}
+
+            {!rentalsLoading && rentalHistory.length > RENTAL_HISTORY_PAGE_SIZE && (
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#E8DCC8] bg-white px-6 py-4">
+                <p className="text-sm text-[#6B5D4F] leading-none">
+                  Page {safeHistoryPage} of {totalHistoryPages}
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setHistoryPage(Math.max(1, safeHistoryPage - 1))}
+                    disabled={safeHistoryPage === 1}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryPage(Math.min(totalHistoryPages, safeHistoryPage + 1))}
+                    disabled={safeHistoryPage === totalHistoryPages}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
 
             {!rentalsLoading && rentalHistory.length === 0 && (
               <div className="text-center py-16 bg-white rounded-2xl border border-[#E8DCC8]">

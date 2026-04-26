@@ -552,8 +552,16 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
             {!isVerifyingSignUp && (
               <p className="text-sm text-[#6B5D4F] mt-6">
                 {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-                <button onClick={toggleMode} className="underline hover:text-black font-medium">
-                  {isSignUp ? 'Sign In' : 'Sign Up'}
+                <button
+                  onClick={toggleMode}
+                  className="hover:text-black font-medium"
+                >
+                  <span
+                    className="inline-block leading-none"
+                    style={{ boxShadow: 'inset 0 -0.08em 0 -0.03em currentColor' }}
+                  >
+                    {isSignUp ? 'Sign In' : 'Sign Up'}
+                  </span>
                 </button>
               </p>
             )}

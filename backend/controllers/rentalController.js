@@ -8,6 +8,12 @@ import { isElevatedRole } from '../utils/roles.js';
 const MILLISECONDS_PER_DAY = 1000 * 60 * 60 * 24;
 const RENTAL_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
 const NON_ACTIVE_RENTAL_STATUSES = ['cancelled', 'completed'];
+const RENTAL_AVAILABILITY_WINDOW_DAYS = 365;
+const EXPIRED_PENDING_RENTAL_REASON = 'Rental request was not approved in time.';
+
+function getRentalCapacity(stockValue) {
+  return Math.max(1, Number(stockValue || 0));
+}
 
 function buildAdminName(email) {
   const prefix = String(email || '').split('@')[0] || 'Admin';
@@ -83,20 +89,122 @@ async function countActiveRentalsForProduct(productId, excludedRentalId = null) 
   return RentalDetail.countDocuments(query);
 }
 
+async function countOverlappingActiveRentalsForProduct(productId, rangeStart, rangeEnd, excludedRentalId = null) {
+  const query = {
+    productId,
+    status: { $nin: NON_ACTIVE_RENTAL_STATUSES },
+    startDate: { $lte: rangeEnd },
+    endDate: { $gte: rangeStart },
+  };
+
+  if (excludedRentalId) {
+    query._id = { $ne: excludedRentalId };
+  }
+
+  return RentalDetail.countDocuments(query);
+}
+
+function formatDateOnly(date) {
+  return date instanceof Date ? date.toISOString().slice(0, 10) : null;
+}
+
+function buildDateRange(startDate, endDate) {
+  const dates = [];
+  const cursor = new Date(startDate.getTime());
+
+  while (cursor <= endDate) {
+    dates.push(new Date(cursor.getTime()));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
+async function getUnavailableDatesForProduct(productId, totalStock, rangeStart, rangeEnd) {
+  const overlappingRentals = await RentalDetail.find({
+    productId,
+    status: { $nin: NON_ACTIVE_RENTAL_STATUSES },
+    startDate: { $lte: rangeEnd },
+    endDate: { $gte: rangeStart },
+  })
+    .select('startDate endDate')
+    .lean();
+
+  const occupancyByDate = new Map();
+
+  overlappingRentals.forEach((rental) => {
+    const rentalStart = toDateOnly(rental.startDate);
+    const rentalEnd = toDateOnly(rental.endDate);
+    if (!rentalStart || !rentalEnd) {
+      return;
+    }
+
+    const effectiveStart = rentalStart > rangeStart ? rentalStart : rangeStart;
+    const effectiveEnd = rentalEnd < rangeEnd ? rentalEnd : rangeEnd;
+
+    buildDateRange(effectiveStart, effectiveEnd).forEach((date) => {
+      const key = formatDateOnly(date);
+      occupancyByDate.set(key, Number(occupancyByDate.get(key) || 0) + 1);
+    });
+  });
+
+  return Array.from(occupancyByDate.entries())
+    .filter(([, count]) => count >= totalStock)
+    .map(([date]) => date)
+    .sort();
+}
+
 async function syncProductAvailabilityByCapacity(productId) {
   const product = await ProductDetail.findById(productId);
   if (!product || product.status === 'archived' || product.status === 'maintenance') {
     return;
   }
 
-  const totalStock = Math.max(0, Number(product.stock || 0));
+  const totalStock = getRentalCapacity(product.stock);
   const activeRentalsCount = await countActiveRentalsForProduct(product._id);
-  const nextStatus = totalStock > 0 && activeRentalsCount < totalStock ? 'available' : 'rented';
+  const nextStatus = activeRentalsCount < totalStock ? 'available' : 'rented';
 
   if (product.status !== nextStatus) {
     product.status = nextStatus;
     await product.save();
   }
+}
+
+async function cancelExpiredPendingRentals() {
+  const today = toDateOnly(new Date());
+  if (!today) {
+    return;
+  }
+
+  const stalePendingRentals = await RentalDetail.find({
+    status: 'pending',
+    startDate: { $lt: today },
+  })
+    .select('_id productId')
+    .lean();
+
+  if (stalePendingRentals.length === 0) {
+    return;
+  }
+
+  const staleRentalIds = stalePendingRentals.map((rental) => rental._id);
+
+  await RentalDetail.updateMany(
+    { _id: { $in: staleRentalIds } },
+    {
+      $set: {
+        status: 'cancelled',
+        rejectionReason: EXPIRED_PENDING_RENTAL_REASON,
+        rejectedAt: new Date(),
+      },
+    },
+  );
+
+  const affectedProductIds = Array.from(
+    new Set(stalePendingRentals.map((rental) => String(rental.productId || '')).filter(Boolean)),
+  );
+
+  await Promise.all(affectedProductIds.map((productId) => syncProductAvailabilityByCapacity(productId)));
 }
 
 function mapRental(req, doc) {
@@ -212,6 +320,8 @@ export async function createRental(req, res) {
       return res.status(403).json({ message: 'Only customers can submit rentals.' });
     }
 
+    await cancelExpiredPendingRentals();
+
     const { gownId, startDate, endDate, branch, eventType } = req.body || {};
 
     if (!gownId || !startDate || !endDate || !branch || !eventType) {
@@ -237,15 +347,7 @@ export async function createRental(req, res) {
       return res.status(409).json({ message: 'Selected gown is currently under maintenance.' });
     }
 
-    const totalStock = Math.max(0, Number(product.stock || 0));
-    if (totalStock === 0) {
-      return res.status(409).json({ message: 'Selected gown is out of stock.' });
-    }
-
-    const activeRentalsCount = await countActiveRentalsForProduct(product._id);
-    if (activeRentalsCount >= totalStock) {
-      return res.status(409).json({ message: 'Selected gown is no longer available.' });
-    }
+    const totalStock = getRentalCapacity(product.stock);
 
     const start = toDateOnly(startDate);
     const end = toDateOnly(endDate);
@@ -255,6 +357,11 @@ export async function createRental(req, res) {
 
     if (end <= start) {
       return res.status(400).json({ message: 'End date must be after start date.' });
+    }
+
+    const overlappingRentalsCount = await countOverlappingActiveRentalsForProduct(product._id, start, end);
+    if (overlappingRentalsCount >= totalStock) {
+      return res.status(409).json({ message: 'Selected gown is unavailable for the chosen rental dates.' });
     }
 
     const durationDays = Math.floor((end.getTime() - start.getTime()) / MILLISECONDS_PER_DAY) + 1;
@@ -293,6 +400,8 @@ export async function createRental(req, res) {
 
 export async function getMyRentals(req, res) {
   try {
+    await cancelExpiredPendingRentals();
+
     const rentals = await RentalDetail.find({ customerId: req.user.id })
       .sort({ createdAt: -1 })
       .lean();
@@ -399,6 +508,8 @@ export async function getAdminRentals(req, res) {
       return res.status(403).json({ message: 'Admin access required.' });
     }
 
+    await cancelExpiredPendingRentals();
+
     const rentals = await RentalDetail.find({})
       .sort({ createdAt: -1 })
       .lean();
@@ -411,5 +522,57 @@ export async function getAdminRentals(req, res) {
   } catch (error) {
     console.error('getAdminRentals error:', error);
     return res.status(500).json({ message: 'Failed to fetch admin rentals.' });
+  }
+}
+
+export async function getRentalAvailability(req, res) {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can check rental availability.' });
+    }
+
+    await cancelExpiredPendingRentals();
+
+    const gownId = String(req.query?.gownId || '').trim();
+    const requestedStart = typeof req.query?.startDate === 'string' ? req.query.startDate : '';
+    const requestedEnd = typeof req.query?.endDate === 'string' ? req.query.endDate : '';
+
+    if (!gownId) {
+      return res.status(400).json({ message: 'gownId is required.' });
+    }
+
+    const today = toDateOnly(new Date());
+    const fallbackStart = today ? new Date(today.getTime()) : new Date();
+    const fallbackEnd = new Date(fallbackStart.getTime());
+    fallbackEnd.setUTCDate(fallbackEnd.getUTCDate() + RENTAL_AVAILABILITY_WINDOW_DAYS);
+
+    const rangeStart = toDateOnly(requestedStart) || fallbackStart;
+    const rangeEnd = toDateOnly(requestedEnd) || fallbackEnd;
+
+    if (!rangeStart || !rangeEnd || rangeEnd < rangeStart) {
+      return res.status(400).json({ message: 'Invalid availability date range.' });
+    }
+
+    const product = await ProductDetail.findById(gownId).select('_id status stock').lean();
+    if (!product || product.status === 'archived') {
+      return res.status(404).json({ message: 'Selected gown not found.' });
+    }
+
+    if (product.status === 'maintenance') {
+      return res.status(409).json({ message: 'Selected gown is currently under maintenance.' });
+    }
+
+    const totalStock = getRentalCapacity(product.stock);
+    const unavailableDates = await getUnavailableDatesForProduct(product._id, totalStock, rangeStart, rangeEnd);
+
+    return res.json({
+      unavailableDates,
+      stock: totalStock,
+      startDate: formatDateOnly(rangeStart),
+      endDate: formatDateOnly(rangeEnd),
+    });
+  } catch (error) {
+    console.error('getRentalAvailability error:', error);
+    return res.status(500).json({ message: 'Failed to load rental availability.' });
   }
 }

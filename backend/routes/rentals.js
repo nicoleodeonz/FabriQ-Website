@@ -2,10 +2,11 @@ import express from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/authMiddleware.js';
 import { upload } from '../config/upload.js';
-import { createRental, getAdminRentals, getMyRentals, scheduleRentalPickup, submitRentalPayment, updateRentalStatus } from '../controllers/rentalController.js';
+import { createRental, getAdminRentals, getMyRentals, getRentalAvailability, scheduleRentalPickup, submitRentalPayment, updateRentalStatus } from '../controllers/rentalController.js';
 
 const router = express.Router();
 
+router.get('/availability', authenticate, getRentalAvailability);
 router.get('/mine', authenticate, getMyRentals);
 router.get('/admin', authenticate, getAdminRentals);
 router.post('/', authenticate, createRental);

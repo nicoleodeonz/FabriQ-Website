@@ -51,6 +51,19 @@ function normalizeProductResponse(req, product) {
   return plainProduct;
 }
 
+function normalizePublicProductResponse(req, product) {
+  const normalizedProduct = normalizeProductResponse(req, product);
+  if (!normalizedProduct) {
+    return normalizedProduct;
+  }
+
+  if (normalizedProduct.status === 'rented') {
+    normalizedProduct.status = 'available';
+  }
+
+  return normalizedProduct;
+}
+
 function computeBranchPerformance(items, branchName) {
   const totalProducts = items.length;
   const totalStockUnits = items.reduce((sum, item) => sum + (item.stock ?? 0), 0);
@@ -205,7 +218,7 @@ export async function getPublicInventory(req, res) {
     const items = await ProductDetail.find({ status: { $ne: 'archived' } })
       .sort({ createdAt: -1 })
       .lean();
-    const mapped = items.map((item) => normalizeProductResponse(req, item));
+    const mapped = items.map((item) => normalizePublicProductResponse(req, item));
     res.json({ items: mapped });
   } catch (err) {
     console.error('getPublicInventory error:', err);

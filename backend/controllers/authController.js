@@ -243,10 +243,9 @@ export const signUp = async (req, res) => {
 
     const codeDeliveryResult = await sendVerificationCodeEmail({
       email: normalizedEmail,
+      name: `${customerAccount.firstName} ${customerAccount.lastName}`,
       code: signupCode,
-      templateKey: 'signup',
-      firstName: customerAccount.firstName,
-      lastName: customerAccount.lastName,
+      purpose: 'account_verification',
       expiresInHours: 24,
     });
 
@@ -559,10 +558,9 @@ export const requestPasswordReset = async (req, res) => {
 
       const codeDeliveryResult = await sendVerificationCodeEmail({
         email: normalizedEmail,
+        name: `${account.firstName || ''} ${account.lastName || ''}`,
         code: resetCode,
-        templateKey: 'password-reset',
-        firstName: account.firstName || '',
-        lastName: account.lastName || '',
+        purpose: 'password_reset',
         expiresInMinutes: 15,
       });
 

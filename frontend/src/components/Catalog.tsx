@@ -175,8 +175,28 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
     navigateWithGown('rentals', gownId);
   };
 
-  const changePage = (nextPage: number) => {
+  const scrollPageToTop = () => {
+    const scrollingElement = document.scrollingElement || document.documentElement || document.body;
+
+    window.requestAnimationFrame(() => {
+      scrollingElement.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  };
+
+  const changePage = (nextPage: number, button?: HTMLButtonElement | null) => {
+    button?.blur();
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     setCurrentPage(nextPage);
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollPageToTop();
+      });
+    });
   };
 
   return (
@@ -349,7 +369,7 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => changePage(Math.max(1, safeCurrentPage - 1))}
+                onClick={(event) => changePage(Math.max(1, safeCurrentPage - 1), event.currentTarget)}
                 disabled={safeCurrentPage === 1}
                 className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -357,7 +377,7 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
               </button>
               <button
                 type="button"
-                onClick={() => changePage(Math.min(totalPages, safeCurrentPage + 1))}
+                onClick={(event) => changePage(Math.min(totalPages, safeCurrentPage + 1), event.currentTarget)}
                 disabled={safeCurrentPage === totalPages}
                 className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >

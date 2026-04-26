@@ -59,6 +59,19 @@ export interface SchedulePickupPayload {
   pickupTime: string;
 }
 
+export interface RentalAvailabilityParams {
+  gownId: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+export interface RentalAvailabilityResponse {
+  unavailableDates: string[];
+  stock: number;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 export interface AdminRentalDetail extends RentalDetail {
   customerName: string;
   customerEmail: string;
@@ -66,6 +79,32 @@ export interface AdminRentalDetail extends RentalDetail {
 }
 
 export const rentalAPI = {
+  getAvailability: async (token: string, params: RentalAvailabilityParams): Promise<RentalAvailabilityResponse> => {
+    const searchParams = new URLSearchParams();
+    searchParams.set('gownId', params.gownId);
+    if (params.startDate) searchParams.set('startDate', params.startDate);
+    if (params.endDate) searchParams.set('endDate', params.endDate);
+
+    const response = await fetch(`${API_BASE_URL}/rentals/availability?${searchParams.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const body = await parseJsonSafe(response);
+      throw new Error(getErrorMessage('Failed to fetch rental availability', body));
+    }
+
+    const data = await parseJsonSafe(response);
+    return {
+      unavailableDates: Array.isArray(data?.unavailableDates) ? data.unavailableDates : [],
+      stock: Number(data?.stock || 0),
+      startDate: typeof data?.startDate === 'string' ? data.startDate : null,
+      endDate: typeof data?.endDate === 'string' ? data.endDate : null,
+    };
+  },
+
   getMyRentals: async (token: string): Promise<RentalDetail[]> => {
     const response = await fetch(`${API_BASE_URL}/rentals/mine`, {
       headers: {
