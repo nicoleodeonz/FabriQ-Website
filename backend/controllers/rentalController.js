@@ -11,10 +11,6 @@ const NON_ACTIVE_RENTAL_STATUSES = ['cancelled', 'completed'];
 const RENTAL_AVAILABILITY_WINDOW_DAYS = 365;
 const EXPIRED_PENDING_RENTAL_REASON = 'Rental request was not approved in time.';
 
-function getRentalCapacity(stockValue) {
-  return Math.max(1, Number(stockValue || 0));
-}
-
 function buildAdminName(email) {
   const prefix = String(email || '').split('@')[0] || 'Admin';
   return prefix
@@ -120,7 +116,7 @@ function buildDateRange(startDate, endDate) {
   return dates;
 }
 
-async function getUnavailableDatesForProduct(productId, totalStock, rangeStart, rangeEnd) {
+async function getUnavailableDatesForProduct(productId, rangeStart, rangeEnd) {
   const overlappingRentals = await RentalDetail.find({
     productId,
     status: { $nin: NON_ACTIVE_RENTAL_STATUSES },
@@ -130,7 +126,7 @@ async function getUnavailableDatesForProduct(productId, totalStock, rangeStart, 
     .select('startDate endDate')
     .lean();
 
-  const occupancyByDate = new Map();
+  const unavailableDates = new Set();
 
   overlappingRentals.forEach((rental) => {
     const rentalStart = toDateOnly(rental.startDate);
@@ -143,14 +139,12 @@ async function getUnavailableDatesForProduct(productId, totalStock, rangeStart, 
     const effectiveEnd = rentalEnd < rangeEnd ? rentalEnd : rangeEnd;
 
     buildDateRange(effectiveStart, effectiveEnd).forEach((date) => {
-      const key = formatDateOnly(date);
-      occupancyByDate.set(key, Number(occupancyByDate.get(key) || 0) + 1);
+      unavailableDates.add(formatDateOnly(date));
     });
   });
 
-  return Array.from(occupancyByDate.entries())
-    .filter(([, count]) => count >= totalStock)
-    .map(([date]) => date)
+  return Array.from(unavailableDates)
+    .filter(Boolean)
     .sort();
 }
 
@@ -160,9 +154,8 @@ async function syncProductAvailabilityByCapacity(productId) {
     return;
   }
 
-  const totalStock = getRentalCapacity(product.stock);
   const activeRentalsCount = await countActiveRentalsForProduct(product._id);
-  const nextStatus = activeRentalsCount < totalStock ? 'available' : 'rented';
+  const nextStatus = activeRentalsCount === 0 ? 'available' : 'rented';
 
   if (product.status !== nextStatus) {
     product.status = nextStatus;
@@ -347,8 +340,6 @@ export async function createRental(req, res) {
       return res.status(409).json({ message: 'Selected gown is currently under maintenance.' });
     }
 
-    const totalStock = getRentalCapacity(product.stock);
-
     const start = toDateOnly(startDate);
     const end = toDateOnly(endDate);
     if (!start || !end) {
@@ -360,7 +351,7 @@ export async function createRental(req, res) {
     }
 
     const overlappingRentalsCount = await countOverlappingActiveRentalsForProduct(product._id, start, end);
-    if (overlappingRentalsCount >= totalStock) {
+    if (overlappingRentalsCount > 0) {
       return res.status(409).json({ message: 'Selected gown is unavailable for the chosen rental dates.' });
     }
 
@@ -553,7 +544,7 @@ export async function getRentalAvailability(req, res) {
       return res.status(400).json({ message: 'Invalid availability date range.' });
     }
 
-    const product = await ProductDetail.findById(gownId).select('_id status stock').lean();
+    const product = await ProductDetail.findById(gownId).select('_id status').lean();
     if (!product || product.status === 'archived') {
       return res.status(404).json({ message: 'Selected gown not found.' });
     }
@@ -562,12 +553,10 @@ export async function getRentalAvailability(req, res) {
       return res.status(409).json({ message: 'Selected gown is currently under maintenance.' });
     }
 
-    const totalStock = getRentalCapacity(product.stock);
-    const unavailableDates = await getUnavailableDatesForProduct(product._id, totalStock, rangeStart, rangeEnd);
+    const unavailableDates = await getUnavailableDatesForProduct(product._id, rangeStart, rangeEnd);
 
     return res.json({
       unavailableDates,
-      stock: totalStock,
       startDate: formatDateOnly(rangeStart),
       endDate: formatDateOnly(rangeEnd),
     });

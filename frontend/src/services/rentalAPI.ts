@@ -67,7 +67,6 @@ export interface RentalAvailabilityParams {
 
 export interface RentalAvailabilityResponse {
   unavailableDates: string[];
-  stock: number;
   startDate: string | null;
   endDate: string | null;
 }
@@ -99,7 +98,6 @@ export const rentalAPI = {
     const data = await parseJsonSafe(response);
     return {
       unavailableDates: Array.isArray(data?.unavailableDates) ? data.unavailableDates : [],
-      stock: Number(data?.stock || 0),
       startDate: typeof data?.startDate === 'string' ? data.startDate : null,
       endDate: typeof data?.endDate === 'string' ? data.endDate : null,
     };
