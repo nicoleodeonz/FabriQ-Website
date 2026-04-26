@@ -241,13 +241,21 @@ export const signUp = async (req, res) => {
 
     await customerAccount.save();
 
-    const codeDeliveryResult = await sendVerificationCodeEmail({
-      email: normalizedEmail,
-      name: `${customerAccount.firstName} ${customerAccount.lastName}`,
-      code: signupCode,
-      purpose: 'account_verification',
-      expiresInHours: 24,
-    });
+    let codeDeliveryResult;
+    try {
+      codeDeliveryResult = await sendVerificationCodeEmail({
+        email: normalizedEmail,
+        name: `${customerAccount.firstName} ${customerAccount.lastName}`,
+        code: signupCode,
+        purpose: 'account_verification',
+        expiresInHours: 24,
+      });
+    } catch (deliveryError) {
+      console.error('Signup verification email delivery error:', deliveryError);
+      return res.status(503).json({
+        message: 'Unable to send the verification email right now. Please try again in a moment.',
+      });
+    }
 
     res.status(200).json({
       message: buildCodeDeliveryMessage(
