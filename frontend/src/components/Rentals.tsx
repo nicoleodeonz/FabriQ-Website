@@ -13,6 +13,7 @@ interface Rental {
   id: string;
   referenceId?: string;
   gownName: string;
+  gownImage?: string | null;
   sku?: string;
   startDate: string;
   endDate: string;
@@ -73,6 +74,7 @@ interface RentalInventoryItem {
 }
 
 const RENTAL_COLLECTION_PAGE_SIZE = 9;
+const MY_RENTALS_PAGE_SIZE = 5;
 const RENTAL_HISTORY_PAGE_SIZE = 4;
 const RENTAL_AVAILABILITY_LOOKAHEAD_DAYS = 365;
 
@@ -186,6 +188,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const [shouldAutoOpenEndDate, setShouldAutoOpenEndDate] = useState(false);
   const [selectedCollectionCategory, setSelectedCollectionCategory] = useState('All');
   const [collectionPage, setCollectionPage] = useState(1);
+  const [myRentalsPage, setMyRentalsPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
   const [isBookingFormOpen, setIsBookingFormOpen] = useState(Boolean(selectedGownId));
   const [isSubmitConfirmOpen, setIsSubmitConfirmOpen] = useState(false);
@@ -289,6 +292,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             id: rental.id,
             referenceId: rental.referenceId ?? rental.id,
             gownName: rental.gownName,
+            gownImage: rental.gownImage,
             sku: rental.sku,
             startDate: rental.startDate,
             endDate: rental.endDate,
@@ -549,6 +553,12 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     () => rentals.filter((rental) => rental.status !== 'completed' && rental.status !== 'cancelled'),
     [rentals]
   );
+  const totalMyRentalsPages = Math.max(1, Math.ceil(currentRentals.length / MY_RENTALS_PAGE_SIZE));
+  const safeMyRentalsPage = Math.min(myRentalsPage, totalMyRentalsPages);
+  const paginatedCurrentRentals = currentRentals.slice(
+    (safeMyRentalsPage - 1) * MY_RENTALS_PAGE_SIZE,
+    safeMyRentalsPage * MY_RENTALS_PAGE_SIZE,
+  );
   const rentalHistory = useMemo(
     () => rentals.filter((rental) => rental.status === 'completed' || rental.status === 'cancelled'),
     [rentals]
@@ -559,6 +569,10 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     (safeHistoryPage - 1) * RENTAL_HISTORY_PAGE_SIZE,
     safeHistoryPage * RENTAL_HISTORY_PAGE_SIZE,
   );
+
+  useEffect(() => {
+    setMyRentalsPage(1);
+  }, [activeTab, currentRentals.length]);
 
   useEffect(() => {
     setHistoryPage(1);
@@ -1263,7 +1277,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
               </div>
             )}
 
-            {!rentalsLoading && currentRentals.map((rental) => (
+            {!rentalsLoading && paginatedCurrentRentals.map((rental) => (
               <div
                 key={rental.id}
                 className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors cursor-pointer"
@@ -1311,46 +1325,36 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                       </span>
                     </div>
                     
-                    <div className="grid md:grid-cols-3 gap-4 text-sm">
-                      <div className="flex items-center gap-2 text-[#6B5D4F]">
+                    <div className="flex flex-wrap items-center gap-6 text-sm text-[#6B5D4F]">
+                      <div className="flex items-center gap-2">
                         <Calendar className="w-4 h-4" />
                         <span>{rental.startDate} - {rental.endDate}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[#6B5D4F]">
+                      <div className="flex items-center gap-2">
                         <MapPin className="w-4 h-4" />
                         <span>{rental.branch}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[#6B5D4F]">
-                        <div className="flex flex-col items-start gap-1">
-                          {rental.status === 'for_pickup' && (
-                            <button
-                              type="button"
-                              disabled={Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime)}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setPickupScheduleError('');
-                                setSelectedSchedulePickupRental(rental);
-                                setPickupScheduleTime(rental.pickupScheduleTime || '08:00');
-                                setIsSchedulePickupModalOpen(true);
-                              }}
-                              className="px-3 py-1 rounded-md border border-[#D4AF37] bg-[#FAF7F0] text-xs font-medium text-[#6B5D4F] hover:bg-[#F1E7D8] transition-colors disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-[#FAF7F0]"
-                            >
-                              {rental.pickupScheduleDate && rental.pickupScheduleTime ? 'Pickup Scheduled' : 'Schedule Pickup'}
-                            </button>
-                          )}
-                          {rental.status === 'for_pickup' && rental.pickupScheduleDate && (
-                            <span className="text-xs text-[#6B5D4F]">Date: {rental.pickupScheduleDate}</span>
-                          )}
-                          {rental.status === 'for_pickup' && rental.pickupScheduleTime && (
-                            <span className="text-xs text-[#6B5D4F]">Time: {pickupTimeOptions.find((option) => option.value === rental.pickupScheduleTime)?.label || rental.pickupScheduleTime}</span>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">Reference ID:</span>
-                            <span>{rental.referenceId || rental.id}</span>
-                          </div>
-                        </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Reference ID:</span>
+                        <span>{rental.referenceId || rental.id}</span>
                       </div>
+                      {rental.status === 'for_pickup' && !rental.pickupScheduleDate && !rental.pickupScheduleTime && (
+                        <div className="text-sm font-medium text-[#B86A6A]">
+                          Please schedule your pickup.
+                        </div>
+                      )}
+                      {rental.status === 'for_pickup' && rental.pickupScheduleDate && (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Date:</span>
+                          <span>{rental.pickupScheduleDate}</span>
+                        </div>
+                      )}
+                      {rental.status === 'for_pickup' && rental.pickupScheduleTime && (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Time:</span>
+                          <span>{pickupTimeOptions.find((option) => option.value === rental.pickupScheduleTime)?.label || rental.pickupScheduleTime}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1366,6 +1370,32 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 </div>
               </div>
             ))}
+
+            {!rentalsLoading && currentRentals.length > MY_RENTALS_PAGE_SIZE && (
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-white px-6 py-4">
+                <p className="text-sm text-[#6B5D4F] leading-none">
+                  Page {safeMyRentalsPage} of {totalMyRentalsPages}
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMyRentalsPage(Math.max(1, safeMyRentalsPage - 1))}
+                    disabled={safeMyRentalsPage === 1}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMyRentalsPage(Math.min(totalMyRentalsPages, safeMyRentalsPage + 1))}
+                    disabled={safeMyRentalsPage === totalMyRentalsPages}
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
 
             {!rentalsLoading && currentRentals.length === 0 && (
               <div className="text-center py-16 bg-white rounded-2xl border border-[#E8DCC8]">
@@ -1461,7 +1491,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             ))}
 
             {!rentalsLoading && rentalHistory.length > RENTAL_HISTORY_PAGE_SIZE && (
-              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#E8DCC8] bg-white px-6 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-white px-6 py-4">
                 <p className="text-sm text-[#6B5D4F] leading-none">
                   Page {safeHistoryPage} of {totalHistoryPages}
                 </p>
@@ -1506,7 +1536,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             }}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh]"
+              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between mb-6">
@@ -1588,7 +1618,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             }}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh]"
+              className="bg-white rounded-2xl p-8 max-w-md w-full h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-2xl font-light text-black mb-2">Confirm Pickup Schedule</h3>
@@ -1662,7 +1692,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             onClick={() => setIsRentalDetailsOpen(false)}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh]"
+              className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between mb-6">
@@ -1676,6 +1706,16 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                   <X className="w-5 h-5" />
                 </button>
               </div>
+
+              {selectedRentalDetails.gownImage && (
+                <div className="mb-6 overflow-hidden rounded-xl border border-[#E8DCC8] bg-[#FAF7F0]">
+                  <ImageWithFallback
+                    src={selectedRentalDetails.gownImage}
+                    alt={selectedRentalDetails.gownName}
+                    className="h-56 w-full object-cover"
+                  />
+                </div>
+              )}
 
               <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm">
                 <div className="flex justify-between gap-4">
@@ -1729,6 +1769,11 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                   <span className="text-[#6B5D4F]">Reference ID</span>
                   <span className="text-right font-medium text-black">{selectedRentalDetails.referenceId || selectedRentalDetails.id}</span>
                 </div>
+                {selectedRentalDetails.status === 'for_pickup' && !selectedRentalDetails.pickupScheduleDate && !selectedRentalDetails.pickupScheduleTime && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Please schedule your pickup.
+                  </div>
+                )}
                 {selectedRentalDetails.paymentSubmittedAt && (
                   <div className="flex justify-between gap-4">
                     <span className="text-[#6B5D4F]">Paid At</span>
@@ -1753,6 +1798,20 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                     <span className="text-right font-medium text-black">{selectedRentalDetails.paymentReceiptFilename}</span>
                   </div>
                 )}
+                {selectedRentalDetails.pickupScheduleDate && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[#6B5D4F]">Pickup Date</span>
+                    <span className="text-right font-medium text-black">{selectedRentalDetails.pickupScheduleDate}</span>
+                  </div>
+                )}
+                {selectedRentalDetails.pickupScheduleTime && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[#6B5D4F]">Pickup Time</span>
+                    <span className="text-right font-medium text-black">
+                      {pickupTimeOptions.find((option) => option.value === selectedRentalDetails.pickupScheduleTime)?.label || selectedRentalDetails.pickupScheduleTime}
+                    </span>
+                  </div>
+                )}
                 {selectedRentalDetails.status === 'cancelled' && selectedRentalDetails.rejectionReason && (
                   <div className="flex justify-between gap-4">
                     <span className="text-[#6B5D4F]">Rejection Reason</span>
@@ -1761,21 +1820,40 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectedRentalDetails.status === 'for_payment') {
-                    setSelectedPaymentRental(selectedRentalDetails);
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedRentalDetails.status === 'for_payment') {
+                      setSelectedPaymentRental(selectedRentalDetails);
+                      setIsRentalDetailsOpen(false);
+                      setIsPayNowConfirmOpen(true);
+                      return;
+                    }
                     setIsRentalDetailsOpen(false);
-                    setIsPayNowConfirmOpen(true);
-                    return;
-                  }
-                  setIsRentalDetailsOpen(false);
-                }}
-                className="mt-6 w-full py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
-              >
-                {selectedRentalDetails.status === 'for_payment' ? 'Pay now' : 'Close'}
-              </button>
+                  }}
+                  className="flex-1 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  {selectedRentalDetails.status === 'for_payment' ? 'Pay now' : 'Close'}
+                </button>
+
+                {selectedRentalDetails.status === 'for_pickup' && (
+                  <button
+                    type="button"
+                    disabled={Boolean(selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime)}
+                    onClick={() => {
+                      setPickupScheduleError('');
+                      setSelectedSchedulePickupRental(selectedRentalDetails);
+                      setPickupScheduleTime(selectedRentalDetails.pickupScheduleTime || '08:00');
+                      setIsRentalDetailsOpen(false);
+                      setIsSchedulePickupModalOpen(true);
+                    }}
+                    className="flex-1 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:text-black disabled:cursor-not-allowed disabled:bg-[#F1E7D8] disabled:text-[#8A7763]"
+                  >
+                    <span>{selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Pickup Scheduled' : 'Schedule Pickup'}</span>
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1841,7 +1919,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                         onClick={() => setIsPaymentInstructionsModalOpen(false)}
                       >
                         <div
-                          className="bg-white rounded-2xl p-8 max-w-md w-full max-h-[90vh]"
+                          className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div className="flex items-start justify-between mb-4">

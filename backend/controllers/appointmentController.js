@@ -368,6 +368,7 @@ export async function updateAppointmentStatus(req, res) {
           name: appointment.customerName || '',
           itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
           date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
+          dateType: 'Scheduled Date',
           time: appointment.time || '',
           location: appointment.branch || '',
         });

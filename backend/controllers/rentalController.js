@@ -201,8 +201,10 @@ async function cancelExpiredPendingRentals() {
   await Promise.all(affectedProductIds.map((productId) => syncProductAvailabilityByCapacity(productId)));
 }
 
-function mapRental(req, doc) {
+function mapRental(req, doc, options = {}) {
   const sourceId = doc._id || doc.id;
+  const gownImage = options.gownImage ?? doc.gownImage ?? '';
+
   return {
     ...doc,
     referenceId: doc.referenceId || buildFallbackReferenceId(sourceId),
@@ -211,7 +213,41 @@ function mapRental(req, doc) {
     paymentSubmittedAt: doc.paymentSubmittedAt ? new Date(doc.paymentSubmittedAt).toISOString() : null,
     pickupScheduleDate: doc.pickupScheduleDate ? new Date(doc.pickupScheduleDate).toISOString().slice(0, 10) : null,
     paymentReceiptUrl: toPublicUrl(req, doc.paymentReceiptUrl),
+    gownImage: toPublicUrl(req, gownImage),
   };
+}
+
+async function mapRentalWithProductImage(req, doc) {
+  const productId = String(doc?.productId || '').trim();
+  if (!productId) {
+    return mapRental(req, doc);
+  }
+
+  const product = await ProductDetail.findById(productId).select('image').lean();
+  return mapRental(req, doc, { gownImage: product?.image || '' });
+}
+
+async function mapRentalsWithProductImages(req, rentals) {
+  const normalizedRentals = rentals.map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }));
+  const productIds = Array.from(
+    new Set(
+      normalizedRentals
+        .map((rental) => String(rental.productId || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  const products = productIds.length > 0
+    ? await ProductDetail.find({ _id: { $in: productIds } }).select('_id image').lean()
+    : [];
+
+  const productImageMap = new Map(
+    products.map((product) => [String(product._id), product.image || ''])
+  );
+
+  return normalizedRentals.map((rental) =>
+    mapRental(req, rental, { gownImage: productImageMap.get(String(rental.productId || '')) || '' })
+  );
 }
 
 export async function scheduleRentalPickup(req, res) {
@@ -262,6 +298,7 @@ export async function scheduleRentalPickup(req, res) {
         date: rental.pickupScheduleDate
           ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
           : '',
+        dateType: 'Scheduled Date',
         time: rental.pickupScheduleTime || '',
         location: rental.branch || '',
       });
@@ -273,7 +310,7 @@ export async function scheduleRentalPickup(req, res) {
       console.error('rental pickup schedule notification error:', notificationError);
     }
 
-    return res.json({ rental: mapRental(req, rental.toJSON()) });
+    return res.json({ rental: await mapRentalWithProductImage(req, rental.toJSON()) });
   } catch (error) {
     console.error('scheduleRentalPickup error:', error);
     return res.status(500).json({ message: 'Failed to schedule pickup.' });
@@ -329,6 +366,7 @@ export async function submitRentalPayment(req, res) {
         status: rental.status,
         name: rental.customerName || '',
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+        dateType: 'Time Sent',
         location: rental.branch || '',
       });
 
@@ -339,7 +377,7 @@ export async function submitRentalPayment(req, res) {
       console.error('rental payment notification error:', notificationError);
     }
 
-    return res.json({ rental: mapRental(req, rental.toJSON()) });
+    return res.json({ rental: await mapRentalWithProductImage(req, rental.toJSON()) });
   } catch (error) {
     console.error('submitRentalPayment error:', error);
     return res.status(500).json({ message: 'Failed to submit payment.' });
@@ -421,7 +459,7 @@ export async function createRental(req, res) {
     await product.save();
     await syncProductAvailabilityByCapacity(product._id);
 
-    return res.status(201).json({ rental: mapRental(req, rental.toJSON()) });
+    return res.status(201).json({ rental: mapRental(req, rental.toJSON(), { gownImage: product.image || '' }) });
   } catch (error) {
     console.error('createRental error:', error);
     return res.status(500).json({ message: 'Failed to submit rental request.' });
@@ -436,9 +474,7 @@ export async function getMyRentals(req, res) {
       .sort({ createdAt: -1 })
       .lean();
 
-    const mapped = rentals
-      .map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }))
-      .map((row) => mapRental(req, row));
+    const mapped = await mapRentalsWithProductImages(req, rentals);
 
     return res.json({ rentals: mapped });
   } catch (error) {
@@ -512,6 +548,7 @@ export async function updateRentalStatus(req, res) {
         date: rental.pickupScheduleDate
           ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
           : '',
+        dateType: status === 'for_pickup' ? 'Scheduled Date' : 'Time Sent',
         time: rental.pickupScheduleTime || '',
         location: rental.branch || '',
       });
@@ -542,7 +579,7 @@ export async function updateRentalStatus(req, res) {
       },
     });
 
-    return res.json({ rental: mapRental(req, rental.toJSON()) });
+    return res.json({ rental: await mapRentalWithProductImage(req, rental.toJSON()) });
   } catch (error) {
     console.error('updateRentalStatus error:', error);
     return res.status(500).json({ message: 'Failed to update rental status.' });
@@ -561,9 +598,7 @@ export async function getAdminRentals(req, res) {
       .sort({ createdAt: -1 })
       .lean();
 
-    const mapped = rentals
-      .map(({ _id, __v, ...rest }) => ({ id: _id, ...rest }))
-      .map((row) => mapRental(req, row));
+    const mapped = await mapRentalsWithProductImages(req, rentals);
 
     return res.json({ rentals: mapped });
   } catch (error) {

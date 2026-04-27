@@ -93,6 +93,7 @@ async function buildNotificationInput(type, recordId, options = {}) {
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
         messageBody,
         date: status === 'for_pickup' ? pickupDate || formatDateOnly(rental.startDate) : formatDateOnly(rental.endDate),
+        dateType: status === 'for_pickup' ? 'Scheduled Date' : 'Time Sent',
         time: status === 'for_pickup' ? String(rental.pickupScheduleTime || '').trim() : '',
         location: String(rental.branch || '').trim(),
       },
@@ -122,6 +123,7 @@ async function buildNotificationInput(type, recordId, options = {}) {
         itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
         messageBody,
         date: formatDateOnly(appointment.date),
+        dateType: String(appointment.status || '').trim().toLowerCase() === 'scheduled' ? 'Scheduled Date' : 'Time Sent',
         time: String(appointment.time || '').trim(),
         location: String(appointment.branch || '').trim(),
       },
@@ -145,6 +147,13 @@ async function buildNotificationInput(type, recordId, options = {}) {
       : status === 'fitting'
         ? String(order.fittingTime || '').trim()
         : '';
+    const hasConsultationSchedule = Boolean(String(order.consultationDate || '').trim() || String(order.consultationTime || '').trim());
+    const hasFittingSchedule = Boolean(String(order.fittingDate || '').trim() || String(order.fittingTime || '').trim());
+    const dateType = status === 'design-approval' && hasConsultationSchedule
+      ? 'Scheduled Date'
+      : status === 'fitting-scheduled' && hasFittingSchedule
+        ? 'Scheduled Date'
+        : 'Time Sent';
 
     return {
       action: 'custom_order_notification_sent',
@@ -164,6 +173,7 @@ async function buildNotificationInput(type, recordId, options = {}) {
         itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
         messageBody,
         date,
+        dateType,
         time,
         location: String(order.branch || '').trim(),
       },

@@ -256,6 +256,7 @@ export const updateCustomOrderConsultationSchedule = async (req, res) => {
       name: order.customerName || '',
       itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
       date: String(order.consultationDate || '').trim(),
+      dateType: 'Scheduled Date',
       time: String(order.consultationTime || '').trim(),
       location: String(order.branch || '').trim(),
     }),
@@ -277,6 +278,7 @@ export const updateCustomOrderFittingSchedule = async (req, res) => {
       name: order.customerName || '',
       itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
       date: String(order.fittingDate || '').trim(),
+      dateType: 'Scheduled Date',
       time: String(order.fittingTime || '').trim(),
       location: String(order.branch || '').trim(),
     }),
@@ -372,6 +374,7 @@ export const updateCustomOrderStatus = async (req, res) => {
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
           date: String(order.consultationDate || order.eventDate || '').trim(),
+          dateType: String(order.consultationDate || order.consultationTime || '').trim() ? 'Scheduled Date' : 'Time Sent',
           time: String(order.consultationTime || '').trim(),
           location: String(order.branch || '').trim(),
         });
@@ -389,6 +392,7 @@ export const updateCustomOrderStatus = async (req, res) => {
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
           date: String(order.consultationDate || order.eventDate || '').trim(),
+          dateType: 'Time Sent',
           time: String(order.consultationTime || '').trim(),
           location: String(order.branch || '').trim(),
         });
@@ -406,6 +410,7 @@ export const updateCustomOrderStatus = async (req, res) => {
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
           date: String(order.eventDate || '').trim(),
+          dateType: 'Time Sent',
           time: '',
           location: String(order.branch || '').trim(),
         });
@@ -423,6 +428,7 @@ export const updateCustomOrderStatus = async (req, res) => {
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
           date: String(order.fittingDate || order.eventDate || '').trim(),
+          dateType: 'Time Sent',
           time: String(order.fittingTime || '').trim(),
           location: String(order.branch || '').trim(),
         });
@@ -492,6 +498,7 @@ export const archiveCustomOrder = async (req, res) => {
         name: order.customerName || '',
         itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
         date: now.toISOString().slice(0, 10),
+        dateType: 'Time Sent',
         time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         location: String(order.branch || '').trim(),
       });

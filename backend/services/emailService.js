@@ -35,6 +35,33 @@ function isOverdueRentalStatus(status) {
   return /(overdue|late|past return date)/i.test(String(status || ''));
 }
 
+function normalizeDateTypeLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'scheduled date' || normalized === 'scheduled_date' || normalized === 'scheduled-date') {
+    return 'Scheduled Date';
+  }
+  return 'Time Sent';
+}
+
+function getDefaultNotificationDateType(type, status) {
+  const normalizedType = String(type || '').trim().toLowerCase();
+  const normalizedStatus = normalizeStatus(status);
+
+  if (normalizedType === 'appointment' && normalizedStatus === 'scheduled') {
+    return 'Scheduled Date';
+  }
+
+  if (normalizedType === 'rental' && normalizedStatus === 'for_pickup') {
+    return 'Scheduled Date';
+  }
+
+  if (normalizedType === 'bespoke' && normalizedStatus === 'fitting-scheduled') {
+    return 'Scheduled Date';
+  }
+
+  return 'Time Sent';
+}
+
 function getNotificationSubject(type, status) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
@@ -121,6 +148,7 @@ export function buildNotificationEmailPayload({
   name,
   itemOrServiceOrDesign,
   date,
+  dateType,
   time,
   location,
   businessName,
@@ -145,6 +173,7 @@ export function buildNotificationEmailPayload({
     message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign),
     details: detailsValue,
     date: String(date || '').trim(),
+    date_type: normalizeDateTypeLabel(dateType || getDefaultNotificationDateType(normalizedType, normalizedStatus)),
     time: String(time || '').trim(),
     location: String(location || '').trim(),
     business_name: String(businessName || '').trim() || EMAILJS_CONFIG.appName,
@@ -314,6 +343,7 @@ export async function sendNotificationEmail({
   name,
   itemOrServiceOrDesign,
   date,
+  dateType,
   time,
   location,
   businessName,
@@ -341,6 +371,7 @@ export async function sendNotificationEmail({
     name,
     itemOrServiceOrDesign,
     date,
+    dateType,
     time,
     location,
     businessName,
@@ -358,6 +389,9 @@ export async function sendNotificationEmail({
     message_body: payload.message_body,
     details: payload.details,
     date: payload.date,
+    date_type: payload.date_type,
+    dateType: payload.date_type,
+    date_label: payload.date_type,
     time: payload.time,
     location: payload.location,
     business_name: payload.business_name,

@@ -30,6 +30,7 @@ export interface RentalDetail {
   id: string;
   referenceId?: string;
   gownName: string;
+  gownImage?: string | null;
   sku: string;
   startDate: string;
   endDate: string;

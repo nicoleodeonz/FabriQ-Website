@@ -51,7 +51,7 @@ function HeroSection({ setCurrentView, navigateProtected }: { setCurrentView: (v
               />
             </div>
             <div className="absolute -bottom-8 -left-8 bg-white p-6 shadow-xl max-w-xs">
-              <p className="text-sm text-[#6B5D4F] mb-2">Trusted by brides since 2015</p>
+              <p className="text-sm text-[#6B5D4F] mb-2">Trusted by brides since 1993</p>
               <p className="font-serif text-2xl">500+ Happy Clients</p>
             </div>
           </div>
