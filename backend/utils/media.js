@@ -7,6 +7,36 @@ export function buildRequestOrigin(req) {
   return host ? `${protocol}://${host}` : '';
 }
 
+function stripInternalPublicPort(rawUrl) {
+  const value = String(rawUrl || '').trim();
+  if (!value) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(value);
+    const currentPort = parsed.port;
+    const configuredPort = String(process.env.PORT || '').trim();
+
+    if (!currentPort) {
+      return parsed.toString().replace(/\/$/, '');
+    }
+
+    const isPublicHost = !isNonPublicHostname(parsed.hostname);
+    const isHttpDefault = parsed.protocol === 'http:' && currentPort === '80';
+    const isHttpsDefault = parsed.protocol === 'https:' && currentPort === '443';
+    const isInternalAppPort = currentPort === '5000' || (configuredPort && currentPort === configuredPort);
+
+    if (isPublicHost && (isHttpDefault || isHttpsDefault || isInternalAppPort)) {
+      parsed.port = '';
+    }
+
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return value.replace(/\/$/, '');
+  }
+}
+
 function isPrivateIpv4(hostname) {
   const match = String(hostname || '').trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!match) {
@@ -36,8 +66,8 @@ function isNonPublicHostname(hostname) {
 }
 
 export function getPublicBaseUrl(req) {
-  const configuredBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
-  const requestOrigin = buildRequestOrigin(req);
+  const configuredBaseUrl = stripInternalPublicPort(process.env.PUBLIC_BASE_URL || '');
+  const requestOrigin = stripInternalPublicPort(buildRequestOrigin(req));
 
   if (configuredBaseUrl) {
     if (requestOrigin) {
