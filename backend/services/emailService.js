@@ -35,6 +35,10 @@ function isOverdueRentalStatus(status) {
   return /(overdue|late|past return date)/i.test(String(status || ''));
 }
 
+function isScheduledDateType(value) {
+  return normalizeDateTypeLabel(value) === 'Scheduled Date';
+}
+
 function normalizeDateTypeLabel(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'scheduled date' || normalized === 'scheduled_date' || normalized === 'scheduled-date') {
@@ -57,8 +61,8 @@ function buildNotificationDateFields(dateType, date, time) {
 
   const now = new Date();
   return {
-    date: normalizedDate || now.toISOString().slice(0, 10),
-    time: normalizedTime || now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    date: now.toISOString().slice(0, 10),
+    time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
   };
 }
 
@@ -81,7 +85,7 @@ function getDefaultNotificationDateType(type, status) {
   return 'Time Sent';
 }
 
-function getNotificationSubject(type, status) {
+function getNotificationSubject(type, status, options = {}) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
 
@@ -98,7 +102,9 @@ function getNotificationSubject(type, status) {
     if (normalizedStatus === 'pending') return 'Rental Request Received';
     if (normalizedStatus === 'for_payment') return 'Rental Payment Required';
     if (normalizedStatus === 'paid_for_confirmation') return 'Rental Payment Under Review';
-    if (normalizedStatus === 'for_pickup') return 'Rental Payment Confirmed';
+    if (normalizedStatus === 'for_pickup') {
+      return isScheduledDateType(options.dateType) ? 'Rental Pickup Scheduled' : 'Rental Payment Confirmed';
+    }
     if (normalizedStatus === 'active') return 'Rental Active';
     if (normalizedStatus === 'completed') return 'Rental Completed';
     if (normalizedStatus === 'cancelled') return 'Rental Cancelled';
@@ -119,9 +125,10 @@ function getNotificationSubject(type, status) {
   return formatStatusLabel(status) || 'Notification Update';
 }
 
-function getNotificationMessageBody(type, status, itemOrServiceOrDesign) {
+function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options = {}) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
+  const normalizedDateType = normalizeDateTypeLabel(options.dateType);
   const itemLabel = String(itemOrServiceOrDesign || '').trim() || (normalizedType === 'appointment' ? 'your appointment' : normalizedType === 'bespoke' ? 'your bespoke order' : 'your rental');
 
   if (normalizedType === 'rental' && isOverdueRentalStatus(status)) {
@@ -140,7 +147,12 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign) {
     if (normalizedStatus === 'pending') return `Your rental request for ${itemLabel} is pending review. Please wait for the next update from our team.`;
     if (normalizedStatus === 'for_payment') return `Your rental for ${itemLabel} is now awaiting payment. Please complete the required payment so we can proceed with your booking.`;
     if (normalizedStatus === 'paid_for_confirmation') return `We received your payment submission for ${itemLabel}. Your payment is awaiting confirmation before proceeding to the next step.`;
-    if (normalizedStatus === 'for_pickup') return `Your payment is confirmed for ${itemLabel}. Please set the scheduled time for the pickup of the rented item.`;
+    if (normalizedStatus === 'for_pickup') {
+      if (normalizedDateType === 'Scheduled Date') {
+        return `Your pickup for ${itemLabel} has been scheduled successfully. Please review the scheduled date and time below and arrive on time for collection.`;
+      }
+      return `Your payment is confirmed for ${itemLabel}. Please set the scheduled time for the pickup of the rented item.`;
+    }
     if (normalizedStatus === 'active') return `Your rental for ${itemLabel} is currently active. Please keep the item in good condition and return it on time.`;
     if (normalizedStatus === 'completed') return `Your rental for ${itemLabel} has been completed. Thank you for choosing our service.`;
     if (normalizedStatus === 'cancelled') return `Your rental for ${itemLabel} has been cancelled. Please contact us if you need help with a new booking.`;
@@ -189,9 +201,13 @@ export function buildNotificationEmailPayload({
     : `${detailsLabel}: ${String(itemOrServiceOrDesign || '').trim() || 'N/A'}`;
 
   return {
-    subject: getNotificationSubject(normalizedType, status),
+    subject: getNotificationSubject(normalizedType, status, { dateType: resolvedDateType }),
     name: String(name || '').trim() || 'Customer',
-    message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign),
+    message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign, {
+      dateType: resolvedDateType,
+      date: dateFields.date,
+      time: dateFields.time,
+    }),
     details: detailsValue,
     date: dateFields.date,
     date_type: resolvedDateType,
