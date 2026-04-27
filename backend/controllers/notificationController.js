@@ -74,6 +74,7 @@ async function buildNotificationInput(type, recordId, options = {}) {
 
     const status = getRentalNotificationStatus(rental);
     const pickupDate = rental.pickupScheduleDate ? formatDateOnly(rental.pickupScheduleDate) : '';
+    const hasPickupSchedule = Boolean(pickupDate && String(rental.pickupScheduleTime || '').trim());
 
     return {
       action: 'rental_notification_sent',
@@ -93,7 +94,7 @@ async function buildNotificationInput(type, recordId, options = {}) {
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
         messageBody,
         date: status === 'for_pickup' ? pickupDate || formatDateOnly(rental.startDate) : formatDateOnly(rental.endDate),
-        dateType: status === 'for_pickup' ? 'Scheduled Date' : 'Time Sent',
+        dateType: status === 'for_pickup' && hasPickupSchedule ? 'Scheduled Date' : 'Time Sent',
         time: status === 'for_pickup' ? String(rental.pickupScheduleTime || '').trim() : '',
         location: String(rental.branch || '').trim(),
       },

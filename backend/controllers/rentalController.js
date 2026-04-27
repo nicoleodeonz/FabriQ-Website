@@ -541,6 +541,7 @@ export async function updateRentalStatus(req, res) {
     await syncProductAvailabilityByCapacity(rental.productId);
 
     try {
+      const hasPickupSchedule = Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);
       await sendNotificationEmail({
         email: rental.customerEmail || rental.email || '',
         type: 'rental',
@@ -550,7 +551,7 @@ export async function updateRentalStatus(req, res) {
         date: rental.pickupScheduleDate
           ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
           : '',
-        dateType: status === 'for_pickup' ? 'Scheduled Date' : 'Time Sent',
+        dateType: status === 'for_pickup' && hasPickupSchedule ? 'Scheduled Date' : 'Time Sent',
         time: rental.pickupScheduleTime || '',
         location: rental.branch || '',
       });

@@ -43,6 +43,25 @@ function normalizeDateTypeLabel(value) {
   return 'Time Sent';
 }
 
+function buildNotificationDateFields(dateType, date, time) {
+  const resolvedDateType = normalizeDateTypeLabel(dateType);
+  const normalizedDate = String(date || '').trim();
+  const normalizedTime = String(time || '').trim();
+
+  if (resolvedDateType === 'Scheduled Date') {
+    return {
+      date: normalizedDate,
+      time: normalizedTime,
+    };
+  }
+
+  const now = new Date();
+  return {
+    date: normalizedDate || now.toISOString().slice(0, 10),
+    time: normalizedTime || now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+  };
+}
+
 function getDefaultNotificationDateType(type, status) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
@@ -158,6 +177,8 @@ export function buildNotificationEmailPayload({
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
   const normalizedMessageBody = String(messageBody || '').trim();
+  const resolvedDateType = normalizeDateTypeLabel(dateType || getDefaultNotificationDateType(normalizedType, normalizedStatus));
+  const dateFields = buildNotificationDateFields(resolvedDateType, date, time);
   const detailsLabel = normalizedType === 'appointment'
     ? 'Service'
     : normalizedType === 'bespoke'
@@ -172,9 +193,9 @@ export function buildNotificationEmailPayload({
     name: String(name || '').trim() || 'Customer',
     message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign),
     details: detailsValue,
-    date: String(date || '').trim(),
-    date_type: normalizeDateTypeLabel(dateType || getDefaultNotificationDateType(normalizedType, normalizedStatus)),
-    time: String(time || '').trim(),
+    date: dateFields.date,
+    date_type: resolvedDateType,
+    time: dateFields.time,
     location: String(location || '').trim(),
     business_name: String(businessName || '').trim() || EMAILJS_CONFIG.appName,
     contact_info: String(contactInfo || '').trim() || EMAILJS_CONFIG.contactInfo,
