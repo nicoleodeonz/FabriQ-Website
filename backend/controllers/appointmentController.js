@@ -359,7 +359,7 @@ export async function updateAppointmentStatus(req, res) {
     appointment.cancellationReason = nextStatus === 'cancelled' ? reason : appointment.cancellationReason;
     await appointment.save();
 
-    if (nextStatus === 'scheduled') {
+    if (['scheduled', 'completed', 'cancelled'].includes(nextStatus)) {
       try {
         await sendNotificationEmail({
           email: appointment.customerEmail || appointment.email || '',
@@ -368,12 +368,12 @@ export async function updateAppointmentStatus(req, res) {
           name: appointment.customerName || '',
           itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
           date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
-          dateType: 'Scheduled Date',
+          dateType: nextStatus === 'scheduled' ? 'Scheduled Date' : 'Time Sent',
           time: appointment.time || '',
           location: appointment.branch || '',
         });
       } catch (notificationError) {
-        console.error('appointment approval notification error:', notificationError);
+        console.error('appointment status notification error:', notificationError);
       }
     }
 

@@ -3,6 +3,7 @@ import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
 import AdminAction from '../models/AdminAction.js';
 import { sendNotificationEmail } from '../services/emailService.js';
+import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
 
@@ -349,12 +350,13 @@ export async function submitRentalPayment(req, res) {
     }
 
     const paymentAmount = Math.max(0, Number(rental.totalPrice || 0) - Number(rental.downpayment || 0));
+    const storedReceipt = await storeUploadedImage(req.file, { folder: 'rentals/payment_receipts' });
 
     rental.paymentSubmittedAt = new Date();
     rental.paymentAmountPaid = paymentAmount;
     rental.paymentReferenceNumber = referenceId;
-    rental.paymentReceiptFilename = req.file.filename;
-    rental.paymentReceiptUrl = toPublicUrl(req, `/uploads/${req.file.filename}`);
+    rental.paymentReceiptFilename = String(req.file.originalname || req.file.filename || '').trim() || null;
+    rental.paymentReceiptUrl = storedReceipt.url;
     rental.status = 'paid_for_confirmation';
 
     await rental.save();
