@@ -2691,15 +2691,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
                     >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex-1">
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
                             <span className="px-3 py-1 bg-amber-100 text-amber-800 text-xs rounded-full font-medium">
                               Pending
                             </span>
                           </div>
-                          <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
+                          <div className="flex flex-wrap items-center gap-4 text-sm text-[#6B5D4F]">
                             <div className="flex items-center gap-2">
                               <Users className="w-4 h-4" />
                               <span>{rental.customerName}</span>
@@ -2710,7 +2710,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-3 lg:justify-end">
                           <div className="text-right">
                             <p className="text-sm text-[#6B5D4F] mb-1">Total Rental</p>
                             <p className="text-lg font-light">₱{rental.totalPrice.toLocaleString()}</p>
@@ -3006,7 +3006,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                                 status: 'active',
                               });
                             }}
-                            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap ${
                               rental.daysLate > 0
                                 ? 'bg-red-600 text-white hover:bg-red-700'
                                 : 'bg-[#D4AF37] text-white hover:bg-[#1a1a1a]'
@@ -3022,7 +3022,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                               setSelectedPendingRental(full);
                               setShowPendingRentalModal(true);
                             }}
-                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0]"
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0]"
                             title="View Rental Details"
                           >
                             <span className="text-sm">View Details</span>
