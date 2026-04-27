@@ -101,13 +101,13 @@ export function toPublicUrl(req, value) {
 
   if (/^(?:https?:)?\/\//i.test(rawValue)) {
     if (!baseUrl) {
-      return rawValue;
+      return stripInternalPublicPort(rawValue);
     }
 
     try {
       const currentUrl = new URL(rawValue);
       if (!isNonPublicHostname(currentUrl.hostname)) {
-        return rawValue;
+        return stripInternalPublicPort(rawValue);
       }
 
       const nextBase = new URL(baseUrl);
@@ -115,9 +115,9 @@ export function toPublicUrl(req, value) {
       currentUrl.username = nextBase.username;
       currentUrl.password = nextBase.password;
       currentUrl.host = nextBase.host;
-      return currentUrl.toString();
+      return stripInternalPublicPort(currentUrl.toString());
     } catch {
-      return rawValue;
+      return stripInternalPublicPort(rawValue);
     }
   }
 

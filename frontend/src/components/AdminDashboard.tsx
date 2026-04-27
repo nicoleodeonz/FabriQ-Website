@@ -15,6 +15,7 @@ import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
 import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
 import { notificationAPI } from '../services/notificationAPI';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 
 export type { InventoryItem };
 
@@ -4837,10 +4838,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             rel="noreferrer"
                             className="block"
                           >
-                            <img
+                            <ImageWithFallback
                               src={selectedPendingRental.paymentReceiptUrl}
                               alt="Payment receipt"
-                              className="w-full h-44 object-cover rounded-lg border border-[#E8DCC8]"
+                              className="w-full h-56 object-contain rounded-lg border border-[#E8DCC8] bg-[#FAF7F0]"
                             />
                           </a>
                         </div>

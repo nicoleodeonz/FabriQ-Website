@@ -11,7 +11,8 @@
     "seed:inventory": "node seedInventory.js",
     "reset": "node reset.js",
     "migrate:image-urls": "node migrate_image_urls.js",
-    "migrate:cloudinary-product-images": "node migrate_product_images_to_cloudinary.js"
+    "migrate:cloudinary-product-images": "node migrate_product_images_to_cloudinary.js",
+    "migrate:cloudinary-rental-receipts": "node migrate_rental_receipts_to_cloudinary.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
