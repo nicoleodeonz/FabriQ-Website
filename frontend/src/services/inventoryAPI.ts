@@ -3,6 +3,13 @@ import { buildApiUrl } from './apiConfig';
 const API_BASE = buildApiUrl('/inventory');
 export const INVENTORY_UPDATED_EVENT = 'inventory:updated';
 
+export interface InventoryRating {
+  reviewerName: string;
+  score: number;
+  comment?: string;
+  createdAt?: string;
+}
+
 export interface InventoryItem {
   id: string;
   sku: string;
@@ -17,6 +24,7 @@ export interface InventoryItem {
   description?: string;
   image?: string;
   rating?: number;
+  ratings?: InventoryRating[];
   stock?: number;
   deletedAt?: string | null;
   createdAt?: string;

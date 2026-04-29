@@ -156,6 +156,7 @@ function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
     branch: item.branch,
     image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
     rating: typeof item.rating === 'number' ? item.rating : 0,
+    ratings: Array.isArray(item.ratings) ? item.ratings : [],
   };
 }
 

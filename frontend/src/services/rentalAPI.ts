@@ -48,6 +48,23 @@ export interface RentalDetail {
   rejectedAt?: string | null;
   pickupScheduleDate?: string | null;
   pickupScheduleTime?: string | null;
+  hasReview?: boolean;
+  reviewSubmittedAt?: string | null;
+}
+
+export interface SubmitRentalReviewPayload {
+  score: number;
+  comment: string;
+}
+
+export interface SubmittedRentalReview {
+  id: string;
+  rentalId: string;
+  productId: string;
+  reviewerName: string;
+  score: number;
+  comment: string;
+  createdAt?: string | null;
 }
 
 export interface SubmitRentalPaymentPayload {
@@ -232,5 +249,32 @@ export const rentalAPI = {
       throw new Error('Failed to schedule pickup: empty server response.');
     }
     return data.rental;
+  },
+
+  submitReview: async (
+    token: string,
+    id: string,
+    payload: SubmitRentalReviewPayload
+  ): Promise<SubmittedRentalReview> => {
+    const response = await fetch(`${API_BASE_URL}/rentals/${id}/review`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const body = await parseJsonSafe(response);
+      throw new Error(getErrorMessage('Failed to submit review', body));
+    }
+
+    const data = await parseJsonSafe(response);
+    if (!data?.review) {
+      throw new Error('Failed to submit review: empty server response.');
+    }
+
+    return data.review;
   },
 };

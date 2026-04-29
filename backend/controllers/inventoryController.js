@@ -1,4 +1,5 @@
 import ProductDetail from '../models/ProductDetail.js';
+import Review from '../models/Review.js';
 import AdminAction from '../models/AdminAction.js';
 import RentalDetail from '../models/RentalDetail.js';
 import { toPublicUrl } from '../utils/media.js';
@@ -6,6 +7,34 @@ import { isElevatedRole } from '../utils/roles.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 
 const LOW_STOCK_THRESHOLD = 2;
+
+function normalizeRatingsInput(ratings) {
+  if (!Array.isArray(ratings)) {
+    return [];
+  }
+
+  return ratings
+    .map((entry) => ({
+      reviewerName: String(entry?.reviewerName || 'Anonymous Customer').trim() || 'Anonymous Customer',
+      score: Number(entry?.score),
+      comment: String(entry?.comment || '').trim(),
+      createdAt: entry?.createdAt || undefined,
+    }))
+    .filter((entry) => Number.isFinite(entry.score) && entry.score >= 1 && entry.score <= 5)
+    .map((entry) => ({
+      ...entry,
+      score: Number(entry.score),
+    }));
+}
+
+function computeAverageRating(ratings, fallbackRating = 0) {
+  if (!Array.isArray(ratings) || ratings.length === 0) {
+    return typeof fallbackRating === 'number' && Number.isFinite(fallbackRating) ? fallbackRating : 0;
+  }
+
+  const total = ratings.reduce((sum, entry) => sum + Number(entry.score || 0), 0);
+  return Number((total / ratings.length).toFixed(1));
+}
 
 function buildAdminName(email) {
   const prefix = String(email || '').split('@')[0] || 'Admin';
@@ -62,6 +91,51 @@ function normalizePublicProductResponse(req, product) {
   }
 
   return normalizedProduct;
+}
+
+async function applyReviewSnapshots(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return items;
+  }
+
+  const productIds = items
+    .map((item) => String(item.id || item._id || '').trim())
+    .filter(Boolean);
+
+  if (productIds.length === 0) {
+    return items.map((item) => ({ ...item, rating: 0, ratings: [] }));
+  }
+
+  const reviews = await Review.find({ productId: { $in: productIds } })
+    .select('productId customerName score comment createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const reviewMap = new Map();
+
+  reviews.forEach((review) => {
+    const productId = String(review.productId || '');
+    if (!reviewMap.has(productId)) {
+      reviewMap.set(productId, []);
+    }
+
+    reviewMap.get(productId).push({
+      reviewerName: String(review.customerName || '').trim() || 'Anonymous Customer',
+      score: Number(review.score || 0),
+      comment: String(review.comment || '').trim(),
+      createdAt: review.createdAt || undefined,
+    });
+  });
+
+  return items.map((item) => {
+    const productReviews = reviewMap.get(String(item.id || item._id || '')) || [];
+
+    return {
+      ...item,
+      ratings: productReviews,
+      rating: computeAverageRating(productReviews, 0),
+    };
+  });
 }
 
 function computeBranchPerformance(items, branchName) {
@@ -204,7 +278,8 @@ export async function getInventory(req, res) {
       .sort({ createdAt: -1 })
       .lean();
     const mapped = items.map((item) => normalizeProductResponse(req, item));
-    res.json({ items: mapped });
+    const withReviews = await applyReviewSnapshots(mapped);
+    res.json({ items: withReviews });
   } catch (err) {
     console.error('getInventory error:', err);
     res.status(500).json({ message: 'Failed to fetch inventory' });
@@ -219,7 +294,8 @@ export async function getPublicInventory(req, res) {
       .sort({ createdAt: -1 })
       .lean();
     const mapped = items.map((item) => normalizePublicProductResponse(req, item));
-    res.json({ items: mapped });
+    const withReviews = await applyReviewSnapshots(mapped);
+    res.json({ items: withReviews });
   } catch (err) {
     console.error('getPublicInventory error:', err);
     res.status(500).json({ message: 'Failed to fetch catalog inventory' });
@@ -325,8 +401,8 @@ export async function createProduct(req, res) {
     if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    const { name, category, color, size, price, branch, status, lastRented,
-            description, image, rating, stock } = req.body;
+        const { name, category, color, size, price, branch, status, lastRented,
+          description, image, rating, ratings, stock } = req.body;
 
     if (!name || !category || !color || price === undefined || !branch) {
       return res.status(400).json({ message: 'Missing required fields: name, category, color, price, branch' });
@@ -334,6 +410,8 @@ export async function createProduct(req, res) {
     if (typeof price !== 'number' || price < 0) {
       return res.status(400).json({ message: 'Price must be a non-negative number' });
     }
+
+    const normalizedRatings = normalizeRatingsInput(ratings);
 
     const sku = await generateSKU();
     const product = new ProductDetail({
@@ -348,7 +426,8 @@ export async function createProduct(req, res) {
       lastRented: lastRented || null,
       description: description ? description.trim() : '',
       image: image ? image.trim() : '',
-      rating: typeof rating === 'number' ? rating : 0,
+      rating: computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0),
+      ratings: normalizedRatings,
       stock: typeof stock === 'number' ? stock : 1,
       deletedAt: null
     });
@@ -386,12 +465,14 @@ export async function updateProduct(req, res) {
       return res.status(403).json({ message: 'Access denied' });
     }
     const { id } = req.params;
-    const { name, category, color, size, price, branch, status, lastRented,
-            description, image, rating, stock } = req.body;
+        const { name, category, color, size, price, branch, status, lastRented,
+          description, image, rating, ratings, stock } = req.body;
 
     if (price !== undefined && (typeof price !== 'number' || price < 0)) {
       return res.status(400).json({ message: 'Price must be a non-negative number' });
     }
+
+    const normalizedRatings = ratings !== undefined ? normalizeRatingsInput(ratings) : null;
 
     const updates = {};
     if (name !== undefined) updates.name = name.trim();
@@ -404,7 +485,12 @@ export async function updateProduct(req, res) {
     if (lastRented !== undefined) updates.lastRented = lastRented || null;
     if (description !== undefined) updates.description = description.trim();
     if (image !== undefined) updates.image = image.trim();
-    if (rating !== undefined) updates.rating = rating;
+    if (normalizedRatings !== null) {
+      updates.ratings = normalizedRatings;
+      updates.rating = computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0);
+    } else if (rating !== undefined) {
+      updates.rating = rating;
+    }
     if (stock !== undefined) updates.stock = stock;
     updates.updatedAt = new Date();
 

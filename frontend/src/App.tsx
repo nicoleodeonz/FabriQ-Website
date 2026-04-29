@@ -17,6 +17,7 @@ import { customerAPI } from './services/customerAPI';
 import { getPublicInventory } from './services/inventoryAPI';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
+import type { InventoryRating } from './services/inventoryAPI';
 
 export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin';
 
@@ -128,6 +129,7 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
   status: 'available' | 'rented' | 'reserved' | 'maintenance' | 'archived';
   image?: string;
   rating?: number;
+  ratings?: InventoryRating[];
 }>): FavoriteGown[] => {
   const inventoryById = new Map(inventoryItems.map((item) => [item.id, item]));
 
@@ -157,6 +159,11 @@ const hydrateFavoriteGowns = (storedFavorites: Partial<FavoriteGown>[], inventor
         branch: String(inventoryItem?.branch || favorite?.branch || '').trim(),
         image: String(inventoryItem?.image || favorite?.image || '').trim(),
         rating: Number(inventoryItem?.rating ?? favorite?.rating ?? 0),
+        ratings: Array.isArray(inventoryItem?.ratings)
+          ? inventoryItem.ratings
+          : Array.isArray(favorite?.ratings)
+            ? favorite.ratings
+            : [],
       };
     })
     .filter((favorite) => {

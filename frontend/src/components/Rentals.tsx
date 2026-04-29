@@ -31,6 +31,8 @@ interface Rental {
   rejectedAt?: string | null;
   pickupScheduleDate?: string | null;
   pickupScheduleTime?: string | null;
+  hasReview?: boolean;
+  reviewSubmittedAt?: string | null;
 }
 
 interface RentalsProps {
@@ -146,7 +148,7 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     return digits.length >= 10;
   };
 
-  const [activeTab, setActiveTab] = useState<'new' | 'existing' | 'history'>('new');
+  const [activeTab, setActiveTab] = useState<'new' | 'existing' | 'reviews' | 'history'>('new');
   const defaultName = useMemo(() => `${user.firstName} ${user.lastName}`.trim(), [user.firstName, user.lastName]);
   const tomorrow = useMemo(() => {
     const now = new Date();
@@ -198,6 +200,13 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const [latestSubmittedRental, setLatestSubmittedRental] = useState<Rental | null>(null);
   const [isRentalDetailsOpen, setIsRentalDetailsOpen] = useState(false);
   const [selectedRentalDetails, setSelectedRentalDetails] = useState<Rental | null>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [selectedReviewRental, setSelectedReviewRental] = useState<Rental | null>(null);
+  const [reviewScore, setReviewScore] = useState(0);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewSubmitError, setReviewSubmitError] = useState('');
+  const [isSubmitReviewConfirmOpen, setIsSubmitReviewConfirmOpen] = useState(false);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [selectedPaymentRental, setSelectedPaymentRental] = useState<Rental | null>(null);
   const [isPayNowConfirmOpen, setIsPayNowConfirmOpen] = useState(false);
   const [isPaymentInstructionsModalOpen, setIsPaymentInstructionsModalOpen] = useState(false);
@@ -217,6 +226,8 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     isMissingPhoneModalOpen ||
     isSubmitSuccessOpen ||
     isRentalDetailsOpen ||
+    isReviewModalOpen ||
+    isSubmitReviewConfirmOpen ||
     isPayNowConfirmOpen ||
     isPaymentInstructionsModalOpen ||
     isSubmitPaymentConfirmOpen ||
@@ -572,6 +583,11 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
     (safeMyRentalsPage - 1) * MY_RENTALS_PAGE_SIZE,
     safeMyRentalsPage * MY_RENTALS_PAGE_SIZE,
   );
+  const isReviewFormComplete = reviewScore > 0 && reviewComment.trim().length > 0;
+  const completedRentals = useMemo(
+    () => rentals.filter((rental) => rental.status === 'completed'),
+    [rentals]
+  );
   const rentalHistory = useMemo(
     () => rentals.filter((rental) => rental.status === 'completed' || rental.status === 'cancelled'),
     [rentals]
@@ -831,6 +847,16 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
             }`}
           >
             My Rentals
+          </button>
+          <button
+            onClick={() => setActiveTab('reviews')}
+            className={`px-6 py-3 border-b-2 transition-colors ${
+              activeTab === 'reviews'
+                ? 'border-black text-black font-medium'
+                : 'border-transparent text-[#6B5D4F] hover:text-black'
+            }`}
+          >
+            Reviews
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -1437,6 +1463,96 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
           </div>
         )}
 
+        {activeTab === 'reviews' && (
+          <div className="space-y-4 overflow-hidden">
+            {rentalsError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="status" aria-live="polite">
+                {rentalsError}
+              </div>
+            )}
+
+            {rentalsLoading && (
+              <div className="text-center py-10 bg-white rounded-2xl border border-[#E8DCC8] text-[#6B5D4F]" role="status" aria-live="polite">
+                Loading your review items...
+              </div>
+            )}
+
+            {!rentalsLoading && completedRentals.map((rental) => (
+              <div
+                key={rental.id}
+                className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors cursor-pointer"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setSelectedRentalDetails(rental);
+                  setIsRentalDetailsOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedRentalDetails(rental);
+                    setIsRentalDetailsOpen(true);
+                  }
+                }}
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="mb-3">
+                      <h3 className="text-xl font-medium text-black">{rental.gownName}</h3>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-6 text-sm text-[#6B5D4F]">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4" />
+                        <span>{rental.startDate} - {rental.endDate}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4" />
+                        <span>{rental.branch}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Reference ID:</span>
+                        <span>{rental.referenceId || rental.id}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex md:justify-end">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedReviewRental(rental);
+                        setReviewScore(0);
+                        setReviewComment('');
+                        setReviewSubmitError('');
+                        setIsReviewModalOpen(true);
+                      }}
+                      disabled={Boolean(rental.hasReview)}
+                      className="inline-flex items-center gap-3 rounded-full border border-[#E8DCC8] bg-[#FAF7F0] px-4 py-2 text-sm font-medium text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-black"
+                    >
+                      <Star className="h-4 w-4 fill-[#D4AF37] text-[#D4AF37]" />
+                      {rental.hasReview ? 'Edit Review' : 'Leave a Review'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {!rentalsLoading && completedRentals.length === 0 && (
+              <div className="rounded-2xl border border-[#E8DCC8] bg-white px-8 py-16 text-center">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center text-[#D4AF37]">
+                  <Star className="h-6 w-6 fill-current" />
+                </div>
+                <h2 className="mt-6 text-2xl font-light text-black">Reviews</h2>
+                <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-[#6B5D4F]">
+                  Completed rentals will appear here once you have gowns ready to review.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === 'history' && (
           <div className="space-y-4 overflow-hidden">
             {rentalsError && (
@@ -1877,6 +1993,234 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                     <span>{selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Pickup Scheduled' : 'Schedule Pickup'}</span>
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isReviewModalOpen && !isSubmitReviewConfirmOpen && selectedReviewRental && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Leave a review"
+            onClick={() => {
+              if (!isSubmittingReview) {
+                setIsReviewModalOpen(false);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <div>
+                  <h3 className="text-2xl font-light text-black">Leave a Review</h3>
+                  <p className="mt-2 text-sm text-[#6B5D4F]">
+                    Share your experience for {selectedReviewRental.gownName}.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isSubmittingReview) {
+                      setIsReviewModalOpen(false);
+                    }
+                  }}
+                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors"
+                  aria-label="Close review modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6 space-y-2 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Gown</span>
+                  <span className="text-right font-medium text-black">{selectedReviewRental.gownName}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Rental Dates</span>
+                  <span className="text-right font-medium text-black">{selectedReviewRental.startDate} to {selectedReviewRental.endDate}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Branch</span>
+                  <span className="text-right font-medium text-black">{selectedReviewRental.branch}</span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-6">
+                <div>
+                  <label className="block text-sm text-[#6B5D4F] mb-3">Your Rating *</label>
+                  <div className="flex items-center gap-2">
+                    {Array.from({ length: 5 }, (_, index) => {
+                      const nextScore = index + 1;
+                      return (
+                        <button
+                          key={nextScore}
+                          type="button"
+                          onClick={() => setReviewScore(nextScore)}
+                          className="rounded-full p-2 transition-colors hover:bg-[#FAF7F0]"
+                          aria-label={`Rate ${nextScore} star${nextScore === 1 ? '' : 's'}`}
+                        >
+                          <Star className={`h-7 w-7 ${nextScore <= reviewScore ? 'fill-[#D4AF37] text-[#D4AF37]' : 'text-[#D8CCBA]'}`} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {reviewScore === 0 && (
+                    <p className="mt-3 text-xs text-[#8A7A68]">Please select a star rating.</p>
+                  )}
+                </div>
+
+                <div>
+                  <label htmlFor="review-comment" className="block text-sm text-[#6B5D4F] mb-3">
+                    Your Review *
+                  </label>
+                  <textarea
+                    id="review-comment"
+                    value={reviewComment}
+                    onChange={(event) => setReviewComment(event.target.value)}
+                    placeholder="Tell us what you loved about the gown, fit, or rental experience."
+                    required
+                    className="w-full min-h-[150px] rounded-xl border border-[#E8DCC8] bg-white px-4 py-3 text-sm text-black placeholder:text-[#8A7A68] focus:outline-none focus:border-[#D4AF37]"
+                  />
+                  {reviewComment.trim().length === 0 && (
+                    <p className="mt-3 text-xs text-[#8A7A68]">Please enter your review before submitting.</p>
+                  )}
+                </div>
+              </div>
+
+              {reviewSubmitError && (
+                <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="status" aria-live="polite">
+                  {reviewSubmitError}
+                </div>
+              )}
+
+              <div className="mt-8 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsReviewModalOpen(false)}
+                  disabled={isSubmittingReview}
+                  className="flex-1 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  disabled={!isReviewFormComplete || isSubmittingReview}
+                  onClick={() => {
+                    setReviewSubmitError('');
+                    if (selectedReviewRental && isReviewFormComplete) {
+                      setIsSubmitReviewConfirmOpen(true);
+                    }
+                  }}
+                  className="flex-1 py-3 rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] text-white transition-colors hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black disabled:cursor-not-allowed disabled:border-[#E8DCC8] disabled:bg-[#E8DCC8] disabled:text-[#8A7A68]"
+                >
+                  {isSubmittingReview ? 'Submitting...' : 'Submit Review'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isSubmitReviewConfirmOpen && selectedReviewRental && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm review submission"
+            onClick={() => {
+              if (!isSubmittingReview) {
+                setIsSubmitReviewConfirmOpen(false);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Review</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Are you sure you want to submit this review?
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6 space-y-3 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Gown</span>
+                  <span className="text-right font-medium text-black">{selectedReviewRental.gownName}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Rating</span>
+                  <span className="text-right font-medium text-black">{reviewScore} / 5</span>
+                </div>
+                <div className="space-y-2">
+                  <span className="block text-[#6B5D4F]">Review</span>
+                  <p className="rounded-lg bg-white px-4 py-3 leading-6 text-black border border-[#E8DCC8]">
+                    {reviewComment.trim()}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsSubmitReviewConfirmOpen(false)}
+                  disabled={isSubmittingReview}
+                  className="flex-1 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!selectedReviewRental || !isReviewFormComplete) {
+                      return;
+                    }
+
+                    setReviewSubmitError('');
+                    setIsSubmittingReview(true);
+                    try {
+                      const submittedReview = await rentalAPI.submitReview(token, selectedReviewRental.id, {
+                        score: reviewScore,
+                        comment: reviewComment.trim(),
+                      });
+
+                      setRentals((prev) => prev.map((item) => (
+                        item.id === selectedReviewRental.id
+                          ? {
+                              ...item,
+                              hasReview: true,
+                              reviewSubmittedAt: submittedReview.createdAt || new Date().toISOString(),
+                            }
+                          : item
+                      )));
+                      setSelectedReviewRental((prev) => (
+                        prev
+                          ? {
+                              ...prev,
+                              hasReview: true,
+                              reviewSubmittedAt: submittedReview.createdAt || new Date().toISOString(),
+                            }
+                          : prev
+                      ));
+                      setIsSubmitReviewConfirmOpen(false);
+                      setIsReviewModalOpen(false);
+                      setReviewScore(0);
+                      setReviewComment('');
+                    } catch (error) {
+                      setReviewSubmitError(error instanceof Error ? error.message : 'Failed to submit review.');
+                      setIsSubmitReviewConfirmOpen(false);
+                    } finally {
+                      setIsSubmittingReview(false);
+                    }
+                  }}
+                  disabled={isSubmittingReview}
+                  className="flex-1 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmittingReview ? 'Submitting...' : 'Yes, Submit'}
+                </button>
               </div>
             </div>
           </div>

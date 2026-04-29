@@ -1,6 +1,7 @@
 import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
+import Review from '../models/Review.js';
 import AdminAction from '../models/AdminAction.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
@@ -104,6 +105,15 @@ async function countOverlappingActiveRentalsForProduct(productId, rangeStart, ra
 
 function formatDateOnly(date) {
   return date instanceof Date ? date.toISOString().slice(0, 10) : null;
+}
+
+function computeAverageRating(ratings) {
+  if (!Array.isArray(ratings) || ratings.length === 0) {
+    return 0;
+  }
+
+  const total = ratings.reduce((sum, entry) => sum + Number(entry?.score || 0), 0);
+  return Number((total / ratings.length).toFixed(1));
 }
 
 function buildDateRange(startDate, endDate) {
@@ -277,6 +287,61 @@ async function mapRentalsWithProductImages(req, rentals) {
   return normalizedRentals.map((rental) =>
     mapRental(req, rental, { gownImage: productImageMap.get(String(rental.productId || '')) || '' })
   );
+}
+
+async function attachReviewMetadata(customerId, rentals) {
+  if (!Array.isArray(rentals) || rentals.length === 0) {
+    return rentals;
+  }
+
+  const rentalIds = rentals
+    .map((rental) => String(rental.id || rental._id || '').trim())
+    .filter(Boolean);
+
+  if (rentalIds.length === 0) {
+    return rentals;
+  }
+
+  const reviews = await Review.find({
+    customerId,
+    rentalId: { $in: rentalIds },
+  })
+    .select('rentalId createdAt')
+    .lean();
+
+  const reviewMap = new Map(
+    reviews.map((review) => [
+      String(review.rentalId),
+      review.createdAt ? new Date(review.createdAt).toISOString() : null,
+    ])
+  );
+
+  return rentals.map((rental) => ({
+    ...rental,
+    hasReview: reviewMap.has(String(rental.id)),
+    reviewSubmittedAt: reviewMap.get(String(rental.id)) || null,
+  }));
+}
+
+async function syncProductReviewSummary(productId, reviewEntry) {
+  const product = await ProductDetail.findById(productId);
+  if (!product) {
+    return null;
+  }
+
+  const nextRatings = Array.isArray(product.ratings) ? [...product.ratings] : [];
+  nextRatings.push({
+    reviewerName: reviewEntry.customerName,
+    score: reviewEntry.score,
+    comment: reviewEntry.comment,
+    createdAt: reviewEntry.createdAt,
+  });
+
+  product.ratings = nextRatings;
+  product.rating = computeAverageRating(nextRatings);
+  await product.save();
+
+  return product;
 }
 
 export async function scheduleRentalPickup(req, res) {
@@ -543,11 +608,74 @@ export async function getMyRentals(req, res) {
       .lean();
 
     const mapped = await mapRentalsWithProductImages(req, rentals);
+    const enriched = await attachReviewMetadata(req.user.id, mapped);
 
-    return res.json({ rentals: mapped });
+    return res.json({ rentals: enriched });
   } catch (error) {
     console.error('getMyRentals error:', error);
     return res.status(500).json({ message: 'Failed to fetch rentals.' });
+  }
+}
+
+export async function submitRentalReview(req, res) {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can submit reviews.' });
+    }
+
+    const { id } = req.params;
+    const score = Number(req.body?.score);
+    const comment = String(req.body?.comment || '').trim();
+
+    if (!Number.isFinite(score) || score < 1 || score > 5) {
+      return res.status(400).json({ message: 'A rating between 1 and 5 is required.' });
+    }
+
+    if (!comment) {
+      return res.status(400).json({ message: 'A review comment is required.' });
+    }
+
+    const rental = await RentalDetail.findOne({ _id: id, customerId: req.user.id });
+    if (!rental) {
+      return res.status(404).json({ message: 'Rental not found.' });
+    }
+
+    if (rental.status !== 'completed') {
+      return res.status(400).json({ message: 'Reviews can only be submitted for completed rentals.' });
+    }
+
+    const existingReview = await Review.findOne({ rentalId: rental._id }).lean();
+    if (existingReview) {
+      return res.status(409).json({ message: 'A review has already been submitted for this rental.' });
+    }
+
+    const review = await Review.create({
+      customerId: rental.customerId,
+      customerEmail: rental.customerEmail || rental.email || req.user.email || '',
+      customerName: rental.customerName || 'Anonymous Customer',
+      productId: rental.productId,
+      rentalId: rental._id,
+      gownName: rental.gownName,
+      score,
+      comment,
+    });
+
+    await syncProductReviewSummary(rental.productId, review);
+
+    return res.status(201).json({
+      review: {
+        id: String(review._id),
+        rentalId: String(review.rentalId),
+        productId: String(review.productId),
+        reviewerName: review.customerName,
+        score: review.score,
+        comment: review.comment,
+        createdAt: review.createdAt ? new Date(review.createdAt).toISOString() : null,
+      },
+    });
+  } catch (error) {
+    console.error('submitRentalReview error:', error);
+    return res.status(500).json({ message: 'Failed to submit review.' });
   }
 }
 

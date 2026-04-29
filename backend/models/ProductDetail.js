@@ -1,5 +1,28 @@
 import mongoose from 'mongoose';
 
+const ProductRatingSchema = new mongoose.Schema({
+  reviewerName: {
+    type: String,
+    trim: true,
+    default: 'Anonymous Customer'
+  },
+  score: {
+    type: Number,
+    min: 1,
+    max: 5,
+    required: true
+  },
+  comment: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: false });
+
 const ProductDetailSchema = new mongoose.Schema({
   sku: {
     type: String,
@@ -60,6 +83,10 @@ const ProductDetailSchema = new mongoose.Schema({
     min: 0,
     max: 5,
     default: 0
+  },
+  ratings: {
+    type: [ProductRatingSchema],
+    default: []
   },
   stock: {
     type: Number,

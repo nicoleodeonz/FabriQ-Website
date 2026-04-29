@@ -2,7 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { authenticate } from '../middleware/authMiddleware.js';
 import { upload } from '../config/upload.js';
-import { createRental, getAdminRentals, getMyRentals, getRentalAvailability, scheduleRentalPickup, submitRentalPayment, updateRentalStatus } from '../controllers/rentalController.js';
+import { createRental, getAdminRentals, getMyRentals, getRentalAvailability, scheduleRentalPickup, submitRentalPayment, submitRentalReview, updateRentalStatus } from '../controllers/rentalController.js';
 
 const router = express.Router();
 
@@ -26,6 +26,7 @@ router.post('/:id/payment', authenticate, (req, res, next) => {
 		return res.status(400).json({ message: err.message || 'Invalid receipt upload' });
 	});
 }, submitRentalPayment);
+router.post('/:id/review', authenticate, submitRentalReview);
 router.post('/:id/pickup-schedule', authenticate, scheduleRentalPickup);
 router.patch('/:id/status', authenticate, updateRentalStatus);
 

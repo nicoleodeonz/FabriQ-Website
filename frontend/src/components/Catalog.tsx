@@ -4,7 +4,7 @@ import { Search, Heart, Calendar, MapPin, Star } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { GownDetailsModal } from './GownDetailsModal';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
-import type { InventoryItem } from '../services/inventoryAPI';
+import type { InventoryItem, InventoryRating } from '../services/inventoryAPI';
 
 type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin';
 
@@ -31,6 +31,7 @@ interface GownItem {
   branch: string;
   image: string;
   rating: number;
+  ratings?: InventoryRating[];
 }
 
 const CATALOG_PAGE_SIZE = 9;
@@ -48,7 +49,8 @@ function toCatalogGown(item: InventoryItem): GownItem {
       : 'reserved',
     branch: item.branch,
     image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
-    rating: typeof item.rating === 'number' ? item.rating : 0
+    rating: typeof item.rating === 'number' ? item.rating : 0,
+    ratings: Array.isArray(item.ratings) ? item.ratings : []
   };
 }
 
@@ -157,6 +159,7 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
       branch: pendingFavorite.branch,
       image: pendingFavorite.image,
       rating: pendingFavorite.rating,
+      ratings: pendingFavorite.ratings,
     });
     setPendingFavorite(null);
   };
