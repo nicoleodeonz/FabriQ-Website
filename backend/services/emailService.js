@@ -129,6 +129,7 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
   const normalizedDateType = normalizeDateTypeLabel(options.dateType);
+  const normalizedCancellationReason = String(options.cancellationReason || '').trim();
   const itemLabel = String(itemOrServiceOrDesign || '').trim() || (normalizedType === 'appointment' ? 'your appointment' : normalizedType === 'bespoke' ? 'your bespoke order' : 'your rental');
 
   if (normalizedType === 'rental' && isOverdueRentalStatus(status)) {
@@ -155,7 +156,12 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options
     }
     if (normalizedStatus === 'active') return `Your rental for ${itemLabel} is currently active. Please keep the item in good condition and return it on time.`;
     if (normalizedStatus === 'completed') return `Your rental for ${itemLabel} has been completed. Thank you for choosing our service.`;
-    if (normalizedStatus === 'cancelled') return `Your rental for ${itemLabel} has been cancelled. Please contact us if you need help with a new booking.`;
+    if (normalizedStatus === 'cancelled') {
+      const reasonText = normalizedCancellationReason
+        ? ` Reason: ${normalizedCancellationReason}.`
+        : '';
+      return `Your rental for ${itemLabel} has been cancelled.${reasonText} Please contact us if you need help with a new booking.`;
+    }
     return `Your rental for ${itemLabel} is now ${formatStatusLabel(status).toLowerCase()}. Please contact us if you need any assistance.`;
   }
 
@@ -187,6 +193,7 @@ export function buildNotificationEmailPayload({
   messageBody,
   subject,
   detailsOverride,
+  cancellationReason,
 }) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
@@ -201,6 +208,11 @@ export function buildNotificationEmailPayload({
   const detailsValue = normalizedType === 'bespoke' && normalizedStatus === 'completed'
     ? `Bespoke ${String(itemOrServiceOrDesign || '').trim() || 'Custom Gown Order'}`
     : `${detailsLabel}: ${String(itemOrServiceOrDesign || '').trim() || 'N/A'}`;
+  const normalizedCancellationReason = String(cancellationReason || '').trim();
+  const resolvedDetails = String(detailsOverride || '').trim()
+    || (normalizedType === 'rental' && normalizedStatus === 'cancelled' && normalizedCancellationReason
+      ? `${detailsValue}\nReason: ${normalizedCancellationReason}`
+      : detailsValue);
 
   return {
     subject: String(subject || '').trim() || getNotificationSubject(normalizedType, status, { dateType: resolvedDateType }),
@@ -209,8 +221,9 @@ export function buildNotificationEmailPayload({
       dateType: resolvedDateType,
       date: dateFields.date,
       time: dateFields.time,
+      cancellationReason: normalizedCancellationReason,
     }),
-    details: String(detailsOverride || '').trim() || detailsValue,
+    details: resolvedDetails,
     date: dateFields.date,
     date_type: resolvedDateType,
     time: dateFields.time,
@@ -381,6 +394,7 @@ export async function sendNotificationEmail({
   status,
   name,
   itemOrServiceOrDesign,
+  cancellationReason,
   date,
   dateType,
   time,
@@ -411,6 +425,7 @@ export async function sendNotificationEmail({
     status,
     name,
     itemOrServiceOrDesign,
+    cancellationReason,
     date,
     dateType,
     time,

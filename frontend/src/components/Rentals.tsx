@@ -549,6 +549,19 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
 
   const rentalTotal = selectedGown && rentalDurationDays ? selectedGown.price * rentalDurationDays : 0;
   const rentalDownpayment = rentalTotal / 2;
+  const missingRentalFields = useMemo(() => {
+    const missing: string[] = [];
+
+    if (!formData.gownId) missing.push('gown selection');
+    if (!formData.startDate) missing.push('start date');
+    if (!formData.endDate) missing.push('end date');
+    if (!String(formData.branch || '').trim()) missing.push('branch location');
+    if (!String(formData.eventType || '').trim()) missing.push('event type');
+    if (!hasPhoneNumber(formData.contactNumber)) missing.push('verified phone number');
+
+    return missing;
+  }, [formData.branch, formData.contactNumber, formData.endDate, formData.eventType, formData.gownId, formData.startDate]);
+  const isRentalFormComplete = missingRentalFields.length === 0;
   const currentRentals = useMemo(
     () => rentals.filter((rental) => rental.status !== 'completed' && rental.status !== 'cancelled'),
     [rentals]
@@ -681,6 +694,10 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError('');
+
+    if (!isRentalFormComplete) {
+      return;
+    }
 
     if (!hasPhoneNumber(formData.contactNumber)) {
       setIsMissingPhoneModalOpen(true);
@@ -1250,9 +1267,16 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
                 </div>
               </div>
 
+              {!isRentalFormComplete && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" aria-live="polite">
+                  Complete the required fields before submitting: {missingRentalFields.join(', ')}.
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="w-full py-4 bg-black text-[#FAF7F0] rounded-full hover:bg-[#D4AF37] hover:text-black transition-colors flex items-center justify-center gap-2"
+                disabled={!isRentalFormComplete || isPrefillLoading || inventoryLoading || availabilityLoading}
+                className="w-full py-4 bg-black text-[#FAF7F0] rounded-full hover:bg-[#D4AF37] hover:text-black transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:bg-[#B8AEA2] disabled:text-[#F7F1E7]"
               >
                 Submit Rental Request
                 <ChevronRight className="w-5 h-5" />

@@ -175,7 +175,7 @@ async function cancelExpiredPendingRentals() {
     status: 'pending',
     startDate: { $lt: today },
   })
-    .select('_id productId')
+    .select('_id productId customerEmail email contactNumber customerName gownName endDate branch')
     .lean();
 
   if (stalePendingRentals.length === 0) {
@@ -193,6 +193,34 @@ async function cancelExpiredPendingRentals() {
         rejectedAt: new Date(),
       },
     },
+  );
+
+  await Promise.allSettled(
+    stalePendingRentals.map(async (rental) => {
+      const deliveryResult = await sendNotificationAcrossChannels({
+        email: rental.customerEmail || rental.email || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          status: 'cancelled',
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          cancellationReason: EXPIRED_PENDING_RENTAL_REASON,
+          date: rental.endDate
+            ? new Date(rental.endDate).toISOString().slice(0, 10)
+            : '',
+          dateType: 'Time Sent',
+          location: rental.branch || '',
+        },
+      });
+
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
+        console.warn('expired pending rental cancellation notification not delivered:', {
+          rentalId: String(rental._id || ''),
+          deliveryResult,
+        });
+      }
+    }),
   );
 
   const affectedProductIds = Array.from(
@@ -588,6 +616,7 @@ export async function updateRentalStatus(req, res) {
           status,
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          cancellationReason: status === 'cancelled' ? rental.rejectionReason || '' : '',
           date: rental.pickupScheduleDate
             ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
             : '',
