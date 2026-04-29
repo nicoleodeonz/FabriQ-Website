@@ -185,6 +185,8 @@ export function buildNotificationEmailPayload({
   businessName,
   contactInfo,
   messageBody,
+  subject,
+  detailsOverride,
 }) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const normalizedStatus = normalizeStatus(status);
@@ -201,14 +203,14 @@ export function buildNotificationEmailPayload({
     : `${detailsLabel}: ${String(itemOrServiceOrDesign || '').trim() || 'N/A'}`;
 
   return {
-    subject: getNotificationSubject(normalizedType, status, { dateType: resolvedDateType }),
+    subject: String(subject || '').trim() || getNotificationSubject(normalizedType, status, { dateType: resolvedDateType }),
     name: String(name || '').trim() || 'Customer',
     message_body: normalizedMessageBody || getNotificationMessageBody(normalizedType, status, itemOrServiceOrDesign, {
       dateType: resolvedDateType,
       date: dateFields.date,
       time: dateFields.time,
     }),
-    details: detailsValue,
+    details: String(detailsOverride || '').trim() || detailsValue,
     date: dateFields.date,
     date_type: resolvedDateType,
     time: dateFields.time,
@@ -386,6 +388,8 @@ export async function sendNotificationEmail({
   businessName,
   contactInfo,
   messageBody,
+  subject,
+  detailsOverride,
 }) {
   const configStatus = ensureEmailConfig('notification');
 
@@ -414,6 +418,8 @@ export async function sendNotificationEmail({
     businessName,
     contactInfo,
     messageBody,
+    subject,
+    detailsOverride,
   });
 
   const templateParams = {

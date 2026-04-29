@@ -8,6 +8,7 @@ import {
   isSmsPhoneNumberError,
   sendPhoneVerificationCode,
 } from '../services/smsService.js';
+import { sendPhoneVerifiedCongratulations } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { toPublicUrl } from '../utils/media.js';
 
@@ -574,6 +575,20 @@ export const verifyCustomerPhoneVerificationCode = async (req, res) => {
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
+
+    try {
+      const deliveryResult = await sendPhoneVerifiedCongratulations({
+        email: customer.email,
+        phoneNumber: customer.phoneNumber,
+        name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'Customer',
+      });
+
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
+        console.warn('phone verification congratulations not delivered:', deliveryResult);
+      }
+    } catch (notificationError) {
+      console.error('phone verification congratulations error:', notificationError);
+    }
 
     return res.json({
       message: 'Phone number verified successfully.',

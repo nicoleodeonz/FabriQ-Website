@@ -209,6 +209,14 @@ export const createCustomOrder = async (req, res) => {
       return res.status(404).json({ message: 'Customer not found' });
     }
 
+    if (!customer.phoneNumber) {
+      return res.status(400).json({ message: 'Please add your phone number first in your profile settings.' });
+    }
+
+    if (!customer.phoneVerified) {
+      return res.status(400).json({ message: 'Please verify your phone number first in your profile settings.' });
+    }
+
     const customOrder = new CustomOrder({
       customerId: customer._id,
       customerName: `${customer.firstName} ${customer.lastName}`.trim(),

@@ -417,6 +417,14 @@ export async function createRental(req, res) {
       return res.status(404).json({ message: 'Customer account not found.' });
     }
 
+    if (!customer.phoneNumber) {
+      return res.status(400).json({ message: 'Please add your phone number first in your profile settings.' });
+    }
+
+    if (!customer.phoneVerified) {
+      return res.status(400).json({ message: 'Please verify your phone number first in your profile settings.' });
+    }
+
     if (!product || product.status === 'archived') {
       return res.status(404).json({ message: 'Selected gown not found.' });
     }
@@ -466,6 +474,30 @@ export async function createRental(req, res) {
     product.lastRented = new Date();
     await product.save();
     await syncProductAvailabilityByCapacity(product._id);
+
+    try {
+      const deliveryResult = await sendNotificationAcrossChannels({
+        email: rental.customerEmail || rental.email || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          status: 'pending',
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          date: rental.endDate
+            ? new Date(rental.endDate).toISOString().slice(0, 10)
+            : '',
+          dateType: 'Time Sent',
+          location: rental.branch || '',
+        },
+      });
+
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
+        console.warn('pending rental notification not delivered:', deliveryResult);
+      }
+    } catch (notificationError) {
+      console.error('pending rental notification error:', notificationError);
+    }
 
     return res.status(201).json({ rental: mapRental(req, rental.toJSON(), { gownImage: product.image || '' }) });
   } catch (error) {

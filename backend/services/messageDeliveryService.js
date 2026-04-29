@@ -100,3 +100,25 @@ export async function sendVerificationAcrossChannels({
     );
   }
 }
+
+export async function sendPhoneVerifiedCongratulations({ email, phoneNumber, name }) {
+  const now = new Date();
+
+  return sendNotificationAcrossChannels({
+    email,
+    phoneNumber,
+    payload: {
+      type: 'bespoke',
+      status: 'completed',
+      name,
+      itemOrServiceOrDesign: 'Verified Phone Number',
+      date: now.toISOString().slice(0, 10),
+      dateType: 'Time Sent',
+      time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      location: '',
+      subject: 'Phone Number Verified',
+      detailsOverride: 'Your verified phone number is now ready for rentals, appointments, and bespoke orders.',
+      messageBody: 'Congratulations. Your phone number has been verified successfully. You can now use this verified number to rent gowns, book appointments, and create bespoke orders with Hannah Vanessa Boutique.',
+    },
+  });
+}

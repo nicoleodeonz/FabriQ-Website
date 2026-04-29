@@ -174,6 +174,10 @@ export async function createAppointment(req, res) {
       return res.status(400).json({ message: 'Please add your phone number first in your profile settings.' });
     }
 
+    if (!customer.phoneVerified) {
+      return res.status(400).json({ message: 'Please verify your phone number first in your profile settings.' });
+    }
+
     let selectedGownName = '';
     if (String(selectedGown || '').trim()) {
       const product = await ProductDetail.findById(selectedGown);
