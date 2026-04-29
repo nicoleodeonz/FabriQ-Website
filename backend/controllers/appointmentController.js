@@ -122,6 +122,8 @@ export async function createAppointment(req, res) {
     }
 
     const { appointmentType, date, time, branch, notes, selectedGown } = req.body || {};
+    const normalizedAppointmentType = String(appointmentType || '').trim();
+    const normalizedSelectedGown = String(selectedGown || '').trim();
 
     if (!appointmentType || !date || !time || !branch) {
       return res.status(400).json({
@@ -129,11 +131,11 @@ export async function createAppointment(req, res) {
       });
     }
 
-    if (!['fitting', 'consultation', 'measurement', 'pickup'].includes(String(appointmentType))) {
+    if (!['fitting', 'consultation', 'measurement', 'pickup'].includes(normalizedAppointmentType)) {
       return res.status(400).json({ message: 'Invalid appointment type.' });
     }
 
-    if (String(appointmentType) === 'fitting' && !String(selectedGown || '').trim()) {
+    if (normalizedAppointmentType === 'fitting' && !normalizedSelectedGown) {
       return res.status(400).json({ message: 'A gown selection is required for fitting appointments.' });
     }
 
@@ -153,18 +155,6 @@ export async function createAppointment(req, res) {
       return res.status(400).json({ message: 'Invalid appointment time.' });
     }
 
-    const conflictingAppointment = await findAppointmentConflict({
-      date: appointmentDate,
-      time,
-      branch,
-    });
-
-    if (conflictingAppointment) {
-      return res.status(409).json({
-        message: 'That appointment slot is already booked for the selected branch. Please choose a different time.',
-      });
-    }
-
     const customer = await CustomerAccount.findById(req.user.id);
     if (!customer) {
       return res.status(404).json({ message: 'Customer account not found.' });
@@ -179,12 +169,28 @@ export async function createAppointment(req, res) {
     }
 
     let selectedGownName = '';
-    if (String(selectedGown || '').trim()) {
-      const product = await ProductDetail.findById(selectedGown);
+    let resolvedBranch = String(branch).trim();
+    if (normalizedSelectedGown) {
+      const product = await ProductDetail.findById(normalizedSelectedGown);
       if (!product || product.status === 'archived') {
         return res.status(404).json({ message: 'Selected gown not found.' });
       }
       selectedGownName = String(product.name || '').trim();
+      if (normalizedAppointmentType === 'fitting') {
+        resolvedBranch = String(product.branch || '').trim();
+      }
+    }
+
+    const conflictingAppointment = await findAppointmentConflict({
+      date: appointmentDate,
+      time,
+      branch: resolvedBranch,
+    });
+
+    if (conflictingAppointment) {
+      return res.status(409).json({
+        message: 'That appointment slot is already booked for the selected branch. Please choose a different time.',
+      });
     }
 
     const appointment = await AppointmentDetail.create({
@@ -193,12 +199,12 @@ export async function createAppointment(req, res) {
       customerName: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
       contactNumber: customer.phoneNumber,
       email: customer.email,
-      type: String(appointmentType).trim(),
+      type: normalizedAppointmentType,
       date: appointmentDate,
       time: String(time).trim(),
-      branch: String(branch).trim(),
+      branch: resolvedBranch,
       notes: String(notes || '').trim(),
-      selectedGown: String(selectedGown || '').trim(),
+      selectedGown: normalizedSelectedGown,
       selectedGownName,
       status: 'pending',
     });

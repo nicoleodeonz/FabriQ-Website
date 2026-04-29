@@ -91,6 +91,10 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
     reason: '',
   });
   const isAnyAppointmentModalOpen = isMissingPhoneModalOpen || isRescheduleModalOpen;
+  const selectedGownDetails = useMemo(
+    () => availableGowns.find((gown) => gown.id === formData.selectedGown) || null,
+    [availableGowns, formData.selectedGown]
+  );
 
   useModalInteractionLock(isAnyAppointmentModalOpen, modalRef);
 
@@ -217,6 +221,23 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
     }
   }, [selectedGownId]);
 
+  useEffect(() => {
+    if (formData.appointmentType !== 'fitting' || !selectedGownDetails?.branch) {
+      return;
+    }
+
+    if (formData.branch === selectedGownDetails.branch) {
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      branch: selectedGownDetails.branch,
+      time: '',
+    }));
+    setBranchError('');
+  }, [formData.appointmentType, formData.branch, selectedGownDetails]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError('');
@@ -280,7 +301,11 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
       return;
     }
 
-    if (!formData.branch) {
+    const resolvedBranch = formData.appointmentType === 'fitting'
+      ? selectedGownDetails?.branch || ''
+      : formData.branch;
+
+    if (!resolvedBranch) {
       setBranchError('Please select a branch');
       return;
     }
@@ -299,7 +324,9 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
         appointmentType: formData.appointmentType as 'fitting' | 'consultation' | 'measurement' | 'pickup',
         date: formData.date,
         time: formData.time,
-        branch: formData.branch,
+        branch: formData.appointmentType === 'fitting'
+          ? selectedGownDetails?.branch || formData.branch
+          : formData.branch,
         selectedGown: formData.appointmentType === 'fitting' ? formData.selectedGown : undefined,
         notes: formData.notes,
       });
@@ -571,11 +598,12 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
                     <label className="block text-sm text-[#6B5D4F] mb-2">Branch *</label>
                     <select
                       value={formData.branch}
+                      disabled={formData.appointmentType === 'fitting' && Boolean(selectedGownDetails?.branch)}
                       onChange={(e) => {
                         setFormData({ ...formData, branch: e.target.value });
                         setBranchError('');
                       }}
-                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors disabled:bg-[#F7F1E8] disabled:cursor-not-allowed"
                     >
                       <option value="">Select a branch</option>
                       <option value="Taguig Main">Taguig Main - Cadena de Amor</option>
@@ -585,6 +613,11 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
                     </select>
                     {branchError && (
                       <p className="text-red-600 text-sm mt-2">{branchError}</p>
+                    )}
+                    {formData.appointmentType === 'fitting' && selectedGownDetails?.branch && (
+                      <p className="text-[#6B5D4F] text-sm mt-2">
+                        Fitting appointments use the branch where the selected gown is available.
+                      </p>
                     )}
                   </div>
                 </div>
@@ -596,8 +629,17 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
                     <select
                       value={formData.selectedGown}
                       onChange={(e) => {
-                        setFormData({ ...formData, selectedGown: e.target.value });
+                        const nextSelectedGownId = e.target.value;
+                        const nextSelectedGown = availableGowns.find((gown) => gown.id === nextSelectedGownId);
+
+                        setFormData({
+                          ...formData,
+                          selectedGown: nextSelectedGownId,
+                          branch: nextSelectedGown?.branch || '',
+                          time: '',
+                        });
                         setGownError('');
+                        setBranchError('');
                       }}
                       disabled={gownsLoading}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors disabled:bg-[#F7F1E8] disabled:cursor-not-allowed"

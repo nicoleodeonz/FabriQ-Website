@@ -171,12 +171,17 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options
   }
 
   if (normalizedType === 'bespoke') {
-    if (normalizedStatus === 'inquiry') return `Your bespoke order inquiry for ${itemLabel} has been received. Please wait for the next update from our team.`;
-    if (normalizedStatus === 'design-approval') return `Your bespoke order for ${itemLabel} is ready for design approval. Please review the next steps and confirm your schedule if needed.`;
+    if (normalizedStatus === 'inquiry') return `Your bespoke order for ${itemLabel} is ready for a design consultation. Please schedule a date and time for it at your earliest convenience.`;
+    if (normalizedStatus === 'design-approval') {
+      if (isScheduledDateType(normalizedDateType)) {
+        return `Your design consultation for ${itemLabel} has been scheduled. Please attend on your selected date and time, or contact us if you need to reschedule.`;
+      }
+      return `Your bespoke order for ${itemLabel} is ready for a design consultation. Please schedule a date and time for it at your earliest convenience.`;
+    }
     if (normalizedStatus === 'in-progress') return `Your bespoke order for ${itemLabel} is now in progress. Please stay available for any design or fitting updates.`;
     if (normalizedStatus === 'fitting') return `Your bespoke order for ${itemLabel} is ready for fitting. Please set your fitting schedule so we can proceed with the next step.`;
     if (normalizedStatus === 'fitting-scheduled') return `Your fitting appointment for ${itemLabel} has been scheduled. Please attend on your selected date and time, or contact us if you need to reschedule.`;
-    if (normalizedStatus === 'completed') return `Your bespoke order for ${itemLabel} is completed. Thank you for choosing FabriQ. Please review the order details below and contact us if you need any final assistance.`;
+    if (normalizedStatus === 'completed') return `Your bespoke order for ${itemLabel} is completed. Thank you for choosing Hannah Vanessa Boutique. Please review the order details below and contact us if you need any final assistance.`;
     if (normalizedStatus === 'rejected') {
       const reasonText = normalizedCancellationReason
         ? ` Reason: ${normalizedCancellationReason}.`

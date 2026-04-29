@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw } from 'lucide-react';
+import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown } from 'lucide-react';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
@@ -248,6 +248,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const primaryConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const inventoryPreviewTimerRef = useRef<number | null>(null);
   const hoveredInventoryIdRef = useRef<string | null>(null);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [showAddItem, setShowAddItem] = useState(false);
   const [addItemErrors, setAddItemErrors] = useState<Partial<Record<AddItemField, string>>>({});
@@ -255,6 +256,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [customCategoryDraft, setCustomCategoryDraft] = useState('');
   const [isConfirmCustomCategoryOpen, setIsConfirmCustomCategoryOpen] = useState(false);
   const [previousCategoryBeforeCustomInput, setPreviousCategoryBeforeCustomInput] = useState(DEFAULT_INVENTORY_CATEGORY);
+  const [removedCategoryOptions, setRemovedCategoryOptions] = useState<string[]>([]);
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
+  const [pendingCategoryDeletion, setPendingCategoryDeletion] = useState<string | null>(null);
   const [newItem, setNewItem] = useState<Partial<InventoryItem>>({
     name: '',
     category: DEFAULT_INVENTORY_CATEGORY,
@@ -276,8 +280,23 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       String(newItem.category || '').trim(),
     ].filter(Boolean);
 
-    return Array.from(new Set(categories));
-  }, [archivedItems, editingItem?.category, inventory, newItem.category]);
+    return Array.from(new Set(categories)).filter((category) => !removedCategoryOptions.includes(category));
+  }, [archivedItems, editingItem?.category, inventory, newItem.category, removedCategoryOptions]);
+  const inventoryCategoryUsageCounts = useMemo(() => {
+    return [...inventory, ...archivedItems].reduce<Record<string, number>>((counts, item) => {
+      const category = String(item.category || '').trim();
+
+      if (!category) {
+        return counts;
+      }
+
+      counts[category] = (counts[category] || 0) + 1;
+      return counts;
+    }, {});
+  }, [archivedItems, inventory]);
+  const pendingCategoryDeletionUsageCount = pendingCategoryDeletion
+    ? inventoryCategoryUsageCounts[pendingCategoryDeletion] || 0
+    : 0;
 
   // Users State
   const [users, setUsers] = useState<User[]>([]);
@@ -1389,8 +1408,23 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     if (!showAddItem) {
       setIsCustomCategoryInputVisible(false);
       setCustomCategoryDraft('');
+      setIsCategoryDropdownOpen(false);
+      setPendingCategoryDeletion(null);
     }
   }, [showAddItem]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!categoryDropdownRef.current?.contains(event.target as Node)) {
+        setIsCategoryDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, []);
 
   const cancelCustomCategorySelection = () => {
     const fallbackCategory = previousCategoryBeforeCustomInput || DEFAULT_INVENTORY_CATEGORY;
@@ -1398,6 +1432,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     setIsCustomCategoryInputVisible(false);
     setCustomCategoryDraft('');
     setIsConfirmCustomCategoryOpen(false);
+    setIsCategoryDropdownOpen(false);
+    setPendingCategoryDeletion(null);
 
     if (editingItem) {
       setEditingItem({ ...editingItem, category: fallbackCategory });
@@ -1409,6 +1445,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const handleCategorySelectionChange = (nextValue: string) => {
+    setIsCategoryDropdownOpen(false);
+
     if (nextValue === NEW_CATEGORY_OPTION) {
       setPreviousCategoryBeforeCustomInput(editingItem?.category || newItem.category || DEFAULT_INVENTORY_CATEGORY);
       setIsCustomCategoryInputVisible(true);
@@ -1480,6 +1518,39 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     setCustomCategoryDraft(trimmedCategory);
     setIsCustomCategoryInputVisible(false);
     setIsConfirmCustomCategoryOpen(false);
+    setRemovedCategoryOptions((prev) => prev.filter((category) => category !== trimmedCategory));
+  };
+
+  const requestCategoryDeletion = (category: string) => {
+    setIsCategoryDropdownOpen(false);
+    setPendingCategoryDeletion(category);
+  };
+
+  const closeCategoryDeletionModal = () => {
+    setPendingCategoryDeletion(null);
+  };
+
+  const confirmCategoryDeletion = () => {
+    if (!pendingCategoryDeletion || pendingCategoryDeletionUsageCount > 0) {
+      return;
+    }
+
+    setRemovedCategoryOptions((prev) => Array.from(new Set([...prev, pendingCategoryDeletion])));
+
+    if (editingItem?.category === pendingCategoryDeletion) {
+      setEditingItem({ ...editingItem, category: DEFAULT_INVENTORY_CATEGORY });
+    }
+
+    if (newItem.category === pendingCategoryDeletion) {
+      setNewItem({ ...newItem, category: DEFAULT_INVENTORY_CATEGORY });
+      setAddItemErrors((prev) => ({ ...prev, category: '' }));
+    }
+
+    if (customCategoryDraft.trim() === pendingCategoryDeletion) {
+      setCustomCategoryDraft('');
+    }
+
+    setPendingCategoryDeletion(null);
   };
 
   const validateAddItem = () => {
@@ -4196,7 +4267,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         )}
 
         {/* Add/Edit Item Modal */}
-        {(showAddItem || editingItem) && !isConfirmCustomCategoryOpen && (
+        {(showAddItem || editingItem) && !isConfirmCustomCategoryOpen && !pendingCategoryDeletion && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <h3 className="text-2xl font-light mb-6">
@@ -4255,19 +4326,60 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         </div>
                       </div>
                     ) : (
-                      <select
-                        required={!editingItem}
-                        aria-invalid={!editingItem && Boolean(addItemErrors.category)}
-                        aria-describedby={!editingItem && addItemErrors.category ? 'add-item-category-error' : undefined}
-                        value={editingItem?.category || newItem.category}
-                        onChange={(e) => handleCategorySelectionChange(e.target.value)}
-                        className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.category ? 'border-red-400' : 'border-[#E8DCC8]'}`}
-                      >
-                        {inventoryCategoryOptions.map((category) => (
-                          <option key={category} value={category}>{category}</option>
-                        ))}
-                        <option value={NEW_CATEGORY_OPTION}>New Category</option>
-                      </select>
+                      <div className="relative" ref={categoryDropdownRef}>
+                        <button
+                          type="button"
+                          aria-haspopup="listbox"
+                          aria-expanded={isCategoryDropdownOpen}
+                          aria-invalid={!editingItem && Boolean(addItemErrors.category)}
+                          aria-describedby={!editingItem && addItemErrors.category ? 'add-item-category-error' : undefined}
+                          onClick={() => setIsCategoryDropdownOpen((prev) => !prev)}
+                          className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.category ? 'border-red-400' : 'border-[#E8DCC8]'}`}
+                        >
+                          <span>{editingItem?.category || newItem.category || DEFAULT_INVENTORY_CATEGORY}</span>
+                          <ChevronDown className={`h-4 w-4 text-[#8D7B68] transition-transform ${isCategoryDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {isCategoryDropdownOpen && (
+                          <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-xl border border-[#E8DCC8] bg-white shadow-lg">
+                            <div className="max-h-60 overflow-y-auto p-2" role="listbox" aria-label="Category options">
+                              {inventoryCategoryOptions.map((category) => {
+                                const isSelectedCategory = (editingItem?.category || newItem.category) === category;
+
+                                return (
+                                  <div key={category} className="flex items-center gap-2 py-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCategorySelectionChange(category)}
+                                      className={`flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${isSelectedCategory ? 'bg-[#FAF7F0] text-[#1a1a1a]' : 'text-[#3D2B1F] hover:bg-[#FAF7F0]'}`}
+                                    >
+                                      {category}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => requestCategoryDeletion(category)}
+                                      className="rounded-lg p-2 text-[#8D7B68] transition-colors hover:bg-[#F8E6E1] hover:text-[#B42318]"
+                                      aria-label={`Delete ${category} category`}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            <div className="border-t border-[#F1E7D8] p-2">
+                              <button
+                                type="button"
+                                onClick={() => handleCategorySelectionChange(NEW_CATEGORY_OPTION)}
+                                className="w-full rounded-lg px-3 py-2 text-left text-sm text-[#3D2B1F] transition-colors hover:bg-[#FAF7F0]"
+                              >
+                                New Category
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                     {!editingItem && addItemErrors.category && <p id="add-item-category-error" className="text-sm text-red-600 mt-1">{addItemErrors.category}</p>}
                   </div>
@@ -4493,6 +4605,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       setIsCustomCategoryInputVisible(false);
                       setCustomCategoryDraft('');
                       setIsConfirmCustomCategoryOpen(false);
+                      setIsCategoryDropdownOpen(false);
+                      setPendingCategoryDeletion(null);
                       resetImageModal();
                     }}
                     className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
@@ -4546,6 +4660,56 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors"
                 >
                   Yes, Add
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {pendingCategoryDeletion && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm category deletion"
+            onClick={closeCategoryDeletionModal}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-2xl font-light mb-6">Delete Category</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                {pendingCategoryDeletionUsageCount > 0
+                  ? `This category cannot be deleted because ${pendingCategoryDeletionUsageCount} gown${pendingCategoryDeletionUsageCount === 1 ? ' is' : 's are'} still using it.`
+                  : 'Are you sure you want to remove this category from the dropdown?'}
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
+                <p className="font-medium text-[#3D2B1F]">{pendingCategoryDeletion}</p>
+              </div>
+
+              {pendingCategoryDeletionUsageCount > 0 && (
+                <p className="text-sm text-[#B42318] mb-6">
+                  Reassign or remove this category from all gowns first.
+                </p>
+              )}
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={closeCategoryDeletionModal}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmCategoryDeletion}
+                  disabled={pendingCategoryDeletionUsageCount > 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#B42318] bg-[#B42318] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Delete
                 </button>
               </div>
             </div>
