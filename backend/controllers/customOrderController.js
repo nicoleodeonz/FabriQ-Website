@@ -428,6 +428,7 @@ export const updateCustomOrderStatus = async (req, res) => {
             status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            cancellationReason: nextStatus === 'rejected' ? order.rejectionReason || '' : '',
             date: String(order.eventDate || '').trim(),
             dateType: 'Time Sent',
             time: '',

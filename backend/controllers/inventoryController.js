@@ -95,13 +95,13 @@ function computeBranchPerformance(items, branchName) {
 
 async function releaseStaleReservedProducts() {
   const productIdsWithActiveRentals = await RentalDetail.distinct('productId', {
-    status: { $nin: ['cancelled', 'completed'] }
+    status: 'active'
   });
 
   const activeCounts = await RentalDetail.aggregate([
     {
       $match: {
-        status: { $nin: ['cancelled', 'completed'] }
+        status: 'active'
       }
     },
     {

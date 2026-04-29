@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw } from 'lucide-react';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
@@ -104,6 +104,9 @@ const USER_PAGE_SIZE = 5;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
 const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
+const DEFAULT_INVENTORY_CATEGORIES = ['Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress'];
+const DEFAULT_INVENTORY_CATEGORY = DEFAULT_INVENTORY_CATEGORIES[0];
+const NEW_CATEGORY_OPTION = '__new_category__';
 
 function parseAdminTabFromHash(hash: string): AdminTab {
   const normalizedHash = hash.replace(/^#\/?/, '');
@@ -248,9 +251,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [showAddItem, setShowAddItem] = useState(false);
   const [addItemErrors, setAddItemErrors] = useState<Partial<Record<AddItemField, string>>>({});
+  const [isCustomCategoryInputVisible, setIsCustomCategoryInputVisible] = useState(false);
+  const [customCategoryDraft, setCustomCategoryDraft] = useState('');
+  const [isConfirmCustomCategoryOpen, setIsConfirmCustomCategoryOpen] = useState(false);
+  const [previousCategoryBeforeCustomInput, setPreviousCategoryBeforeCustomInput] = useState(DEFAULT_INVENTORY_CATEGORY);
   const [newItem, setNewItem] = useState<Partial<InventoryItem>>({
     name: '',
-    category: 'Evening Gown',
+    category: DEFAULT_INVENTORY_CATEGORY,
     color: '',
     size: [],
     price: 0,
@@ -260,6 +267,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     image: '',
     stock: 1
   });
+  const inventoryCategoryOptions = useMemo(() => {
+    const categories = [
+      ...DEFAULT_INVENTORY_CATEGORIES,
+      ...inventory.map((item) => String(item.category || '').trim()),
+      ...archivedItems.map((item) => String(item.category || '').trim()),
+      String(editingItem?.category || '').trim(),
+      String(newItem.category || '').trim(),
+    ].filter(Boolean);
+
+    return Array.from(new Set(categories));
+  }, [archivedItems, editingItem?.category, inventory, newItem.category]);
 
   // Users State
   const [users, setUsers] = useState<User[]>([]);
@@ -1367,6 +1385,103 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  useEffect(() => {
+    if (!showAddItem) {
+      setIsCustomCategoryInputVisible(false);
+      setCustomCategoryDraft('');
+    }
+  }, [showAddItem]);
+
+  const cancelCustomCategorySelection = () => {
+    const fallbackCategory = previousCategoryBeforeCustomInput || DEFAULT_INVENTORY_CATEGORY;
+
+    setIsCustomCategoryInputVisible(false);
+    setCustomCategoryDraft('');
+    setIsConfirmCustomCategoryOpen(false);
+
+    if (editingItem) {
+      setEditingItem({ ...editingItem, category: fallbackCategory });
+      return;
+    }
+
+    setNewItem({ ...newItem, category: fallbackCategory });
+    setAddItemErrors((prev) => ({ ...prev, category: '' }));
+  };
+
+  const handleCategorySelectionChange = (nextValue: string) => {
+    if (nextValue === NEW_CATEGORY_OPTION) {
+      setPreviousCategoryBeforeCustomInput(editingItem?.category || newItem.category || DEFAULT_INVENTORY_CATEGORY);
+      setIsCustomCategoryInputVisible(true);
+      setCustomCategoryDraft(editingItem?.category || '');
+
+      if (editingItem) {
+        setEditingItem({ ...editingItem, category: '' });
+      } else {
+        setNewItem({ ...newItem, category: '' });
+        setAddItemErrors((prev) => ({ ...prev, category: '' }));
+      }
+
+      return;
+    }
+
+    setIsCustomCategoryInputVisible(false);
+    setCustomCategoryDraft('');
+
+    if (editingItem) {
+      setEditingItem({ ...editingItem, category: nextValue });
+    } else {
+      setNewItem({ ...newItem, category: nextValue });
+      setAddItemErrors((prev) => ({ ...prev, category: '' }));
+    }
+  };
+
+  const handleCustomCategoryInputChange = (nextValue: string) => {
+    setCustomCategoryDraft(nextValue);
+
+    if (editingItem) {
+      setEditingItem({ ...editingItem, category: nextValue });
+    } else {
+      setNewItem({ ...newItem, category: nextValue });
+      setAddItemErrors((prev) => ({ ...prev, category: '' }));
+    }
+  };
+
+  const handleAddCustomCategory = () => {
+    const trimmedCategory = customCategoryDraft.trim();
+
+    if (!trimmedCategory) {
+      if (!editingItem) {
+        setAddItemErrors((prev) => ({ ...prev, category: 'This field is required' }));
+      }
+      return;
+    }
+
+    setIsConfirmCustomCategoryOpen(true);
+  };
+
+  const confirmAddCustomCategory = () => {
+    const trimmedCategory = customCategoryDraft.trim();
+
+    if (!trimmedCategory) {
+      if (!editingItem) {
+        setAddItemErrors((prev) => ({ ...prev, category: 'This field is required' }));
+      }
+      setIsConfirmCustomCategoryOpen(false);
+      return;
+    }
+
+    if (editingItem) {
+      setEditingItem({ ...editingItem, category: trimmedCategory });
+    } else {
+      setNewItem({ ...newItem, category: trimmedCategory });
+      setAddItemErrors((prev) => ({ ...prev, category: '' }));
+    }
+
+    setCustomCategoryDraft(trimmedCategory);
+    setIsCustomCategoryInputVisible(false);
+    setIsConfirmCustomCategoryOpen(false);
+  };
+
   const validateAddItem = () => {
     const errors: Partial<Record<AddItemField, string>> = {};
 
@@ -1418,7 +1533,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       setInventory(prev => [created, ...prev]);
       setShowAddItem(false);
       setAddItemErrors({});
-      setNewItem({ name: '', category: 'Evening Gown', color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', stock: 1 });
+      setIsCustomCategoryInputVisible(false);
+      setCustomCategoryDraft('');
+      setIsConfirmCustomCategoryOpen(false);
+      setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', stock: 1 });
       resetImageModal();
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
       showTempMessage('Gown added successfully!');
@@ -1446,6 +1564,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       });
       setInventory(prev => prev.map(item => item.id === editingItem.id ? updated : item));
       setEditingItem(null);
+      setIsCustomCategoryInputVisible(false);
+      setCustomCategoryDraft('');
+      setIsConfirmCustomCategoryOpen(false);
       resetImageModal();
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
       showTempMessage('Gown updated successfully!');
@@ -2715,7 +2836,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       key={rental.id}
                       className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
                     >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
@@ -2734,7 +2855,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             </div>
                           </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+                        <div className="flex flex-wrap items-center gap-3 md:justify-end">
                           <div className="text-right">
                             <p className="text-sm text-[#6B5D4F] mb-1">Total Rental</p>
                             <p className="text-lg font-light">₱{rental.totalPrice.toLocaleString()}</p>
@@ -4075,7 +4196,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         )}
 
         {/* Add/Edit Item Modal */}
-        {(showAddItem || editingItem) && (
+        {(showAddItem || editingItem) && !isConfirmCustomCategoryOpen && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <h3 className="text-2xl font-light mb-6">
@@ -4104,22 +4225,50 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
                   <div>
                     <label className="block text-sm text-[#6B5D4F] mb-2">Category *</label>
-                    <select
-                      required={!editingItem}
-                      aria-invalid={!editingItem && Boolean(addItemErrors.category)}
-                      aria-describedby={!editingItem && addItemErrors.category ? 'add-item-category-error' : undefined}
-                      value={editingItem?.category || newItem.category}
-                      onChange={(e) => editingItem
-                        ? setEditingItem({ ...editingItem, category: e.target.value })
-                        : (setNewItem({ ...newItem, category: e.target.value }), setAddItemErrors(prev => ({ ...prev, category: '' })))
-                      }
-                      className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.category ? 'border-red-400' : 'border-[#E8DCC8]'}`}
-                    >
-                      <option value="Evening Gown">Evening Gown</option>
-                      <option value="Wedding Dress">Wedding Dress</option>
-                      <option value="Ball Gown">Ball Gown</option>
-                      <option value="Cocktail Dress">Cocktail Dress</option>
-                    </select>
+                    {isCustomCategoryInputVisible ? (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            required={!editingItem}
+                            value={customCategoryDraft}
+                            onChange={(e) => handleCustomCategoryInputChange(e.target.value)}
+                            className={`w-full max-w-[240px] px-4 py-3 rounded-lg border bg-white focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.category ? 'border-red-400' : 'border-[#E8DCC8]'}`}
+                            placeholder="New Category"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddCustomCategory}
+                            className="shrink-0 min-w-[88px] px-4 py-3 rounded-lg bg-[#1a1a1a] text-white font-medium hover:bg-[#D4AF37] hover:text-black transition-colors"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        <div className="mt-1 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={cancelCustomCategorySelection}
+                            className="cursor-pointer text-xs italic text-[#8D7B68] transition-colors hover:text-[#D4AF37]"
+                          >
+                            Cancel Add Category
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <select
+                        required={!editingItem}
+                        aria-invalid={!editingItem && Boolean(addItemErrors.category)}
+                        aria-describedby={!editingItem && addItemErrors.category ? 'add-item-category-error' : undefined}
+                        value={editingItem?.category || newItem.category}
+                        onChange={(e) => handleCategorySelectionChange(e.target.value)}
+                        className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.category ? 'border-red-400' : 'border-[#E8DCC8]'}`}
+                      >
+                        {inventoryCategoryOptions.map((category) => (
+                          <option key={category} value={category}>{category}</option>
+                        ))}
+                        <option value={NEW_CATEGORY_OPTION}>New Category</option>
+                      </select>
+                    )}
                     {!editingItem && addItemErrors.category && <p id="add-item-category-error" className="text-sm text-red-600 mt-1">{addItemErrors.category}</p>}
                   </div>
 
@@ -4341,6 +4490,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       setEditingItem(null);
                       setShowAddItem(false);
                       setAddItemErrors({});
+                      setIsCustomCategoryInputVisible(false);
+                      setCustomCategoryDraft('');
+                      setIsConfirmCustomCategoryOpen(false);
                       resetImageModal();
                     }}
                     className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
@@ -4354,6 +4506,47 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     {editingItem ? 'Update' : 'Add'} Gown
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isConfirmCustomCategoryOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm custom category"
+            onClick={cancelCustomCategorySelection}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Category</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Add this category to the dropdown list?
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
+                <p className="font-medium text-[#3D2B1F]">{customCategoryDraft.trim() || 'New Category'}</p>
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={cancelCustomCategorySelection}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmAddCustomCategory}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors"
+                >
+                  Yes, Add
+                </button>
               </div>
             </div>
           </div>

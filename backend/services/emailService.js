@@ -140,7 +140,12 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options
     if (normalizedStatus === 'pending') return `Your appointment request for ${itemLabel} has been received. Please wait for our confirmation and keep your schedule available for updates.`;
     if (normalizedStatus === 'scheduled') return `Your appointment for ${itemLabel} has been confirmed. Please arrive on time and contact us if you need to reschedule.`;
     if (normalizedStatus === 'completed') return `Your appointment for ${itemLabel} has been marked as completed. Please contact us if you need any further assistance.`;
-    if (normalizedStatus === 'cancelled') return `Your appointment for ${itemLabel} has been cancelled. Please contact us if you would like to arrange a new schedule.`;
+    if (normalizedStatus === 'cancelled') {
+      const reasonText = normalizedCancellationReason
+        ? ` Reason: ${normalizedCancellationReason}.`
+        : '';
+      return `Your appointment for ${itemLabel} has been cancelled.${reasonText} Please contact us if you would like to arrange a new schedule.`;
+    }
     return `Your appointment for ${itemLabel} is now ${formatStatusLabel(status).toLowerCase()}. Please contact us if you need any assistance.`;
   }
 
@@ -172,7 +177,12 @@ function getNotificationMessageBody(type, status, itemOrServiceOrDesign, options
     if (normalizedStatus === 'fitting') return `Your bespoke order for ${itemLabel} is ready for fitting. Please set your fitting schedule so we can proceed with the next step.`;
     if (normalizedStatus === 'fitting-scheduled') return `Your fitting appointment for ${itemLabel} has been scheduled. Please attend on your selected date and time, or contact us if you need to reschedule.`;
     if (normalizedStatus === 'completed') return `Your bespoke order for ${itemLabel} is completed. Thank you for choosing FabriQ. Please review the order details below and contact us if you need any final assistance.`;
-    if (normalizedStatus === 'rejected') return `Your bespoke order for ${itemLabel} has been updated. Please contact us if you would like to discuss the next available options.`;
+    if (normalizedStatus === 'rejected') {
+      const reasonText = normalizedCancellationReason
+        ? ` Reason: ${normalizedCancellationReason}.`
+        : '';
+      return `Your bespoke order for ${itemLabel} has been updated.${reasonText} Please contact us if you would like to discuss the next available options.`;
+    }
     return `Your bespoke order for ${itemLabel} is now ${formatStatusLabel(status).toLowerCase()}. Please contact us if you need any assistance.`;
   }
 
@@ -210,9 +220,14 @@ export function buildNotificationEmailPayload({
     : `${detailsLabel}: ${String(itemOrServiceOrDesign || '').trim() || 'N/A'}`;
   const normalizedCancellationReason = String(cancellationReason || '').trim();
   const resolvedDetails = String(detailsOverride || '').trim()
-    || (normalizedType === 'rental' && normalizedStatus === 'cancelled' && normalizedCancellationReason
+    || ((normalizedType === 'rental' && normalizedStatus === 'cancelled')
+      || (normalizedType === 'appointment' && normalizedStatus === 'cancelled')
+      || (normalizedType === 'bespoke' && normalizedStatus === 'rejected')
+      ? normalizedCancellationReason
+      : ''
+    )
       ? `${detailsValue}\nReason: ${normalizedCancellationReason}`
-      : detailsValue);
+      : detailsValue;
 
   return {
     subject: String(subject || '').trim() || getNotificationSubject(normalizedType, status, { dateType: resolvedDateType }),

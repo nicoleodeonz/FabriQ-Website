@@ -373,6 +373,7 @@ export async function updateAppointmentStatus(req, res) {
             status: nextStatus,
             name: appointment.customerName || '',
             itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
+            cancellationReason: nextStatus === 'cancelled' ? appointment.cancellationReason || '' : '',
             date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
             dateType: nextStatus === 'scheduled' ? 'Scheduled Date' : 'Time Sent',
             time: appointment.time || '',

@@ -77,7 +77,7 @@ async function generateRentalReferenceId() {
 async function countActiveRentalsForProduct(productId, excludedRentalId = null) {
   const query = {
     productId,
-    status: { $nin: NON_ACTIVE_RENTAL_STATUSES },
+    status: 'active',
   };
 
   if (excludedRentalId) {
