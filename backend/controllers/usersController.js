@@ -301,6 +301,11 @@ export async function archiveUser(req, res) {
       return res.status(400).json({ message: 'You cannot archive your own account' });
     }
 
+    const archiveReason = String(req.body?.reason || '').trim();
+    if (!archiveReason) {
+      return res.status(400).json({ message: 'Archive reason is required' });
+    }
+
     const Model = isElevatedRole(normalizedRole)
       ? getElevatedAccountModel(normalizedRole)
       : CustomerAccount;
@@ -322,7 +327,8 @@ export async function archiveUser(req, res) {
       targetRole: targetRoleLabel,
       details: {
         status: 'archived',
-        email: updated.email || ''
+        email: updated.email || '',
+        reason: archiveReason
       }
     });
 

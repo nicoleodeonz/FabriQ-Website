@@ -1,14 +1,17 @@
+import crypto from 'crypto';
 import CustomerAccount from '../models/Customer.js';
 import CustomerDetail from '../models/CustomerDetail.js';
 import AdminAccount from '../models/Admin.js';
 import StaffAccount from '../models/Staff.js';
 import {
-  checkPhoneVerificationCode,
-  isTwilioVerifyConfigError,
+  isSmsConfigError,
+  isSmsPhoneNumberError,
   sendPhoneVerificationCode,
-} from '../services/twilioVerifyService.js';
+} from '../services/smsService.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { toPublicUrl } from '../utils/media.js';
+
+const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 
 function sanitizeFavoriteGowns(items) {
   if (!Array.isArray(items)) return [];
@@ -77,6 +80,20 @@ function buildElevatedName(email) {
 
 function getElevatedModel(role) {
   return String(role || '').toLowerCase() === 'staff' ? StaffAccount : AdminAccount;
+}
+
+function hashCode(code) {
+  return crypto.createHash('sha256').update(String(code)).digest('hex');
+}
+
+function generateCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+
+function clearPhoneVerificationCode(customer) {
+  customer.phoneVerificationCodeHash = null;
+  customer.phoneVerificationExpiresAt = null;
+  customer.phoneVerificationSentAt = null;
 }
 
 function mapElevatedProfile(account, role) {
@@ -251,6 +268,7 @@ export const updateCustomer = async (req, res) => {
     if (shouldResetPhoneVerification) {
       customer.phoneVerified = false;
       customer.phoneVerifiedAt = null;
+      clearPhoneVerificationCode(customer);
     }
 
     const updatedCustomer = await customer.save();
@@ -425,8 +443,8 @@ function buildSafeCustomerProfile(accountDoc, detailDoc = null) {
   return safeCustomer;
 }
 
-function mapTwilioVerificationError(error) {
-  if (isTwilioVerifyConfigError(error)) {
+function mapSmsVerificationError(error) {
+  if (isSmsConfigError(error)) {
     const missingKeys = Array.isArray(error?.missingKeys) ? error.missingKeys.join(', ') : '';
     return {
       status: 503,
@@ -441,6 +459,14 @@ function mapTwilioVerificationError(error) {
 
   if (status === 429) {
     return { status: 429, message: 'Too many verification attempts. Please wait before trying again.' };
+  }
+
+  if (isSmsPhoneNumberError(error)) {
+    return { status: 400, message: 'The saved phone number is not valid for SMS delivery.' };
+  }
+
+  if (status >= 400 && status < 500) {
+    return { status, message: 'SMS delivery failed. Please verify the phone number and try again.' };
   }
 
   if (code === 60200 || code === 60202 || code === 20404) {
@@ -469,7 +495,19 @@ export const sendCustomerPhoneVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'This phone number is already verified.' });
     }
 
-    await sendPhoneVerificationCode(customer.phoneNumber);
+    const code = generateCode();
+    customer.phoneVerificationCodeHash = hashCode(code);
+    customer.phoneVerificationExpiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
+    customer.phoneVerificationSentAt = new Date();
+    await customer.save();
+
+    try {
+      await sendPhoneVerificationCode(customer.phoneNumber, code);
+    } catch (error) {
+      clearPhoneVerificationCode(customer);
+      await customer.save();
+      throw error;
+    }
 
     return res.json({
       message: 'Verification code sent successfully.',
@@ -477,7 +515,7 @@ export const sendCustomerPhoneVerificationCode = async (req, res) => {
     });
   } catch (error) {
     console.error('sendCustomerPhoneVerificationCode error:', error);
-    const mappedError = mapTwilioVerificationError(error);
+    const mappedError = mapSmsVerificationError(error);
     return res.status(mappedError.status).json({ message: mappedError.message });
   }
 };
@@ -502,13 +540,23 @@ export const verifyCustomerPhoneVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'Add a phone number to your profile before verifying it.' });
     }
 
-    const verificationCheck = await checkPhoneVerificationCode(customer.phoneNumber, code);
-    if (verificationCheck.status !== 'approved') {
+    if (!customer.phoneVerificationCodeHash || !customer.phoneVerificationExpiresAt) {
+      return res.status(400).json({ message: 'Request a verification code before verifying your phone number.' });
+    }
+
+    if (new Date(customer.phoneVerificationExpiresAt).getTime() < Date.now()) {
+      clearPhoneVerificationCode(customer);
+      await customer.save();
+      return res.status(400).json({ message: 'Invalid or expired verification code.' });
+    }
+
+    if (hashCode(code) !== customer.phoneVerificationCodeHash) {
       return res.status(400).json({ message: 'Invalid or expired verification code.' });
     }
 
     customer.phoneVerified = true;
     customer.phoneVerifiedAt = new Date();
+    clearPhoneVerificationCode(customer);
     await customer.save();
 
     const detail = await CustomerDetail.findOneAndUpdate(
@@ -533,7 +581,7 @@ export const verifyCustomerPhoneVerificationCode = async (req, res) => {
     });
   } catch (error) {
     console.error('verifyCustomerPhoneVerificationCode error:', error);
-    const mappedError = mapTwilioVerificationError(error);
+    const mappedError = mapSmsVerificationError(error);
     return res.status(mappedError.status).json({ message: mappedError.message });
   }
 };

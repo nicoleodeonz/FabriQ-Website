@@ -6,6 +6,7 @@ import AdminAction from '../models/AdminAction.js';
 import StaffAccount from '../models/Staff.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
+import { sendVerificationAcrossChannels } from '../services/messageDeliveryService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -255,6 +256,17 @@ export const signUp = async (req, res) => {
       return res.status(503).json({
         message: 'Unable to send the verification email right now. Please try again in a moment.',
       });
+    }
+
+    const smsDeliveryResult = await sendVerificationAcrossChannels({
+      phoneNumber: customerAccount.phoneNumber || '',
+      code: signupCode,
+      purpose: 'account_verification',
+      expiresInHours: 24,
+    });
+
+    if (!smsDeliveryResult?.delivered && !smsDeliveryResult?.skipped) {
+      console.warn('Signup verification SMS was not delivered:', smsDeliveryResult);
     }
 
     res.status(200).json({
@@ -571,6 +583,17 @@ export const requestPasswordReset = async (req, res) => {
         purpose: 'password_reset',
         expiresInMinutes: 15,
       });
+
+      const smsDeliveryResult = await sendVerificationAcrossChannels({
+        phoneNumber: account.phoneNumber || '',
+        code: resetCode,
+        purpose: 'password_reset',
+        expiresInMinutes: 15,
+      });
+
+      if (!smsDeliveryResult?.delivered && !smsDeliveryResult?.skipped) {
+        console.warn('Password reset SMS was not delivered:', smsDeliveryResult);
+      }
 
       const message = buildCodeDeliveryMessage(
         'If an account exists for that email, a reset code has been sent.',

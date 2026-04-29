@@ -149,7 +149,7 @@ export function MobileVerificationModal({
               <div className="px-1 py-1 text-sm leading-7 text-[#6B5D4F]">
                 {isVerified
                   ? 'Your saved number is already verified and can be used for rentals, appointments, and other customer flows that require SMS-confirmed contact details.'
-                  : 'We will send a 6-digit SMS code to your saved mobile number through Twilio Verify. Your number stays unverified until that code is confirmed successfully.'}
+                  : 'We will send a 6-digit SMS code to your saved mobile number through Semaphore. Your number stays unverified until that code is confirmed successfully.'}
               </div>
 
               {message && (
@@ -191,7 +191,7 @@ export function MobileVerificationModal({
                     setCode(event.target.value.replace(/\D/g, '').slice(0, 6));
                     if (message) setMessage(null);
                   }}
-                  className="w-full rounded-xl border border-[#E8DCC8] px-5 py-4 text-lg tracking-[0.35em] focus:outline-none focus:border-[#D4AF37]"
+                  className="w-full rounded-xl border border-[#E8DCC8] px-5 py-4 text-center text-lg tracking-[0.35em] focus:outline-none focus:border-[#D4AF37]"
                   placeholder="000000"
                   inputMode="numeric"
                 />

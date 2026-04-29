@@ -39,6 +39,18 @@ const CustomerAccountSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  phoneVerificationCodeHash: {
+    type: String,
+    default: null
+  },
+  phoneVerificationExpiresAt: {
+    type: Date,
+    default: null
+  },
+  phoneVerificationSentAt: {
+    type: Date,
+    default: null
+  },
   preferredBranch: {
     type: String,
     default: 'Taguig Main - Cadena de Amor'

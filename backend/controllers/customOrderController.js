@@ -2,7 +2,7 @@ import CustomOrder from '../models/CustomOrder.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
-import { sendNotificationEmail } from '../services/emailService.js';
+import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
 const CUSTOM_ORDER_STATUSES = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
@@ -149,8 +149,9 @@ async function updateCustomOrderVisitSchedule(req, res, config) {
     if (typeof config.buildNotificationPayload === 'function') {
       try {
         const notificationPayload = config.buildNotificationPayload(order);
-        if (notificationPayload?.email) {
-          await sendNotificationEmail(notificationPayload);
+        if (notificationPayload?.email || notificationPayload?.phoneNumber) {
+          const { email, phoneNumber, ...payload } = notificationPayload;
+          await sendNotificationAcrossChannels({ email, phoneNumber, payload });
         }
       } catch (notificationError) {
         console.error(`${config.label.toLowerCase()} schedule notification error:`, notificationError);
@@ -251,6 +252,7 @@ export const updateCustomOrderConsultationSchedule = async (req, res) => {
     reasonField: 'consultationRescheduleReason',
     buildNotificationPayload: (order) => ({
       email: order.email || '',
+      phoneNumber: order.contactNumber || '',
       type: 'bespoke',
       status: 'design-approval',
       name: order.customerName || '',
@@ -273,6 +275,7 @@ export const updateCustomOrderFittingSchedule = async (req, res) => {
     reasonField: 'fittingRescheduleReason',
     buildNotificationPayload: (order) => ({
       email: order.email || '',
+      phoneNumber: order.contactNumber || '',
       type: 'bespoke',
       status: 'fitting-scheduled',
       name: order.customerName || '',
@@ -367,16 +370,19 @@ export const updateCustomOrderStatus = async (req, res) => {
 
     if (previousStatus === 'inquiry' && nextStatus === 'design-approval') {
       try {
-        await sendNotificationEmail({
+        await sendNotificationAcrossChannels({
           email: order.email || '',
-          type: 'bespoke',
-          status: nextStatus,
-          name: order.customerName || '',
-          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
-          date: String(order.consultationDate || order.eventDate || '').trim(),
-          dateType: String(order.consultationDate || order.consultationTime || '').trim() ? 'Scheduled Date' : 'Time Sent',
-          time: String(order.consultationTime || '').trim(),
-          location: String(order.branch || '').trim(),
+          phoneNumber: order.contactNumber || '',
+          payload: {
+            type: 'bespoke',
+            status: nextStatus,
+            name: order.customerName || '',
+            itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            date: String(order.consultationDate || order.eventDate || '').trim(),
+            dateType: String(order.consultationDate || order.consultationTime || '').trim() ? 'Scheduled Date' : 'Time Sent',
+            time: String(order.consultationTime || '').trim(),
+            location: String(order.branch || '').trim(),
+          },
         });
       } catch (notificationError) {
         console.error('custom order inquiry approval notification error:', notificationError);
@@ -385,16 +391,19 @@ export const updateCustomOrderStatus = async (req, res) => {
 
     if (previousStatus === 'design-approval' && nextStatus === 'in-progress') {
       try {
-        await sendNotificationEmail({
+        await sendNotificationAcrossChannels({
           email: order.email || '',
-          type: 'bespoke',
-          status: nextStatus,
-          name: order.customerName || '',
-          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
-          date: String(order.consultationDate || order.eventDate || '').trim(),
-          dateType: 'Time Sent',
-          time: String(order.consultationTime || '').trim(),
-          location: String(order.branch || '').trim(),
+          phoneNumber: order.contactNumber || '',
+          payload: {
+            type: 'bespoke',
+            status: nextStatus,
+            name: order.customerName || '',
+            itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            date: String(order.consultationDate || order.eventDate || '').trim(),
+            dateType: 'Time Sent',
+            time: String(order.consultationTime || '').trim(),
+            location: String(order.branch || '').trim(),
+          },
         });
       } catch (notificationError) {
         console.error('custom order in-progress notification error:', notificationError);
@@ -403,16 +412,19 @@ export const updateCustomOrderStatus = async (req, res) => {
 
     if (previousStatus === 'fitting' && nextStatus === 'in-progress') {
       try {
-        await sendNotificationEmail({
+        await sendNotificationAcrossChannels({
           email: order.email || '',
-          type: 'bespoke',
-          status: nextStatus,
-          name: order.customerName || '',
-          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
-          date: String(order.eventDate || '').trim(),
-          dateType: 'Time Sent',
-          time: '',
-          location: String(order.branch || '').trim(),
+          phoneNumber: order.contactNumber || '',
+          payload: {
+            type: 'bespoke',
+            status: nextStatus,
+            name: order.customerName || '',
+            itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            date: String(order.eventDate || '').trim(),
+            dateType: 'Time Sent',
+            time: '',
+            location: String(order.branch || '').trim(),
+          },
         });
       } catch (notificationError) {
         console.error('custom order adjustment in-progress notification error:', notificationError);
@@ -421,16 +433,19 @@ export const updateCustomOrderStatus = async (req, res) => {
 
     if (previousStatus === 'in-progress' && nextStatus === 'fitting') {
       try {
-        await sendNotificationEmail({
+        await sendNotificationAcrossChannels({
           email: order.email || '',
-          type: 'bespoke',
-          status: nextStatus,
-          name: order.customerName || '',
-          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
-          date: String(order.fittingDate || order.eventDate || '').trim(),
-          dateType: 'Time Sent',
-          time: String(order.fittingTime || '').trim(),
-          location: String(order.branch || '').trim(),
+          phoneNumber: order.contactNumber || '',
+          payload: {
+            type: 'bespoke',
+            status: nextStatus,
+            name: order.customerName || '',
+            itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            date: String(order.fittingDate || order.eventDate || '').trim(),
+            dateType: 'Time Sent',
+            time: String(order.fittingTime || '').trim(),
+            location: String(order.branch || '').trim(),
+          },
         });
       } catch (notificationError) {
         console.error('custom order fitting notification error:', notificationError);
@@ -491,16 +506,19 @@ export const archiveCustomOrder = async (req, res) => {
 
     try {
       const now = new Date();
-      await sendNotificationEmail({
+      await sendNotificationAcrossChannels({
         email: order.email || '',
-        type: 'bespoke',
-        status: 'completed',
-        name: order.customerName || '',
-        itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
-        date: now.toISOString().slice(0, 10),
-        dateType: 'Time Sent',
-        time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        location: String(order.branch || '').trim(),
+        phoneNumber: order.contactNumber || '',
+        payload: {
+          type: 'bespoke',
+          status: 'completed',
+          name: order.customerName || '',
+          itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+          date: now.toISOString().slice(0, 10),
+          dateType: 'Time Sent',
+          time: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+          location: String(order.branch || '').trim(),
+        },
       });
     } catch (notificationError) {
       console.error('custom order archive completion notification error:', notificationError);

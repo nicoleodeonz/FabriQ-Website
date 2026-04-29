@@ -128,6 +128,10 @@ function buildAdminHash(tab: AdminTab) {
   return `#/admin${queryString ? `?${queryString}` : ''}`;
 }
 
+function normalizeManagedUserStatus(status: unknown): User['status'] {
+  return String(status || '').trim().toLowerCase() === 'archived' ? 'archived' : 'active';
+}
+
 function compareInventoryItemsAscending(left: InventoryItem, right: InventoryItem) {
   const leftKey = (left.sku || left.id || '').trim();
   const rightKey = (right.sku || right.id || '').trim();
@@ -269,6 +273,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [userPage, setUserPage] = useState(1);
   const [confirmUserArchive, setConfirmUserArchive] = useState<User | null>(null);
   const [isConfirmingUserArchive, setIsConfirmingUserArchive] = useState(false);
+  const [userArchiveReason, setUserArchiveReason] = useState('');
+  const [userArchiveReasonError, setUserArchiveReasonError] = useState<string | null>(null);
   const [confirmUserRestore, setConfirmUserRestore] = useState<User | null>(null);
   const [isConfirmingUserRestore, setIsConfirmingUserRestore] = useState(false);
   const [archivingUserId, setArchivingUserId] = useState<string | null>(null);
@@ -367,7 +373,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   // Notification State
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [selectedRental, setSelectedRental] = useState<RentalFollowUpTarget | null>(null);
-  const [notificationMethod, setNotificationMethod] = useState<'sms' | 'email' | 'both'>('email');
+  const [notificationMethod, setNotificationMethod] = useState<'sms' | 'email' | 'both'>('both');
   const [notificationError, setNotificationError] = useState<string | null>(null);
   const [notificationSending, setNotificationSending] = useState(false);
 
@@ -731,7 +737,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       branch: user.preferredBranch || '',
       role: user.role,
       joinDate: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A',
-      status: user.status || 'active',
+      status: normalizeManagedUserStatus(user.status),
       lastActivity: user.updatedAt ? new Date(user.updatedAt).toLocaleDateString() : 'N/A'
     };
   }
@@ -1096,16 +1102,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
 
     setConfirmUserArchive(user);
+    setUserArchiveReason('');
+    setUserArchiveReasonError(null);
   }
 
   async function handleConfirmArchiveUser() {
     if (!confirmUserArchive) return;
 
+    const trimmedReason = userArchiveReason.trim();
+    if (!trimmedReason) {
+      setUserArchiveReasonError('Archive reason is required.');
+      return;
+    }
+
     setIsConfirmingUserArchive(true);
     setArchivingUserId(confirmUserArchive.id);
     setUsersError(null);
+    setUserArchiveReasonError(null);
     try {
-      await usersAPI.archiveUser(token, confirmUserArchive.role, confirmUserArchive.id);
+      await usersAPI.archiveUser(token, confirmUserArchive.role, confirmUserArchive.id, trimmedReason);
       setUsers((prev) => prev.map((row) => (
         row.id === confirmUserArchive.id
           ? {
@@ -1126,6 +1141,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       ));
       showUsersTempMessage('User moved to archived.');
       setConfirmUserArchive(null);
+      setUserArchiveReason('');
     } catch (err) {
       setUsersError(err instanceof Error ? err.message : 'Failed to archive user');
     } finally {
@@ -1513,9 +1529,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       (userFilter === 'admin' && user.role === 'Admin') ||
       (userFilter === 'staff' && user.role === 'Staff') ||
       (userFilter === 'customer' && user.role === 'Customer');
+    const normalizedStatus = normalizeManagedUserStatus(user.status);
     const matchesArchiveView = showArchivedUsersOnly
-      ? user.status === 'archived'
-      : user.status !== 'archived';
+      ? normalizedStatus === 'archived'
+      : normalizedStatus !== 'archived';
     const matchesBranch = matchesSelectedBranch(user.branch, selectedBranch);
     return matchesSearch && matchesRole && matchesArchiveView && matchesBranch;
   });
@@ -1599,7 +1616,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const pendingRentalCards = currentRentalCards.filter((rental) => rental.status === 'pending');
   const activeRentalCards = currentRentalCards.filter((rental) => rental.status === 'active');
+  const displayedActiveRentalCards = activeRentalCards.filter((rental) => {
+    const due = new Date(rental.endDate);
+    due.setHours(0, 0, 0, 0);
+    if (Number.isNaN(due.getTime())) {
+      return true;
+    }
+
+    return today <= due;
+  });
   const archivedRentalCards: AdminRentalCard[] = adminRentals
+    .filter((rental) => rental.status === 'completed')
     .map((rental) => ({
       id: rental.id,
       referenceId: rental.referenceId,
@@ -1661,7 +1688,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const filteredPendingRentalCards = pendingRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
-  const filteredActiveRentalCards = activeRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredActiveRentalCards = displayedActiveRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
@@ -2099,10 +2126,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   // Notification Handler
   const handleSendNotification = () => {
     if (!selectedRental) return;
-    if (notificationMethod !== 'email') {
-      setNotificationError('Email notifications are currently available. Please choose Email Only.');
-      return;
-    }
 
     setNotificationError(null);
     setShowNotificationModal(false);
@@ -2120,13 +2143,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         type: 'rental',
         recordId: selectedRental.id,
         messageBody: reminderMessage,
+        deliveryMethod: notificationMethod,
       });
 
       setIsSendReminderConfirmOpen(false);
       setShowNotificationModal(false);
       setIsReminderSentSuccessOpen(true);
     } catch (error) {
-      setNotificationError(error instanceof Error ? error.message : 'Failed to send notification email.');
+      setNotificationError(error instanceof Error ? error.message : 'Failed to send notification.');
       setIsSendReminderConfirmOpen(false);
       setShowNotificationModal(true);
     } finally {
@@ -2137,7 +2161,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const handleDismissReminderSentSuccess = () => {
     setIsReminderSentSuccessOpen(false);
     setSelectedRental(null);
-    setNotificationMethod('email');
+    setNotificationMethod('both');
     setNotificationError(null);
   };
 
@@ -3006,11 +3030,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                                 status: 'active',
                               });
                             }}
-                            className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap ${
-                              rental.daysLate > 0
-                                ? 'bg-red-600 text-white hover:bg-red-700'
-                                : 'bg-[#D4AF37] text-white hover:bg-[#1a1a1a]'
-                            }`}
+                            className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] whitespace-nowrap"
                             title="Send Return Reminder"
                           >
                             <Send className="w-4 h-4" />
@@ -4409,7 +4429,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             aria-modal="true"
             aria-label="Confirm archive user"
             onClick={() => {
-              if (!isConfirmingUserArchive) setConfirmUserArchive(null);
+              if (!isConfirmingUserArchive) {
+                setConfirmUserArchive(null);
+                setUserArchiveReason('');
+                setUserArchiveReasonError(null);
+              }
             }}
           >
             <div
@@ -4424,9 +4448,36 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <p className="text-sm text-[#6B5D4F]">{confirmUserArchive.email}</p>
               </div>
 
+              <div className="mb-6">
+                <label htmlFor="user-archive-reason" className="block text-sm font-medium text-[#3D2B1F] mb-2">
+                  Reason for archiving
+                </label>
+                <textarea
+                  id="user-archive-reason"
+                  value={userArchiveReason}
+                  onChange={(e) => {
+                    setUserArchiveReason(e.target.value);
+                    if (userArchiveReasonError) {
+                      setUserArchiveReasonError(null);
+                    }
+                  }}
+                  rows={4}
+                  disabled={isConfirmingUserArchive}
+                  className="w-full px-4 py-3 border border-[#E8DCC8] rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 focus:border-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed"
+                  placeholder="Enter the reason for archiving this account"
+                />
+                {userArchiveReasonError && (
+                  <p className="mt-2 text-sm text-red-600">{userArchiveReasonError}</p>
+                )}
+              </div>
+
               <div className="flex flex-row items-center gap-3">
                 <button
-                  onClick={() => setConfirmUserArchive(null)}
+                  onClick={() => {
+                    setConfirmUserArchive(null);
+                    setUserArchiveReason('');
+                    setUserArchiveReasonError(null);
+                  }}
                   disabled={isConfirmingUserArchive}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
@@ -6106,12 +6157,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 {/* Notification Method */}
                 <div>
                   <label className="block text-sm text-[#6B5D4F] mb-3">Select Notification Method</label>
-                  <p className="mb-3 text-xs text-[#8A7763]">Email delivery is currently available for follow ups.</p>
+                  <p className="mb-3 text-xs text-[#8A7763]">Choose whether to send the follow up by SMS, email, or both.</p>
                   <div className="space-y-3">
                     <button
                       type="button"
-                      disabled
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 opacity-50 cursor-not-allowed ${
+                      onClick={() => setNotificationMethod('sms')}
+                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
                         notificationMethod === 'sms'
                           ? 'border-[#D4AF37] bg-[#FAF7F0]'
                           : 'border-[#E8DCC8] hover:border-[#D4AF37]'
@@ -6142,8 +6193,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
                     <button
                       type="button"
-                      disabled
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 opacity-50 cursor-not-allowed ${
+                      onClick={() => setNotificationMethod('both')}
+                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
                         notificationMethod === 'both'
                           ? 'border-[#D4AF37] bg-[#FAF7F0]'
                           : 'border-[#E8DCC8] hover:border-[#D4AF37]'
@@ -6166,7 +6217,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       setIsReminderSentSuccessOpen(false);
                       setShowNotificationModal(false);
                       setSelectedRental(null);
-                      setNotificationMethod('email');
+                      setNotificationMethod('both');
                       setNotificationError(null);
                     }}
                     className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"

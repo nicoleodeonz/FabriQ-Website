@@ -24,6 +24,7 @@ export interface SendNotificationPayload {
   type: NotificationType;
   recordId: string;
   messageBody?: string;
+  deliveryMethod?: 'sms' | 'email' | 'both';
 }
 
 export const notificationAPI = {
@@ -39,7 +40,7 @@ export const notificationAPI = {
 
     const body = await parseJsonSafe(response);
     if (!response.ok) {
-      throw new Error(getErrorMessage('Failed to send notification email', body));
+      throw new Error(getErrorMessage('Failed to send notification', body));
     }
 
     return body;

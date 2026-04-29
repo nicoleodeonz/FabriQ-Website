@@ -2,7 +2,7 @@ import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
 import AdminAction from '../models/AdminAction.js';
-import { sendNotificationEmail } from '../services/emailService.js';
+import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
@@ -290,21 +290,24 @@ export async function scheduleRentalPickup(req, res) {
     await rental.save();
 
     try {
-      const deliveryResult = await sendNotificationEmail({
+      const deliveryResult = await sendNotificationAcrossChannels({
         email: rental.customerEmail || rental.email || '',
-        type: 'rental',
-        status: rental.status,
-        name: rental.customerName || '',
-        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
-        date: rental.pickupScheduleDate
-          ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
-          : '',
-        dateType: 'Scheduled Date',
-        time: rental.pickupScheduleTime || '',
-        location: rental.branch || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          status: rental.status,
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          date: rental.pickupScheduleDate
+            ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
+            : '',
+          dateType: 'Scheduled Date',
+          time: rental.pickupScheduleTime || '',
+          location: rental.branch || '',
+        },
       });
 
-      if (!deliveryResult?.delivered) {
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
         console.warn('rental pickup schedule notification not delivered:', deliveryResult);
       }
     } catch (notificationError) {
@@ -362,17 +365,20 @@ export async function submitRentalPayment(req, res) {
     await rental.save();
 
     try {
-      const deliveryResult = await sendNotificationEmail({
+      const deliveryResult = await sendNotificationAcrossChannels({
         email: rental.customerEmail || rental.email || '',
-        type: 'rental',
-        status: rental.status,
-        name: rental.customerName || '',
-        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
-        dateType: 'Time Sent',
-        location: rental.branch || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          status: rental.status,
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          dateType: 'Time Sent',
+          location: rental.branch || '',
+        },
       });
 
-      if (!deliveryResult?.delivered) {
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
         console.warn('rental payment notification not delivered:', deliveryResult);
       }
     } catch (notificationError) {
@@ -542,18 +548,21 @@ export async function updateRentalStatus(req, res) {
 
     try {
       const hasPickupSchedule = Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);
-      await sendNotificationEmail({
+      await sendNotificationAcrossChannels({
         email: rental.customerEmail || rental.email || '',
-        type: 'rental',
-        status,
-        name: rental.customerName || '',
-        itemOrServiceOrDesign: rental.gownName || 'Rental Item',
-        date: rental.pickupScheduleDate
-          ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
-          : '',
-        dateType: status === 'for_pickup' && hasPickupSchedule ? 'Scheduled Date' : 'Time Sent',
-        time: rental.pickupScheduleTime || '',
-        location: rental.branch || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          status,
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          date: rental.pickupScheduleDate
+            ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
+            : '',
+          dateType: status === 'for_pickup' && hasPickupSchedule ? 'Scheduled Date' : 'Time Sent',
+          time: rental.pickupScheduleTime || '',
+          location: rental.branch || '',
+        },
       });
     } catch (notificationError) {
       console.error('rental status notification error:', notificationError);

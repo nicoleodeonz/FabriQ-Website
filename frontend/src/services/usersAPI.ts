@@ -90,9 +90,10 @@ export async function getUsers(token: string): Promise<ManagedUser[]> {
   return data.users;
 }
 
-export async function archiveUser(token: string, role: ManagedUserRole, id: string): Promise<ArchiveUserResponse> {
+export async function archiveUser(token: string, role: ManagedUserRole, id: string, reason: string): Promise<ArchiveUserResponse> {
   return request<ArchiveUserResponse>(`${API_BASE}/${role.toLowerCase()}/${id}/archive`, token, {
-    method: 'PATCH'
+    method: 'PATCH',
+    body: JSON.stringify({ reason })
   });
 }
 

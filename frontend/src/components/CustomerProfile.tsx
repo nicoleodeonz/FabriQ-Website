@@ -7,6 +7,7 @@ import { appointmentAPI } from '../services/appointmentAPI';
 import { authAPI } from '../services/authAPI';
 import { EditProfileModal } from './EditProfileModal.tsx';
 import { GownDetailsModal } from './GownDetailsModal';
+import { MobileVerificationModal } from './MobileVerificationModal';
 
 interface MeasurementValues {
   bust: string;
@@ -105,6 +106,7 @@ function formatCurrency(value?: number | null) {
 
 interface ProfileInputProps {
   label: string;
+  labelAdornment?: React.ReactNode;
   value: string | undefined;
   onChange?: (value: string) => void;
   type?: string;
@@ -122,6 +124,7 @@ interface ProfileInputProps {
 
 const ProfileInput = React.memo(({
   label,
+  labelAdornment,
   value,
   onChange,
   type = 'text',
@@ -194,7 +197,10 @@ const ProfileInput = React.memo(({
 
   return (
     <div>
-      <label className="block text-sm text-[#6B5D4F] mb-2">{label}</label>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <label className="block text-sm text-[#6B5D4F]">{label}</label>
+        {labelAdornment}
+      </div>
 
       <div className="relative">
         <input
@@ -293,6 +299,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordApiMessage, setPasswordApiMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isEditProfileModalOpen, setIsEditProfileModalOpen] = useState(false);
+  const [isMobileVerificationModalOpen, setIsMobileVerificationModalOpen] = useState(false);
   const [selectedFavoriteGown, setSelectedFavoriteGown] = useState<FavoriteGown | null>(null);
   const [pendingFavoriteRemoval, setPendingFavoriteRemoval] = useState<FavoriteGown | null>(null);
   const [passwordState, setPasswordState] = useState<PasswordState>({
@@ -743,7 +750,30 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
             type="email"
             disabled={true}
           />
-          <ProfileInput key="phone" label="Phone Number" value={displayedProfile.phoneNumber} type="tel" disabled={true} isPhone={true} />
+          <ProfileInput
+            key="phone"
+            label="Phone Number"
+            labelAdornment={
+              displayedProfile.phoneNumber ? (
+                <button
+                  type="button"
+                  onClick={() => setIsMobileVerificationModalOpen(true)}
+                  disabled={displayedProfile.phoneVerified}
+                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    displayedProfile.phoneVerified
+                      ? 'cursor-default border border-green-200 bg-green-50 text-green-700'
+                      : 'border border-[#E8DCC8] bg-white text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black'
+                  }`}
+                >
+                  {displayedProfile.phoneVerified ? 'Verified' : 'Verify Phone Number'}
+                </button>
+              ) : null
+            }
+            value={displayedProfile.phoneNumber}
+            type="tel"
+            disabled={true}
+            isPhone={true}
+          />
           <div>
             <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch</label>
             <select
@@ -1521,6 +1551,18 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
               console.error('Failed to update profile:', error);
               throw error;
             }
+          }}
+        />
+
+        <MobileVerificationModal
+          isOpen={isMobileVerificationModalOpen}
+          onClose={() => setIsMobileVerificationModalOpen(false)}
+          token={token}
+          phoneNumber={displayedProfile.phoneNumber}
+          isVerified={displayedProfile.phoneVerified}
+          onVerified={(customer) => {
+            applyProfileState(customer);
+            setIsMobileVerificationModalOpen(false);
           }}
         />
 

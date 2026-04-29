@@ -2,7 +2,7 @@ import AppointmentDetail from '../models/AppointmentDetail.js';
 import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import AdminAction from '../models/AdminAction.js';
-import { sendNotificationEmail } from '../services/emailService.js';
+import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
 function buildAdminName(email) {
@@ -361,16 +361,19 @@ export async function updateAppointmentStatus(req, res) {
 
     if (['scheduled', 'completed', 'cancelled'].includes(nextStatus)) {
       try {
-        await sendNotificationEmail({
+        await sendNotificationAcrossChannels({
           email: appointment.customerEmail || appointment.email || '',
-          type: 'appointment',
-          status: nextStatus,
-          name: appointment.customerName || '',
-          itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
-          date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
-          dateType: nextStatus === 'scheduled' ? 'Scheduled Date' : 'Time Sent',
-          time: appointment.time || '',
-          location: appointment.branch || '',
+          phoneNumber: appointment.contactNumber || '',
+          payload: {
+            type: 'appointment',
+            status: nextStatus,
+            name: appointment.customerName || '',
+            itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
+            date: appointment.date ? new Date(appointment.date).toISOString().slice(0, 10) : '',
+            dateType: nextStatus === 'scheduled' ? 'Scheduled Date' : 'Time Sent',
+            time: appointment.time || '',
+            location: appointment.branch || '',
+          },
         });
       } catch (notificationError) {
         console.error('appointment status notification error:', notificationError);
