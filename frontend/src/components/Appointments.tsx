@@ -359,29 +359,29 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
       value: 'consultation',
       label: 'Design Consultation',
       icon: Sparkles,
-      iconClassName: 'text-[#C7B5E8]',
-      iconBackgroundClassName: 'bg-[#F5F0FB] border-[#E6DCF7]',
+      iconClassName: 'text-[#8B6B4A]',
+      iconBackgroundClassName: 'bg-[#F5EBDD]',
     },
     {
       value: 'measurement',
       label: 'Measurement Session',
       icon: Ruler,
-      iconClassName: 'text-[#B39DDB]',
-      iconBackgroundClassName: 'bg-[#F7F2FC] border-[#E7DCF8]',
+      iconClassName: 'text-[#8B6B4A]',
+      iconBackgroundClassName: 'bg-[#F5EBDD]',
     },
     {
       value: 'fitting',
       label: 'Fitting Appointment',
       icon: Scissors,
-      iconClassName: 'text-[#4A7FE2]',
-      iconBackgroundClassName: 'bg-[#EEF4FF] border-[#D9E6FF]',
+      iconClassName: 'text-[#8B6B4A]',
+      iconBackgroundClassName: 'bg-[#F5EBDD]',
     },
     {
       value: 'pickup',
       label: 'Pickup/Return',
       icon: Package,
-      iconClassName: 'text-[#C68A5D]',
-      iconBackgroundClassName: 'bg-[#FFF2E8] border-[#F2DDCC]',
+      iconClassName: 'text-[#8B6B4A]',
+      iconBackgroundClassName: 'bg-[#F5EBDD]',
     }
   ];
 
@@ -529,7 +529,7 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
                         : 'border-[#E8DCC8] hover:border-[#6B5D4F] bg-white'
                     }`}
                   >
-                    <div className={`mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl border ${type.iconBackgroundClassName}`}>
+                    <div className={`mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl ${type.iconBackgroundClassName}`}>
                       <type.icon className={`h-5 w-5 ${type.iconClassName}`} strokeWidth={2.1} />
                     </div>
                     <h3 className="font-medium">{type.label}</h3>
