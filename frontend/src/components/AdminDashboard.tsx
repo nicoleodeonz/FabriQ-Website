@@ -108,6 +108,9 @@ const DEFAULT_INVENTORY_CATEGORIES = ['Evening Gown', 'Wedding Dress', 'Ball Gow
 const DEFAULT_INVENTORY_CATEGORY = DEFAULT_INVENTORY_CATEGORIES[0];
 const NEW_CATEGORY_OPTION = '__new_category__';
 
+type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
+type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
+
 function parseAdminTabFromHash(hash: string): AdminTab {
   const normalizedHash = hash.replace(/^#\/?/, '');
   const [pathPart = '', searchPart = ''] = normalizedHash.split('?');
@@ -362,7 +365,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [rentalPage, setRentalPage] = useState(1);
   const [appointmentManagementView, setAppointmentManagementView] = useState<'active' | 'archive'>('active');
   const [appointmentPage, setAppointmentPage] = useState(1);
-  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'pending' | 'scheduled'>('pending');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatusFilter>('all');
   const [appointmentSearchQuery, setAppointmentSearchQuery] = useState('');
   const [adminAppointments, setAdminAppointments] = useState<AdminAppointmentDetail[]>([]);
   const [adminAppointmentsLoading, setAdminAppointmentsLoading] = useState(false);
@@ -382,7 +385,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [customOrderManagementView, setCustomOrderManagementView] = useState<'active' | 'archive'>('active');
   const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
   const [customOrderPage, setCustomOrderPage] = useState(1);
-  const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<AdminCustomOrderStatus>('inquiry');
+  const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<CustomOrderStatusFilter>('all');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
@@ -394,7 +397,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adjustCustomOrderError, setAdjustCustomOrderError] = useState<string | null>(null);
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
-  const [rentalViewFilter, setRentalViewFilter] = useState<'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('pending');
+  const [rentalViewFilter, setRentalViewFilter] = useState<'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('all');
   const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
   const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
   const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
@@ -1794,6 +1797,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const allActiveStatusRentals = adminRentals.filter(
+    (rental) =>
+      rental.status === 'pending' ||
+      rental.status === 'for_payment' ||
+      rental.status === 'paid_for_confirmation' ||
+      rental.status === 'for_pickup' ||
+      rental.status === 'active'
+  );
+
   const currentRentalCards: AdminRentalCard[] = adminRentals
     .filter((rental) => rental.status === 'active' || rental.status === 'pending')
     .map((rental) => ({
@@ -1884,6 +1896,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const filteredActiveRentalCards = displayedActiveRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredAllActiveStatusRentals = allActiveStatusRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
 
   const pendingReturns: PendingReturn[] = activeRentalCards
@@ -1931,7 +1944,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   });
   const rentalItemsForCurrentView = rentalManagementView === 'archive'
     ? filteredArchivedRentalCards
-    : rentalViewFilter === 'pending'
+    : rentalViewFilter === 'all'
+      ? filteredAllActiveStatusRentals
+      : rentalViewFilter === 'pending'
       ? filteredPendingRentalCards
       : rentalViewFilter === 'active'
         ? filteredActiveRentalCards
@@ -1943,6 +1958,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
   const paginatedPendingRentalCards = filteredPendingRentalCards.slice(
+    (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
+    safeRentalPage * RENTAL_PAGE_SIZE,
+  );
+  const paginatedAllActiveStatusRentals = filteredAllActiveStatusRentals.slice(
     (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
     safeRentalPage * RENTAL_PAGE_SIZE,
   );
@@ -2015,15 +2034,21 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const pendingAppointments = adminAppointments.filter((appointment) => appointment.status === 'pending');
   const scheduledAppointments = adminAppointments.filter((appointment) => appointment.status === 'scheduled');
+  const allActiveAppointments = adminAppointments.filter(
+    (appointment) => appointment.status === 'pending' || appointment.status === 'scheduled'
+  );
   const archivedAppointments = adminAppointments.filter(
     (appointment) => appointment.status === 'completed' || appointment.status === 'cancelled'
   );
+  const filteredAllAppointments = allActiveAppointments.filter(matchesAppointmentSearch);
   const filteredPendingAppointments = pendingAppointments.filter(matchesAppointmentSearch);
   const filteredScheduledAppointments = scheduledAppointments.filter(matchesAppointmentSearch);
   const filteredArchivedAppointments = archivedAppointments.filter(matchesAppointmentSearch);
   const appointmentItemsForCurrentView = appointmentManagementView === 'archive'
     ? filteredArchivedAppointments
-    : appointmentStatusFilter === 'pending'
+    : appointmentStatusFilter === 'all'
+      ? filteredAllAppointments
+      : appointmentStatusFilter === 'pending'
       ? filteredPendingAppointments
       : filteredScheduledAppointments;
   const appointmentTotalPages = Math.max(1, Math.ceil(appointmentItemsForCurrentView.length / APPOINTMENT_PAGE_SIZE));
@@ -2055,7 +2080,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
     const matchesStatus = customOrderManagementView === 'archive'
       ? isArchivedOrder || order.status === 'rejected'
-      : !isArchivedOrder && order.status === customOrderStatusFilter;
+      : !isArchivedOrder && order.status !== 'rejected' && (
+        customOrderStatusFilter === 'all' || order.status === customOrderStatusFilter
+      );
     if (!matchesStatus) return false;
     if (!customOrderQuery) return true;
 
@@ -2839,6 +2866,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               {rentalManagementView === 'active' && (
               <div className="flex flex-wrap gap-3 mb-6">
                 <button
+                  onClick={() => setRentalViewFilter('all')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    rentalViewFilter === 'all'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800 font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  All
+                </button>
+                <button
                   onClick={() => setRentalViewFilter('pending')}
                   className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
                     rentalViewFilter === 'pending'
@@ -2949,6 +2986,125 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   ))}
                   {filteredPendingRentalCards.length === 0 && (
                     <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No pending rentals match your search' : 'No pending rentals'}</p>
+                  )}
+                </div>
+              )}
+
+              {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'all' && (
+                <div className="space-y-3">
+                  {paginatedAllActiveStatusRentals.map((rental) => {
+                    const canFollowUpForActive = rental.status === 'active' && isWithinReturnFollowUpWindow(rental.endDate);
+                    const canFollowUpForPayment = rental.status === 'for_payment';
+                    const canFollowUpForPickup = rental.status === 'for_pickup' || rental.status === 'paid_for_confirmation';
+
+                    return (
+                      <div
+                        key={rental.id}
+                        className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                      >
+                        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-3 mb-2 flex-wrap">
+                              <h4 className="font-medium">{rental.gownName}</h4>
+                              <span
+                                className={`px-3 py-1 text-xs rounded-full font-medium ${
+                                  rental.status === 'pending'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : rental.status === 'for_payment'
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : rental.status === 'paid_for_confirmation'
+                                    ? 'bg-violet-100 text-violet-800'
+                                    : rental.status === 'for_pickup'
+                                    ? 'bg-cyan-100 text-cyan-800'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {getRentalStatusLabel(rental)}
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-4 text-sm text-[#6B5D4F]">
+                              <div className="flex items-center gap-2">
+                                <Users className="w-4 h-4" />
+                                <span>{rental.customerName}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <MapPin className="w-4 h-4" />
+                                <span>{rental.branch}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4" />
+                                <span>{rental.status === 'for_pickup' ? `Start: ${rental.startDate}` : `Ends: ${rental.endDate}`}</span>
+                              </div>
+                              {rental.status === 'for_pickup' && isPickupScheduled(rental) && (
+                                <div className="flex items-center gap-2">
+                                  <Calendar className="w-4 h-4" />
+                                  <span>Pickup: {rental.pickupScheduleDate} {rental.pickupScheduleTime}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                            <div className="text-right">
+                              <p className="text-sm text-[#6B5D4F] mb-1">
+                                {rental.status === 'for_payment' ? 'Balance Due' : rental.status === 'for_pickup' ? 'Paid' : 'Total Rental'}
+                              </p>
+                              <p
+                                className={`text-lg font-light ${
+                                  rental.status === 'for_payment'
+                                    ? 'text-rose-700'
+                                    : rental.status === 'for_pickup'
+                                    ? 'text-cyan-700'
+                                    : ''
+                                }`}
+                              >
+                                ₱{(
+                                  rental.status === 'for_payment'
+                                    ? Math.max(0, rental.totalPrice - rental.downpayment)
+                                    : rental.totalPrice
+                                ).toLocaleString()}
+                              </p>
+                            </div>
+                            {(canFollowUpForActive || canFollowUpForPayment || canFollowUpForPickup) && (
+                              <button
+                                onClick={() => {
+                                  if (rental.status === 'active') {
+                                    openRentalFollowUp(createRentalFollowUpTarget(rental));
+                                    return;
+                                  }
+
+                                  openRentalFollowUp({
+                                    id: rental.id,
+                                    gownName: rental.gownName,
+                                    customer: rental.customerName,
+                                    dueDate: rental.endDate,
+                                    daysLate: 0,
+                                    status: rental.status === 'for_payment' ? 'for-payment' : 'for-pickup',
+                                  });
+                                }}
+                                className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] whitespace-nowrap"
+                                title="Send Follow Up"
+                              >
+                                <Send className="w-4 h-4" />
+                                <span className="text-sm">Follow Up</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setSelectedPendingRental(rental);
+                                setShowPendingRentalModal(true);
+                              }}
+                              className="px-4 py-2 rounded-lg transition-colors flex items-center gap-2 bg-white border border-[#6B5D4F] text-[#3D2B1F] hover:bg-[#FAF7F0] whitespace-nowrap"
+                              title="View Rental Details"
+                            >
+                              <span className="text-sm">View Details</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {filteredAllActiveStatusRentals.length === 0 && (
+                    <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rentals match your search' : 'No rentals found'}</p>
                   )}
                 </div>
               )}
@@ -3409,6 +3565,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               {appointmentManagementView === 'active' && (
                 <div className="flex flex-wrap gap-3 mb-6">
                   <button
+                    onClick={() => setAppointmentStatusFilter('all')}
+                    className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                      appointmentStatusFilter === 'all'
+                        ? 'bg-[#FAF3E0] border-[#D4AF37] text-[#7A5C00] font-medium'
+                        : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    All Appointments
+                  </button>
+                  <button
                     onClick={() => setAppointmentStatusFilter('pending')}
                     className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
                       appointmentStatusFilter === 'pending'
@@ -3439,7 +3605,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <p className="text-center py-8 text-[#6B5D4F]">Loading appointments...</p>
               )}
 
-              {!adminAppointmentsLoading && appointmentManagementView === 'active' && appointmentStatusFilter === 'pending' && (
+              {!adminAppointmentsLoading && appointmentManagementView === 'active' && (
                 <div className="space-y-3">
                   {paginatedAppointments.map((appointment) => (
                     <div key={appointment.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
@@ -3448,11 +3614,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
                             <span className={`px-3 py-1 text-xs rounded-full font-medium ${
-                              appointment.rescheduleReason
+                              appointment.status === 'scheduled'
+                                ? 'bg-blue-100 text-blue-800'
+                                : appointment.rescheduleReason
                                 ? 'bg-orange-100 text-orange-800'
                                 : 'bg-amber-100 text-amber-800'
                             }`}>
-                              {appointment.rescheduleReason ? 'Rescheduled' : 'Pending'}
+                              {appointment.status === 'scheduled'
+                                ? 'Scheduled'
+                                : appointment.rescheduleReason
+                                ? 'Rescheduled'
+                                : 'Pending'}
                             </span>
                           </div>
                           <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
@@ -3495,17 +3667,31 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           )}
                         </div>
                         <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setAdminAppointmentsError(null);
-                              setSelectedPendingAppointment(appointment);
-                              setIsApproveAppointmentConfirmOpen(true);
-                            }}
-                            disabled={appointmentStatusUpdatingId === appointment.id}
-                            className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Approve'}
-                          </button>
+                          {appointment.status === 'pending' ? (
+                            <button
+                              onClick={() => {
+                                setAdminAppointmentsError(null);
+                                setSelectedPendingAppointment(appointment);
+                                setIsApproveAppointmentConfirmOpen(true);
+                              }}
+                              disabled={appointmentStatusUpdatingId === appointment.id}
+                              className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Approve'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setAdminAppointmentsError(null);
+                                setSelectedScheduledAppointment(appointment);
+                                setIsCompleteAppointmentConfirmOpen(true);
+                              }}
+                              disabled={appointmentStatusUpdatingId === appointment.id}
+                              className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Complete'}
+                            </button>
+                          )}
                           <button
                             onClick={() => {
                               setAdminAppointmentsError(null);
@@ -3525,87 +3711,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   ))}
                   {appointmentItemsForCurrentView.length === 0 && (
                     <p className="text-center py-8 text-[#6B5D4F]">
-                      {appointmentQuery ? 'No pending appointments match your search' : 'No pending appointments'}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {!adminAppointmentsLoading && appointmentManagementView === 'active' && appointmentStatusFilter === 'scheduled' && (
-                <div className="space-y-3">
-                  {paginatedAppointments.map((appointment) => (
-                    <div key={appointment.id} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
-                            <span className="px-3 py-1 bg-blue-100 text-blue-800 text-xs rounded-full font-medium">Scheduled</span>
-                          </div>
-                          <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
-                            <div className="flex items-center gap-2">
-                              <Users className="w-4 h-4" />
-                              <span>{appointment.customerName}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Mail className="w-4 h-4" />
-                              <span>{appointment.customerEmail}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Phone className="w-4 h-4" />
-                              <span>{appointment.contactNumber}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Calendar className="w-4 h-4" />
-                              <span>{appointment.date}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Clock className="w-4 h-4" />
-                              <span>{appointment.time}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-4 h-4" />
-                              <span>{appointment.branch}</span>
-                            </div>
-                          </div>
-                          {appointment.selectedGownName && (
-                            <p className="text-sm text-[#6B5D4F] mb-2">Gown: {appointment.selectedGownName}</p>
-                          )}
-                          {appointment.notes && (
-                            <p className="text-sm text-[#6B5D4F] italic">{appointment.notes}</p>
-                          )}
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => {
-                              setAdminAppointmentsError(null);
-                              setSelectedScheduledAppointment(appointment);
-                              setIsCompleteAppointmentConfirmOpen(true);
-                            }}
-                            disabled={appointmentStatusUpdatingId === appointment.id}
-                            className="px-4 py-2 rounded-lg bg-black text-white hover:bg-[#D4AF37] transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {appointmentStatusUpdatingId === appointment.id ? 'Updating...' : 'Complete'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setAdminAppointmentsError(null);
-                              setAppointmentCancelError(null);
-                              setAppointmentCancelReason('');
-                              setSelectedCancelAppointment(appointment);
-                              setIsCancelAppointmentConfirmOpen(true);
-                            }}
-                            disabled={appointmentStatusUpdatingId === appointment.id}
-                            className="px-4 py-2 rounded-lg border border-red-300 text-red-600 hover:border-red-600 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  {appointmentItemsForCurrentView.length === 0 && (
-                    <p className="text-center py-8 text-[#6B5D4F]">
-                      {appointmentQuery ? 'No scheduled appointments match your search' : 'No scheduled appointments'}
+                      {appointmentStatusFilter === 'all'
+                        ? (appointmentQuery ? 'No appointments match your search' : 'No appointments')
+                        : appointmentStatusFilter === 'pending'
+                        ? (appointmentQuery ? 'No pending appointments match your search' : 'No pending appointments')
+                        : (appointmentQuery ? 'No scheduled appointments match your search' : 'No scheduled appointments')}
                     </p>
                   )}
                 </div>
@@ -3734,6 +3844,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
             {customOrderManagementView === 'active' && (
               <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => setCustomOrderStatusFilter('all')}
+                  className={`px-4 py-2 rounded-lg border text-sm transition-colors ${
+                    customOrderStatusFilter === 'all'
+                      ? 'bg-[#FAF3E0] border-[#D4AF37] text-[#7A5C00] font-medium'
+                      : 'border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37]'
+                  }`}
+                >
+                  All Orders
+                </button>
                 {CUSTOM_ORDER_FILTER_TABS.map((status) => (
                   <button
                     key={status}

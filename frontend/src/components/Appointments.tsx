@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, Clock, MapPin, User, Mail, Phone, ChevronRight } from 'lucide-react';
+import { Calendar, Clock, MapPin, User, Mail, Phone, ChevronRight, Sparkles, Ruler, Scissors, Package } from 'lucide-react';
 import { getPublicInventory } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
 import { appointmentAPI } from '../services/appointmentAPI';
@@ -355,10 +355,34 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
   };
 
   const appointmentTypes = [
-    { value: 'consultation', label: 'Design Consultation', icon: '💭' },
-    { value: 'measurement', label: 'Measurement Session', icon: '📏' },
-    { value: 'fitting', label: 'Fitting Appointment', icon: '👗' },
-    { value: 'pickup', label: 'Pickup/Return', icon: '📦' }
+    {
+      value: 'consultation',
+      label: 'Design Consultation',
+      icon: Sparkles,
+      iconClassName: 'text-[#C7B5E8]',
+      iconBackgroundClassName: 'bg-[#F5F0FB] border-[#E6DCF7]',
+    },
+    {
+      value: 'measurement',
+      label: 'Measurement Session',
+      icon: Ruler,
+      iconClassName: 'text-[#B39DDB]',
+      iconBackgroundClassName: 'bg-[#F7F2FC] border-[#E7DCF8]',
+    },
+    {
+      value: 'fitting',
+      label: 'Fitting Appointment',
+      icon: Scissors,
+      iconClassName: 'text-[#4A7FE2]',
+      iconBackgroundClassName: 'bg-[#EEF4FF] border-[#D9E6FF]',
+    },
+    {
+      value: 'pickup',
+      label: 'Pickup/Return',
+      icon: Package,
+      iconClassName: 'text-[#C68A5D]',
+      iconBackgroundClassName: 'bg-[#FFF2E8] border-[#F2DDCC]',
+    }
   ];
 
   const timeSlots = [
@@ -505,7 +529,9 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
                         : 'border-[#E8DCC8] hover:border-[#6B5D4F] bg-white'
                     }`}
                   >
-                    <div className="text-3xl mb-3">{type.icon}</div>
+                    <div className={`mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl border ${type.iconBackgroundClassName}`}>
+                      <type.icon className={`h-5 w-5 ${type.iconClassName}`} strokeWidth={2.1} />
+                    </div>
                     <h3 className="font-medium">{type.label}</h3>
                   </button>
                 ))}
