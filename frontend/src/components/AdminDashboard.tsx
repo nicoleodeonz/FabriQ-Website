@@ -2469,7 +2469,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 : 'border-transparent text-[#6B5D4F] hover:text-black'
             }`}
           >
-            User Management
+            Users
           </button>
           <button
             onClick={() => setActiveTabWithHash('history')}
