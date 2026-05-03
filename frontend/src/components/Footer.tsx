@@ -1,11 +1,29 @@
 import { Instagram, Facebook, Mail, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 
+type FooterServiceTarget = 'rentals' | 'custom-orders' | 'appointments' | 'measurements';
+
 interface FooterProps {
   isAdmin: boolean;
+  onSelectCatalogCategory: (category: string) => void;
+  onSelectService: (service: FooterServiceTarget) => void;
 }
 
-export function Footer({ isAdmin }: FooterProps) {
+const SHOP_CATEGORIES = [
+  { label: 'Wedding Gowns', category: 'Wedding Dress' },
+  { label: 'Evening Dresses', category: 'Evening Gown' },
+  { label: 'Ball Gowns', category: 'Ball Gown' },
+  { label: 'Cocktail Dresses', category: 'Cocktail Dress' },
+];
+
+const SERVICE_LINKS: Array<{ label: string; target: FooterServiceTarget }> = [
+  { label: 'Gown Rental', target: 'rentals' },
+  { label: 'Custom Orders', target: 'custom-orders' },
+  { label: 'Appointments', target: 'appointments' },
+  { label: 'Measurements', target: 'measurements' },
+];
+
+export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService }: FooterProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -32,6 +50,18 @@ export function Footer({ isAdmin }: FooterProps) {
         'aria-disabled': true,
       }
     : {};
+
+  const handleShopCategoryClick = (event: React.MouseEvent<HTMLAnchorElement>, category: string) => {
+    event.preventDefault();
+    if (isAdmin) return;
+    onSelectCatalogCategory(category);
+  };
+
+  const handleServiceClick = (event: React.MouseEvent<HTMLAnchorElement>, service: FooterServiceTarget) => {
+    event.preventDefault();
+    if (isAdmin) return;
+    onSelectService(service);
+  };
 
   return (
     <footer className="bg-[#6B5D4F] text-white">
@@ -67,20 +97,36 @@ export function Footer({ isAdmin }: FooterProps) {
           <div>
             <h4 className="text-xs uppercase tracking-widest mb-4 font-medium">Shop</h4>
             <ul className="space-y-3 text-sm">
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Wedding Gowns</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Evening Dresses</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Ball Gowns</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Cocktail Dresses</a></li>
+              {SHOP_CATEGORIES.map((item) => (
+                <li key={item.category}>
+                  <a
+                    href="#/catalog"
+                    {...getDisabledLinkProps}
+                    onClick={(event) => handleShopCategoryClick(event, item.category)}
+                    className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
 
           <div>
             <h4 className="text-xs uppercase tracking-widest mb-4 font-medium">Services</h4>
             <ul className="space-y-3 text-sm">
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Gown Rental</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Custom Orders</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Appointments</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}>Measurements</a></li>
+              {SERVICE_LINKS.map((item) => (
+                <li key={`${item.label}-${item.target}`}>
+                  <a
+                    href={`#/${item.target}`}
+                    {...getDisabledLinkProps}
+                    onClick={(event) => handleServiceClick(event, item.target)}
+                    className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'pointer-events-none opacity-60 cursor-not-allowed' : ''}`}
+                  >
+                    {item.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
 

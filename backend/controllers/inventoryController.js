@@ -402,7 +402,7 @@ export async function createProduct(req, res) {
       return res.status(403).json({ message: 'Access denied' });
     }
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, rating, ratings, stock } = req.body;
+          description, image, featuredHome, rating, ratings, stock } = req.body;
 
     if (!name || !category || !color || price === undefined || !branch) {
       return res.status(400).json({ message: 'Missing required fields: name, category, color, price, branch' });
@@ -426,6 +426,7 @@ export async function createProduct(req, res) {
       lastRented: lastRented || null,
       description: description ? description.trim() : '',
       image: image ? image.trim() : '',
+      featuredHome: Boolean(featuredHome),
       rating: computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0),
       ratings: normalizedRatings,
       stock: typeof stock === 'number' ? stock : 1,
@@ -466,7 +467,7 @@ export async function updateProduct(req, res) {
     }
     const { id } = req.params;
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, rating, ratings, stock } = req.body;
+          description, image, featuredHome, rating, ratings, stock } = req.body;
 
     if (price !== undefined && (typeof price !== 'number' || price < 0)) {
       return res.status(400).json({ message: 'Price must be a non-negative number' });
@@ -485,6 +486,7 @@ export async function updateProduct(req, res) {
     if (lastRented !== undefined) updates.lastRented = lastRented || null;
     if (description !== undefined) updates.description = description.trim();
     if (image !== undefined) updates.image = image.trim();
+    if (featuredHome !== undefined) updates.featuredHome = Boolean(featuredHome);
     if (normalizedRatings !== null) {
       updates.ratings = normalizedRatings;
       updates.rating = computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0);

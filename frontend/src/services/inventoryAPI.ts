@@ -23,6 +23,7 @@ export interface InventoryItem {
   lastRented?: string | null;
   description?: string;
   image?: string;
+  featuredHome?: boolean;
   rating?: number;
   ratings?: InventoryRating[];
   stock?: number;

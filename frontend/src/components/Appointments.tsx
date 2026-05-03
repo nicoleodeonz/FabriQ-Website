@@ -16,9 +16,10 @@ interface AppointmentsProps {
     phoneVerified?: boolean;
   };
   selectedGownId?: string | null;
+  selectedAppointmentType?: string | null;
 }
 
-export function Appointments({ user, token, selectedGownId }: AppointmentsProps) {
+export function Appointments({ user, token, selectedGownId, selectedAppointmentType }: AppointmentsProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -220,6 +221,18 @@ export function Appointments({ user, token, selectedGownId }: AppointmentsProps)
       }));
     }
   }, [selectedGownId]);
+
+  useEffect(() => {
+    if (!selectedAppointmentType || selectedGownId) {
+      return;
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      appointmentType: selectedAppointmentType,
+    }));
+    setAppointmentTypeError('');
+  }, [selectedAppointmentType, selectedGownId]);
 
   useEffect(() => {
     if (formData.appointmentType !== 'fitting' || !selectedGownDetails?.branch) {

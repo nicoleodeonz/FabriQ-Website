@@ -78,6 +78,10 @@ const ProductDetailSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  featuredHome: {
+    type: Boolean,
+    default: false
+  },
   rating: {
     type: Number,
     min: 0,

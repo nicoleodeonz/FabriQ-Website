@@ -46,20 +46,32 @@ function parseHashRoute(hash: string) {
   const normalizedSegment = pathPart.replace(/^\/+|\/+$/g, '');
   const view = SEGMENT_TO_VIEW[normalizedSegment] ?? 'home';
   const searchParams = new URLSearchParams(searchPart);
+  const catalogCategory = view === 'catalog' ? searchParams.get('category')?.trim() || null : null;
   const selectedGownId = (view === 'rentals' || view === 'appointments')
     ? searchParams.get('gown')?.trim() || null
     : null;
+  const selectedAppointmentType = view === 'appointments'
+    ? searchParams.get('type')?.trim() || null
+    : null;
   const adminTab = view === 'admin' ? searchParams.get('tab')?.trim() || null : null;
 
-  return { view, selectedGownId, adminTab };
+  return { view, catalogCategory, selectedGownId, selectedAppointmentType, adminTab };
 }
 
-function buildHashRoute(view: View, options?: { selectedGownId?: string | null; adminTab?: string | null }) {
+function buildHashRoute(view: View, options?: { catalogCategory?: string | null; selectedGownId?: string | null; selectedAppointmentType?: string | null; adminTab?: string | null }) {
   const segment = VIEW_SEGMENTS[view];
   const searchParams = new URLSearchParams();
 
+  if (view === 'catalog' && options?.catalogCategory) {
+    searchParams.set('category', options.catalogCategory);
+  }
+
   if ((view === 'rentals' || view === 'appointments') && options?.selectedGownId) {
     searchParams.set('gown', options.selectedGownId);
+  }
+
+  if (view === 'appointments' && options?.selectedAppointmentType) {
+    searchParams.set('type', options.selectedAppointmentType);
   }
 
   if (view === 'admin' && options?.adminTab) {
@@ -185,7 +197,9 @@ export default function App() {
   const [showLanding, setShowLanding] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(() => Boolean(storedAuth.token && storedAuth.user));
   const [authToken, setAuthToken] = useState<string | null>(storedAuth.token);
+  const [selectedCatalogCategory, setSelectedCatalogCategory] = useState<string | null>(() => parseHashRoute(window.location.hash).catalogCategory);
   const [selectedGownId, setSelectedGownId] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedGownId);
+  const [selectedAppointmentType, setSelectedAppointmentType] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedAppointmentType);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(storedAuth.user);
   const [showAuth, setShowAuth] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
@@ -195,11 +209,13 @@ export default function App() {
 
   const syncHashRoute = (
     view: View,
-    options?: { history?: 'push' | 'replace'; selectedGownId?: string | null }
+    options?: { history?: 'push' | 'replace'; catalogCategory?: string | null; selectedGownId?: string | null; selectedAppointmentType?: string | null }
   ) => {
     const { adminTab } = parseHashRoute(window.location.hash);
     const nextHash = buildHashRoute(view, {
+      catalogCategory: options?.catalogCategory,
       selectedGownId: options?.selectedGownId,
+      selectedAppointmentType: options?.selectedAppointmentType,
       adminTab: view === 'admin' ? adminTab : null,
     });
 
@@ -217,17 +233,27 @@ export default function App() {
 
   const setAppView = (
     view: View,
-    options?: { history?: 'push' | 'replace'; selectedGownId?: string | null }
+    options?: { history?: 'push' | 'replace'; catalogCategory?: string | null; selectedGownId?: string | null; selectedAppointmentType?: string | null }
   ) => {
+    const nextCatalogCategory = view === 'catalog'
+      ? (options?.catalogCategory === undefined ? null : options.catalogCategory)
+      : null;
     const nextSelectedGownId = view === 'rentals' || view === 'appointments'
       ? (options?.selectedGownId === undefined ? selectedGownId : options.selectedGownId)
       : null;
+    const nextSelectedAppointmentType = view === 'appointments'
+      ? (options?.selectedAppointmentType === undefined ? null : options.selectedAppointmentType)
+      : null;
 
+    setSelectedCatalogCategory(nextCatalogCategory);
     setSelectedGownId(nextSelectedGownId);
+    setSelectedAppointmentType(nextSelectedAppointmentType);
     setCurrentView(view);
     syncHashRoute(view, {
       history: options?.history,
+      catalogCategory: nextCatalogCategory,
       selectedGownId: nextSelectedGownId,
+      selectedAppointmentType: nextSelectedAppointmentType,
     });
   };
 
@@ -313,7 +339,9 @@ export default function App() {
         : !PROTECTED_VIEWS.has(route.view) || isLoggedIn;
 
       if (!hasAccess) {
+        setSelectedCatalogCategory(null);
         setSelectedGownId(null);
+        setSelectedAppointmentType(null);
         setCurrentView('home');
 
         const fallbackHash = buildHashRoute('home');
@@ -323,7 +351,9 @@ export default function App() {
         return;
       }
 
+      setSelectedCatalogCategory(route.catalogCategory);
       setSelectedGownId(route.selectedGownId);
+      setSelectedAppointmentType(route.selectedAppointmentType);
       setCurrentView(route.view);
     };
 
@@ -367,7 +397,7 @@ export default function App() {
 
   const navigateProtectedFromHeader = (view: View) => {
     if (view === 'rentals' || view === 'appointments') {
-      navigateProtectedWithOptions(view, { selectedGownId: null });
+      navigateProtectedWithOptions(view, { selectedGownId: null, selectedAppointmentType: null });
       return;
     }
     navigateProtected(view);
@@ -375,7 +405,7 @@ export default function App() {
 
   const navigateProtectedWithOptions = (
     view: View,
-    options?: { selectedGownId?: string | null }
+    options?: { selectedGownId?: string | null; selectedAppointmentType?: string | null }
   ) => {
     if (view === 'admin' && !isAdmin) {
       toast.error('Admin or staff access required.');
@@ -388,11 +418,32 @@ export default function App() {
       return;
     }
 
-    setAppView(view, { selectedGownId: options?.selectedGownId });
+    setAppView(view, {
+      selectedGownId: options?.selectedGownId,
+      selectedAppointmentType: options?.selectedAppointmentType,
+    });
   };
 
   const navigateWithGown = (view: 'rentals' | 'appointments', gownId: string) => {
-    navigateProtectedWithOptions(view, { selectedGownId: gownId });
+    navigateProtectedWithOptions(view, { selectedGownId: gownId, selectedAppointmentType: null });
+  };
+
+  const navigateToCatalogCategory = (category: string) => {
+    setAppView('catalog', { catalogCategory: category });
+  };
+
+  const navigateToFooterService = (service: 'rentals' | 'custom-orders' | 'appointments' | 'measurements') => {
+    if (service === 'measurements') {
+      navigateProtectedWithOptions('appointments', { selectedGownId: null, selectedAppointmentType: 'measurement' });
+      return;
+    }
+
+    if (service === 'rentals' || service === 'appointments') {
+      navigateProtectedWithOptions(service, { selectedGownId: null, selectedAppointmentType: null });
+      return;
+    }
+
+    navigateProtected(service);
   };
 
   const handleAuthSuccess = (user: CurrentUser, token: string) => {
@@ -591,6 +642,7 @@ export default function App() {
         {currentView === 'home' && (
           <Home
             setCurrentView={setAppView}
+            authToken={authToken}
             isLoggedIn={isLoggedIn}
             isAdmin={isAdmin}
             onOpenAuthModal={() => setShowAuth(true)} 
@@ -599,6 +651,7 @@ export default function App() {
         {currentView === 'catalog' && (
           <Catalog
             setCurrentView={setAppView}
+            initialCategory={selectedCatalogCategory}
             isLoggedIn={isLoggedIn}
             isAdmin={isAdmin}
             navigateProtected={navigateProtected}
@@ -613,7 +666,7 @@ export default function App() {
           <Rentals user={currentUser} token={authToken} selectedGownId={selectedGownId} />
         )}
         {currentView === 'custom-orders' && currentUser && authToken && <CustomOrders user={currentUser} token={authToken} />}
-        {currentView === 'appointments' && currentUser && authToken && <Appointments user={currentUser} token={authToken} selectedGownId={selectedGownId} />}
+        {currentView === 'appointments' && currentUser && authToken && <Appointments user={currentUser} token={authToken} selectedGownId={selectedGownId} selectedAppointmentType={selectedAppointmentType} />}
         {currentView === 'profile' && currentUser && authToken && (
           <CustomerProfile
             onLogout={handleLogout}
@@ -631,7 +684,13 @@ export default function App() {
           <AdminDashboard token={authToken} currentUser={currentUser} />
         )}
       </main>
-      {currentView !== 'admin' && <Footer isAdmin={isAdmin} />}
+      {currentView !== 'admin' && (
+        <Footer
+          isAdmin={isAdmin}
+          onSelectCatalogCategory={navigateToCatalogCategory}
+          onSelectService={navigateToFooterService}
+        />
+      )}
 
       <AuthModal
         isOpen={showAuth}

@@ -10,6 +10,7 @@ type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 
 
 interface CatalogProps {
   setCurrentView: (view: View) => void;
+  initialCategory?: string | null;
   isLoggedIn: boolean;
   isAdmin: boolean;
   navigateProtected: (view: View) => void;
@@ -54,7 +55,30 @@ function toCatalogGown(item: InventoryItem): GownItem {
   };
 }
 
-export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected, setSelectedGownId, navigateWithGown, favoriteGowns, onAddFavorite, onRemoveFavorite }: CatalogProps) {
+const CATEGORY_LABEL_TO_VALUE: Record<string, string> = {
+  'wedding gowns': 'Wedding Dress',
+  'wedding dress': 'Wedding Dress',
+  'evening dresses': 'Evening Gown',
+  'evening gown': 'Evening Gown',
+  'ball gowns': 'Ball Gown',
+  'ball gown': 'Ball Gown',
+  'cocktail dresses': 'Cocktail Dress',
+  'cocktail dress': 'Cocktail Dress',
+  bridal: 'Wedding Dress',
+  evening: 'Evening Gown',
+  cocktail: 'Cocktail Dress',
+};
+
+function normalizeCategorySelection(category?: string | null) {
+  const normalized = String(category || '').trim();
+  if (!normalized) {
+    return 'All';
+  }
+
+  return CATEGORY_LABEL_TO_VALUE[normalized.toLowerCase()] || normalized;
+}
+
+export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, navigateProtected, setSelectedGownId, navigateWithGown, favoriteGowns, onAddFavorite, onRemoveFavorite }: CatalogProps) {
   const [gowns, setGowns] = useState<GownItem[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -106,6 +130,11 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
     }
   }, [gowns, selectedGown]);
 
+  useEffect(() => {
+    const nextCategory = normalizeCategorySelection(initialCategory);
+    setSelectedCategory(nextCategory);
+  }, [initialCategory]);
+
   const filteredGowns = useMemo(() => gowns.filter(gown => {
     const matchesSearch = gown.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          gown.color.toLowerCase().includes(searchQuery.toLowerCase());
@@ -118,10 +147,10 @@ export function Catalog({ setCurrentView, isLoggedIn, isAdmin, navigateProtected
   }, [searchQuery, selectedCategory]);
 
   useEffect(() => {
-    if (selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
+    if (!catalogLoading && selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
       setSelectedCategory('All');
     }
-  }, [categories, selectedCategory]);
+  }, [catalogLoading, categories, selectedCategory]);
 
   const totalPages = Math.max(1, Math.ceil(filteredGowns.length / CATALOG_PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
