@@ -20,6 +20,7 @@ function getErrorMessage(fallback: string, body: any | null): string {
 
 export interface AppointmentDetail {
   id: string;
+  referenceId?: string;
   type: 'fitting' | 'consultation' | 'measurement' | 'pickup';
   date: string;
   time: string;

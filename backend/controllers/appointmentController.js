@@ -5,6 +5,8 @@ import AdminAction from '../models/AdminAction.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
+const APPOINTMENT_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
 function buildAdminName(email) {
   const prefix = String(email || '').split('@')[0] || 'Admin';
   return prefix
@@ -36,10 +38,43 @@ function toDateOnly(dateInput) {
   return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
 }
 
+function buildFallbackAppointmentReferenceId(sourceId) {
+  return String(sourceId || '')
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toUpperCase()
+    .slice(-7)
+    .padStart(7, '0');
+}
+
+function createRandomAppointmentReferenceId() {
+  let result = '';
+  for (let index = 0; index < 7; index += 1) {
+    const nextIndex = Math.floor(Math.random() * APPOINTMENT_REFERENCE_CHARACTERS.length);
+    result += APPOINTMENT_REFERENCE_CHARACTERS[nextIndex];
+  }
+  return result;
+}
+
+async function generateAppointmentReferenceId() {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const candidate = createRandomAppointmentReferenceId();
+    const exists = await AppointmentDetail.exists({ referenceId: candidate });
+    if (!exists) {
+      return candidate;
+    }
+  }
+
+  return createRandomAppointmentReferenceId();
+}
+
 function mapAppointment(doc) {
+  const source = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+  const sourceId = String(source?._id || source?.id || '');
   return {
-    ...doc,
-    date: doc.date ? new Date(doc.date).toISOString().slice(0, 10) : null,
+    ...source,
+    id: sourceId,
+    referenceId: source?.referenceId || buildFallbackAppointmentReferenceId(sourceId),
+    date: source?.date ? new Date(source.date).toISOString().slice(0, 10) : null,
   };
 }
 
@@ -199,6 +234,7 @@ export async function createAppointment(req, res) {
       customerName: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
       contactNumber: customer.phoneNumber,
       email: customer.email,
+      referenceId: await generateAppointmentReferenceId(),
       type: normalizedAppointmentType,
       date: appointmentDate,
       time: String(time).trim(),
@@ -396,7 +432,7 @@ export async function updateAppointmentStatus(req, res) {
       targetUserId: String(appointment.customerId || appointment.customerEmail || ''),
       targetRole: 'Customer',
       details: {
-        appointmentId: String(appointment._id),
+        appointmentId: String(appointment.referenceId || buildFallbackAppointmentReferenceId(appointment._id)),
         customerName: appointment.customerName || '',
         customerEmail: appointment.customerEmail || '',
         appointmentType: appointment.type || '',

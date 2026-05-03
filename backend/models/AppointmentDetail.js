@@ -30,6 +30,17 @@ const AppointmentDetailSchema = new mongoose.Schema({
     lowercase: true,
     trim: true,
   },
+  referenceId: {
+    type: String,
+    uppercase: true,
+    trim: true,
+    minlength: 7,
+    maxlength: 7,
+    match: /^[A-Z0-9]{7}$/,
+    unique: true,
+    sparse: true,
+    index: true,
+  },
   type: {
     type: String,
     enum: ['fitting', 'consultation', 'measurement', 'pickup'],

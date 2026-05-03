@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown } from 'lucide-react';
+import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
@@ -93,8 +95,9 @@ type AddItemField =
   | 'image'
   | 'description';
 
-const INVENTORY_PREVIEW_DELAY_MS = 2000;
-const INVENTORY_PAGE_SIZE = 9;
+type RentalExportFilter = 'archive' | 'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns';
+
+const INVENTORY_PAGE_SIZE = 8;
 const APPOINTMENT_PAGE_SIZE = 3;
 const RENTAL_PAGE_SIZE = 5;
 const RENTAL_LATE_FEE_PER_DAY = 200;
@@ -109,7 +112,10 @@ const DEFAULT_INVENTORY_CATEGORY = DEFAULT_INVENTORY_CATEGORIES[0];
 const NEW_CATEGORY_OPTION = '__new_category__';
 
 type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
+type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
 type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
+type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
+type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
 
 function parseAdminTabFromHash(hash: string): AdminTab {
   const normalizedHash = hash.replace(/^#\/?/, '');
@@ -250,8 +256,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [hoverPreviewItem, setHoverPreviewItem] = useState<InventoryItem | null>(null);
   const cancelConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const primaryConfirmButtonRef = useRef<HTMLButtonElement>(null);
-  const inventoryPreviewTimerRef = useRef<number | null>(null);
-  const hoveredInventoryIdRef = useRef<string | null>(null);
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [showAddItem, setShowAddItem] = useState(false);
@@ -320,6 +324,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [isConfirmingUserRestore, setIsConfirmingUserRestore] = useState(false);
   const [archivingUserId, setArchivingUserId] = useState<string | null>(null);
   const [restoringUserId, setRestoringUserId] = useState<string | null>(null);
+  const [showUserExportModal, setShowUserExportModal] = useState(false);
+  const [userExportFilter, setUserExportFilter] = useState<UserExportFilter>('all');
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [newUserError, setNewUserError] = useState<string | null>(null);
@@ -366,6 +372,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [appointmentManagementView, setAppointmentManagementView] = useState<'active' | 'archive'>('active');
   const [appointmentPage, setAppointmentPage] = useState(1);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatusFilter>('all');
+  const [showAppointmentExportModal, setShowAppointmentExportModal] = useState(false);
+  const [appointmentExportFilter, setAppointmentExportFilter] = useState<AppointmentExportFilter>('all');
   const [appointmentSearchQuery, setAppointmentSearchQuery] = useState('');
   const [adminAppointments, setAdminAppointments] = useState<AdminAppointmentDetail[]>([]);
   const [adminAppointmentsLoading, setAdminAppointmentsLoading] = useState(false);
@@ -386,6 +394,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
   const [customOrderPage, setCustomOrderPage] = useState(1);
   const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<CustomOrderStatusFilter>('all');
+  const [showCustomOrderExportModal, setShowCustomOrderExportModal] = useState(false);
+  const [customOrderExportFilter, setCustomOrderExportFilter] = useState<CustomOrderExportFilter>('all');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
@@ -398,6 +408,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
   const [rentalViewFilter, setRentalViewFilter] = useState<'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('all');
+  const [showRentalExportModal, setShowRentalExportModal] = useState(false);
+  const [rentalExportFilter, setRentalExportFilter] = useState<RentalExportFilter>('all');
   const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
   const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
   const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
@@ -429,8 +441,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     selectedUser ||
     confirmUserArchive ||
     confirmUserRestore ||
+    showUserExportModal ||
     showAddUserModal ||
     showPendingRentalModal ||
+    showRentalExportModal ||
+    showAppointmentExportModal ||
+    showCustomOrderExportModal ||
     isApproveRentalConfirmOpen ||
     isRejectRentalConfirmOpen ||
     isPickedUpConfirmOpen ||
@@ -526,36 +542,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
   }, [confirmAction, isConfirmingAction]);
-
-  useEffect(() => () => {
-    if (inventoryPreviewTimerRef.current !== null) {
-      window.clearTimeout(inventoryPreviewTimerRef.current);
-    }
-  }, []);
-
-  function clearInventoryPreviewTimer() {
-    if (inventoryPreviewTimerRef.current !== null) {
-      window.clearTimeout(inventoryPreviewTimerRef.current);
-      inventoryPreviewTimerRef.current = null;
-    }
-  }
-
-  function handleInventoryRowHoverStart(item: InventoryItem) {
-    hoveredInventoryIdRef.current = item.id;
-    clearInventoryPreviewTimer();
-    inventoryPreviewTimerRef.current = window.setTimeout(() => {
-      if (hoveredInventoryIdRef.current === item.id) {
-        setHoverPreviewItem(item);
-      }
-    }, INVENTORY_PREVIEW_DELAY_MS);
-  }
-
-  function handleInventoryRowHoverEnd(itemId?: string) {
-    if (!itemId || hoveredInventoryIdRef.current === itemId) {
-      hoveredInventoryIdRef.current = null;
-    }
-    clearInventoryPreviewTimer();
-  }
 
   async function loadInventory() {
     setInventoryLoading(true);
@@ -1124,6 +1110,53 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     (safeAdminHistoryPage - 1) * ADMIN_HISTORY_PAGE_SIZE,
     safeAdminHistoryPage * ADMIN_HISTORY_PAGE_SIZE,
   );
+
+  const handleSaveAdminHistoryAsPdf = () => {
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = filteredAdminHistory.map((entry) => [
+      entry.adminLabel || 'Admin',
+      entry.adminEmail || 'No email',
+      formatHistoryAction(entry.action),
+      entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'N/A',
+      formatHistoryDetails(entry),
+    ]);
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text('Admin History Report', 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`Total records: ${filteredAdminHistory.length}`, 40, 80);
+
+    autoTable(document, {
+      startY: 96,
+      head: [['Admin', 'Email', 'Action', 'Date / Time', 'Details']],
+      body: rows.length > 0 ? rows : [['-', '', 'No admin history available for export.', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 7,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+      columnStyles: {
+        4: { cellWidth: 280 },
+      },
+    });
+
+    document.save(`admin-history-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
 
   async function handleArchiveUser(user: User) {
     if (user.status === 'archived') {
@@ -1747,6 +1780,117 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     setUserPage(nextPage);
   };
 
+  const getUserExportItems = (filter: UserExportFilter) => {
+    const getExportMatches = (includeSearchQuery: boolean) => users.filter((user) => {
+      const fullName = `${user.firstName} ${user.lastName}`.trim().toLowerCase();
+      const query = searchQuery.toLowerCase();
+      const matchesSearch =
+        !includeSearchQuery ||
+        fullName.includes(query) ||
+        user.email.toLowerCase().includes(query) ||
+        user.phone.toLowerCase().includes(query);
+
+      const matchesExportFilter =
+        filter === 'all' ||
+        (filter === 'admin' && user.role === 'Admin') ||
+        (filter === 'staff' && user.role === 'Staff') ||
+        (filter === 'customer' && user.role === 'Customer');
+      const normalizedStatus = normalizeManagedUserStatus(user.status);
+      const matchesArchiveView = showArchivedUsersOnly
+        ? normalizedStatus === 'archived'
+        : normalizedStatus !== 'archived';
+      const matchesBranch = matchesSelectedBranch(user.branch, selectedBranch);
+
+      return matchesSearch && matchesExportFilter && matchesArchiveView && matchesBranch;
+    });
+
+    const exportMatches = getExportMatches(true);
+
+    if (showArchivedUsersOnly && exportMatches.length === 0) {
+      return getExportMatches(false);
+    }
+
+    return exportMatches;
+  };
+
+  const getUserExportLabel = (filter: UserExportFilter) => {
+    if (filter === 'all') return 'All Account Types';
+    if (filter === 'admin') return 'Admin Accounts';
+    if (filter === 'staff') return 'Staff Accounts';
+    return 'Customer Accounts';
+  };
+
+  const userExportOptions: Array<{ value: UserExportFilter; label: string; count: number }> = [
+    { value: 'all', label: 'All Account Types', count: getUserExportItems('all').length },
+    { value: 'admin', label: 'Admin Accounts', count: getUserExportItems('admin').length },
+    { value: 'staff', label: 'Staff Accounts', count: getUserExportItems('staff').length },
+    { value: 'customer', label: 'Customer Accounts', count: getUserExportItems('customer').length },
+  ];
+
+  const canOpenUserExportModal = showArchivedUsersOnly
+    ? users.some((user) => {
+        const normalizedStatus = normalizeManagedUserStatus(user.status);
+        return normalizedStatus === 'archived' && matchesSelectedBranch(user.branch, selectedBranch);
+      })
+    : userExportOptions.some((option) => option.count > 0);
+
+  const openUserExportModal = () => {
+    setUserExportFilter(showArchivedUsersOnly ? 'all' : userFilter);
+    setShowUserExportModal(true);
+  };
+
+  const handleSaveUsersAsPdf = (filter: UserExportFilter) => {
+    const exportItems = getUserExportItems(filter);
+    const exportTitle = showArchivedUsersOnly ? 'Archived Users Report' : 'User Management Report';
+    const filterLabel = getUserExportLabel(filter);
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = exportItems.map((user) => [
+      `${user.firstName} ${user.lastName}`.trim() || 'Unnamed User',
+      user.email || 'No email',
+      user.phone || 'No phone',
+      user.branch || 'Not assigned',
+      user.role,
+      user.joinDate || 'Unknown',
+      user.status === 'active' ? 'Active' : 'Archived',
+    ]);
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text(exportTitle, 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`Account type: ${filterLabel}`, 40, 80);
+    document.text(`Total users: ${exportItems.length}`, 40, 96);
+
+    autoTable(document, {
+      startY: 112,
+      head: [['Name', 'Email', 'Phone', 'Branch', 'Role', 'Joined', 'Status']],
+      body: rows.length > 0 ? rows : [['-', 'No users available for export.', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 9,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    const filename = `${showArchivedUsersOnly ? 'archived-users' : `users-${filter}`}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.save(filename);
+    setShowUserExportModal(false);
+  };
+
   const inventoryQuery = inventorySearchQuery.trim().toLowerCase();
   const filteredInventory = inventory
     .filter((item) => {
@@ -1782,6 +1926,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   }, [inventorySearchQuery, inventoryView, selectedBranch]);
 
   const inventoryItemsForCurrentView = inventoryView === 'archive' ? filteredArchivedItems : filteredInventory;
+  const inventoryExportItems = inventoryView === 'archive'
+    ? (filteredArchivedItems.length > 0 ? filteredArchivedItems : archivedItems)
+    : inventoryItemsForCurrentView;
   const inventoryTotalPages = Math.max(1, Math.ceil(inventoryItemsForCurrentView.length / INVENTORY_PAGE_SIZE));
   const safeInventoryPage = Math.min(inventoryPage, inventoryTotalPages);
   const paginatedInventoryItems = inventoryItemsForCurrentView.slice(
@@ -1789,6 +1936,61 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     safeInventoryPage * INVENTORY_PAGE_SIZE,
   );
   const inventoryCurrentPageCount = paginatedInventoryItems.length;
+
+  const handleSaveInventoryAsPdf = () => {
+    const exportTitle = inventoryView === 'archive' ? 'Archived Inventory Report' : 'Inventory Report';
+    const statusHeader = inventoryView === 'archive' ? 'Deleted' : 'Status';
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = inventoryExportItems.map((item) => {
+      const statusValue = inventoryView === 'archive'
+        ? (item.deletedAt ? new Date(item.deletedAt).toLocaleString() : 'Unknown')
+        : item.status.charAt(0).toUpperCase() + item.status.slice(1);
+
+      return [
+        String(item.sku ?? item.id),
+        item.name,
+        item.category,
+        item.color,
+        `PHP ${Number(item.price || 0).toLocaleString()}`,
+        item.branch,
+        statusValue,
+      ];
+    });
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text(exportTitle, 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`Total gowns: ${inventoryExportItems.length}`, 40, 80);
+
+    autoTable(document, {
+      startY: 96,
+      head: [['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader]],
+      body: rows.length > 0 ? rows : [['-', 'No gowns available for export.', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 9,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    const filename = `${inventoryView === 'archive' ? 'archived' : 'inventory'}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.save(filename);
+  };
 
   const changeInventoryPage = (nextPage: number) => {
     setInventoryPage(nextPage);
@@ -1955,8 +2157,151 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           : rentalViewFilter === 'for-pickup'
             ? filteredForPickupRentals
             : filteredPendingReturns;
+
+  const getRentalExportItems = (filter: RentalExportFilter) => {
+    if (filter === 'archive') {
+      return filteredArchivedRentalCards.length > 0 ? filteredArchivedRentalCards : archivedRentalCards;
+    }
+
+    if (filter === 'all') {
+      return filteredAllActiveStatusRentals;
+    }
+
+    if (filter === 'pending') {
+      return filteredPendingRentalCards;
+    }
+
+    if (filter === 'active') {
+      return filteredActiveRentalCards;
+    }
+
+    if (filter === 'for-payment') {
+      return filteredForPaymentRentals;
+    }
+
+    if (filter === 'for-pickup') {
+      return filteredForPickupRentals;
+    }
+
+    return filteredPendingReturns;
+  };
+
+  const getRentalExportLabel = (filter: RentalExportFilter) => {
+    if (filter === 'archive') return 'Archived Rentals';
+    if (filter === 'all') return 'All Rentals';
+    if (filter === 'pending') return 'Pending Rentals';
+    if (filter === 'active') return 'Active Rentals';
+    if (filter === 'for-payment') return 'For Payment';
+    if (filter === 'for-pickup') return 'For Pickup';
+    return 'Pending Returns';
+  };
+
+  const rentalExportOptions: Array<{ value: RentalExportFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Rentals', count: filteredArchivedRentalCards.length },
+    { value: 'all', label: 'All Rentals', count: filteredAllActiveStatusRentals.length },
+    { value: 'pending', label: 'Pending Rentals', count: filteredPendingRentalCards.length },
+    { value: 'active', label: 'Active Rentals', count: filteredActiveRentalCards.length },
+    { value: 'for-payment', label: 'For Payment', count: filteredForPaymentRentals.length },
+    { value: 'for-pickup', label: 'For Pickup', count: filteredForPickupRentals.length },
+    { value: 'returns', label: 'Pending Returns', count: filteredPendingReturns.length },
+  ];
+
+  const canOpenRentalExportModal = rentalManagementView === 'archive'
+    ? archivedRentalCards.length > 0
+    : rentalExportOptions.some((option) => option.count > 0);
+
+  const openRentalExportModal = () => {
+    setRentalExportFilter(rentalManagementView === 'archive' ? 'archive' : rentalViewFilter);
+    setShowRentalExportModal(true);
+  };
+
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
+  const handleSaveRentalsAsPdf = (filter: RentalExportFilter) => {
+    const exportItems = getRentalExportItems(filter);
+    const exportTitle = filter === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
+    const filterLabel = getRentalExportLabel(filter);
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = exportItems.map((rental) => {
+      const isPendingReturn = 'customer' in rental && !('customerName' in rental);
+      if (isPendingReturn) {
+        const branch = activeRentalCards.find((activeRental) => activeRental.id === rental.id)?.branch ?? 'Not specified';
+
+        return [
+          rental.id,
+          rental.gownName,
+          rental.customer,
+          branch,
+          rental.dueDate || 'Not scheduled',
+          rental.dueDate || 'Not scheduled',
+          rental.daysLate > 0 ? `${rental.daysLate} day${rental.daysLate === 1 ? '' : 's'} late` : 'Pending Return',
+          `PHP ${Number(rental.daysLate * RENTAL_LATE_FEE_PER_DAY || 0).toLocaleString()}`,
+        ];
+      }
+
+      const detailedRental = adminRentals.find((entry) => entry.id === rental.id);
+      const statusValue = filter === 'archive'
+        ? (rental.status === 'paid_for_confirmation'
+            ? 'Paid - For Confirmation'
+            : rental.status
+                .split('_')
+                .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+                .join(' '))
+        : detailedRental
+          ? getRentalStatusLabel(detailedRental)
+          : rental.status
+              .split('_')
+              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+              .join(' ');
+
+      return [
+        rental.referenceId || rental.id,
+        rental.gownName,
+        rental.customerName,
+        rental.branch,
+        detailedRental?.startDate || rental.endDate || 'Not scheduled',
+        rental.endDate || 'Not scheduled',
+        statusValue,
+        `PHP ${Number(rental.totalPrice || 0).toLocaleString()}`,
+      ];
+    });
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text(exportTitle, 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`View: ${filterLabel}`, 40, 80);
+    document.text(`Total records: ${exportItems.length}`, 40, 96);
+
+    autoTable(document, {
+      startY: 112,
+      head: [['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount']],
+      body: rows.length > 0 ? rows : [['-', 'No rental records available for export.', '', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 9,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    const filename = `${filter === 'archive' ? 'archived-rentals' : `rentals-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.save(filename);
+    setShowRentalExportModal(false);
+  };
   const paginatedPendingRentalCards = filteredPendingRentalCards.slice(
     (safeRentalPage - 1) * RENTAL_PAGE_SIZE,
     safeRentalPage * RENTAL_PAGE_SIZE,
@@ -2051,6 +2396,101 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       : appointmentStatusFilter === 'pending'
       ? filteredPendingAppointments
       : filteredScheduledAppointments;
+
+  const getAppointmentExportItems = (filter: AppointmentExportFilter) => {
+    if (filter === 'archive') {
+      return filteredArchivedAppointments.length > 0 ? filteredArchivedAppointments : archivedAppointments;
+    }
+
+    if (filter === 'all') {
+      return filteredAllAppointments;
+    }
+
+    if (filter === 'pending') {
+      return filteredPendingAppointments;
+    }
+
+    return filteredScheduledAppointments;
+  };
+
+  const getAppointmentExportLabel = (filter: AppointmentExportFilter) => {
+    if (filter === 'archive') return 'Archived Appointments';
+    if (filter === 'all') return 'All Appointments';
+    if (filter === 'pending') return 'Pending Appointments';
+    return 'Scheduled Appointments';
+  };
+
+  const appointmentExportOptions: Array<{ value: AppointmentExportFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Appointments', count: filteredArchivedAppointments.length },
+    { value: 'all', label: 'All Appointments', count: filteredAllAppointments.length },
+    { value: 'pending', label: 'Pending Appointments', count: filteredPendingAppointments.length },
+    { value: 'scheduled', label: 'Scheduled Appointments', count: filteredScheduledAppointments.length },
+  ];
+
+  const canOpenAppointmentExportModal = appointmentManagementView === 'archive'
+    ? archivedAppointments.length > 0
+    : appointmentExportOptions.some((option) => option.count > 0);
+
+  const openAppointmentExportModal = () => {
+    setAppointmentExportFilter(appointmentManagementView === 'archive' ? 'archive' : appointmentStatusFilter);
+    setShowAppointmentExportModal(true);
+  };
+
+  const handleSaveAppointmentsAsPdf = (filter: AppointmentExportFilter) => {
+    const exportItems = getAppointmentExportItems(filter);
+    const exportTitle = filter === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
+    const filterLabel = getAppointmentExportLabel(filter);
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = exportItems.map((appointment) => [
+      appointment.referenceId || appointment.id,
+      appointment.customerName,
+      appointment.customerEmail,
+      appointment.contactNumber,
+      getAppointmentTypeLabel(appointment.type),
+      appointment.branch,
+      appointment.date,
+      appointment.time,
+      appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1),
+      appointment.selectedGownName || 'Not specified',
+    ]);
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text(exportTitle, 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`View: ${filterLabel}`, 40, 80);
+    document.text(`Total records: ${exportItems.length}`, 40, 96);
+
+    autoTable(document, {
+      startY: 112,
+      head: [['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown']],
+      body: rows.length > 0 ? rows : [['-', 'No appointment records available for export.', '', '', '', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 7,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    const filename = `${filter === 'archive' ? 'archived-appointments' : `appointments-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.save(filename);
+    setShowAppointmentExportModal(false);
+  };
+
   const appointmentTotalPages = Math.max(1, Math.ceil(appointmentItemsForCurrentView.length / APPOINTMENT_PAGE_SIZE));
   const safeAppointmentPage = Math.min(appointmentPage, appointmentTotalPages);
   const paginatedAppointments = appointmentItemsForCurrentView.slice(
@@ -2165,6 +2605,150 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
 
     return rawValue;
+  };
+
+  const getCustomOrderExportItems = (filter: CustomOrderExportFilter) => {
+    const archivedCustomOrders = adminCustomOrders.filter((order) => {
+      const isArchivedOrder = Boolean(order.isArchived);
+      return matchesSelectedBranch(order.branch, selectedBranch) && (isArchivedOrder || order.status === 'rejected');
+    });
+
+    return adminCustomOrders.filter((order) => {
+      const isArchivedOrder = Boolean(order.isArchived);
+      if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
+
+      const matchesStatus = filter === 'archive'
+        ? isArchivedOrder || order.status === 'rejected'
+        : !isArchivedOrder && order.status !== 'rejected' && (
+          filter === 'all' || order.status === filter
+        );
+
+      if (!matchesStatus) return false;
+      if (!customOrderQuery) return true;
+
+      return [
+        order.id,
+        order._id,
+        order.referenceId,
+        order.customerName,
+        order.email,
+        order.contactNumber,
+        order.orderType,
+        order.branch,
+        order.status,
+        order.eventDate,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(customOrderQuery));
+    }).length > 0 || filter !== 'archive'
+      ? adminCustomOrders.filter((order) => {
+          const isArchivedOrder = Boolean(order.isArchived);
+          if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
+
+          const matchesStatus = filter === 'archive'
+            ? isArchivedOrder || order.status === 'rejected'
+            : !isArchivedOrder && order.status !== 'rejected' && (
+              filter === 'all' || order.status === filter
+            );
+
+          if (!matchesStatus) return false;
+          if (!customOrderQuery) return true;
+
+          return [
+            order.id,
+            order._id,
+            order.referenceId,
+            order.customerName,
+            order.email,
+            order.contactNumber,
+            order.orderType,
+            order.branch,
+            order.status,
+            order.eventDate,
+          ]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(customOrderQuery));
+        })
+      : archivedCustomOrders;
+  };
+
+  const getCustomOrderExportLabel = (filter: CustomOrderExportFilter) => {
+    if (filter === 'archive') return 'Archived Custom Orders';
+    if (filter === 'all') return 'All Orders';
+    return filter === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(filter);
+  };
+
+  const customOrderExportOptions: Array<{ value: CustomOrderExportFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Custom Orders', count: getCustomOrderExportItems('archive').length },
+    { value: 'all', label: 'All Orders', count: getCustomOrderExportItems('all').length },
+    ...CUSTOM_ORDER_FILTER_TABS.map((status) => ({
+      value: status as CustomOrderExportFilter,
+      label: status === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(status),
+      count: getCustomOrderExportItems(status).length,
+    })),
+  ];
+
+  const canOpenCustomOrderExportModal = customOrderManagementView === 'archive'
+    ? adminCustomOrders.some((order) => matchesSelectedBranch(order.branch, selectedBranch) && (Boolean(order.isArchived) || order.status === 'rejected'))
+    : customOrderExportOptions.some((option) => option.count > 0);
+
+  const openCustomOrderExportModal = () => {
+    setCustomOrderExportFilter(customOrderManagementView === 'archive' ? 'archive' : customOrderStatusFilter);
+    setShowCustomOrderExportModal(true);
+  };
+
+  const handleSaveCustomOrdersAsPdf = (filter: CustomOrderExportFilter) => {
+    const exportItems = getCustomOrderExportItems(filter);
+    const exportTitle = filter === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
+    const filterLabel = getCustomOrderExportLabel(filter);
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const rows = exportItems.map((order) => [
+      order.referenceId || order.id || order._id || 'N/A',
+      order.customerName || 'Unknown Customer',
+      order.email || 'No email',
+      order.contactNumber || 'No phone',
+      order.orderType || 'Custom Order',
+      getCustomOrderStatusLabel(order.status),
+      order.branch || 'No branch',
+      order.eventDate || 'Not set',
+      formatCustomOrderBudget(order.budget),
+    ]);
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text(exportTitle, 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`View: ${filterLabel}`, 40, 80);
+    document.text(`Total records: ${exportItems.length}`, 40, 96);
+
+    autoTable(document, {
+      startY: 112,
+      head: [['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget']],
+      body: rows.length > 0 ? rows : [['-', 'No custom order records available for export.', '', '', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 7,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    const filename = `${filter === 'archive' ? 'archived-custom-orders' : `custom-orders-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.save(filename);
+    setShowCustomOrderExportModal(false);
   };
 
   const formatConsultationTimeLabel = (value: string | undefined | null) => {
@@ -2612,18 +3196,36 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               <h2 className="text-2xl font-light">Inventory Management</h2>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setShowAddItem(true)}
-                  disabled={isArchiveView}
-                  title={isArchiveView ? 'Switch back to active inventory to add a new gown' : 'Add a new gown'}
-                  aria-label={isArchiveView ? 'Add New Gown disabled in archive view' : 'Add New Gown'}
+                  type="button"
+                  onClick={handleSaveInventoryAsPdf}
+                  disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Save inventory as PDF"
+                >
+                  <Download className="w-5 h-5" />
+                  Save as PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isArchiveView) {
+                      void loadArchivedInventory();
+                      return;
+                    }
+
+                    setShowAddItem(true);
+                  }}
+                  disabled={isArchiveView ? archiveLoading : false}
+                  title={isArchiveView ? 'Refresh archived inventory' : 'Add a new gown'}
+                  aria-label={isArchiveView ? 'Refresh archived inventory' : 'Add New Gown'}
                   className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors ${
                     isArchiveView
-                      ? 'bg-[#1a1a1a]/40 text-white/80 cursor-not-allowed'
+                      ? 'border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed'
                       : 'bg-[#1a1a1a] text-white hover:bg-[#D4AF37]'
                   }`}
                 >
-                  <Plus className="w-5 h-5" />
-                  Add New Gown
+                  {isArchiveView ? <RotateCcw className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                  {isArchiveView ? 'Refresh' : 'Add New Gown'}
                 </button>
                 <button
                   onClick={handleToggleArchiveView}
@@ -2647,7 +3249,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             </div>
 
             <p className="text-sm text-[#6B5D4F]">
-              Hover over a product to preview its details.
+              Use the eye icon in Actions to view a product's details.
             </p>
 
             <div className="text-sm text-[#6B5D4F]">
@@ -2707,9 +3309,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     {inventoryView === 'active' && paginatedInventoryItems.map((item) => (
                       <tr
                         key={item.id}
-                        className="hover:bg-[#FAF7F0] transition-colors cursor-help"
-                        onMouseEnter={() => handleInventoryRowHoverStart(item)}
-                        onMouseLeave={() => handleInventoryRowHoverEnd(item.id)}
+                        className="hover:bg-[#FAF7F0] transition-colors"
                       >
                         <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
                         <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
@@ -2733,8 +3333,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         <td className="px-6 py-4">
                           <div className="flex gap-2">
                             <button
+                              onClick={() => setHoverPreviewItem(item)}
+                              className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                              title="View details"
+                              aria-label={`View details for ${item.name}`}
+                            >
+                              <Eye className="w-4 h-4 text-[#6B5D4F]" />
+                            </button>
+                            <button
                               onClick={() => {
-                                handleInventoryRowHoverEnd(item.id);
                                 setEditingItem(item);
                               }}
                               className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
@@ -2744,7 +3351,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             </button>
                             <button
                               onClick={() => {
-                                handleInventoryRowHoverEnd(item.id);
                                 handleDeleteItem(item.id);
                               }}
                               className="p-2 hover:bg-red-50 rounded-full transition-colors"
@@ -2826,6 +3432,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Rental Management</h2>
               <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={openRentalExportModal}
+                  disabled={adminRentalsLoading || !canOpenRentalExportModal}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Save rentals as PDF"
+                >
+                  <Download className="w-5 h-5" />
+                  Save as PDF
+                </button>
                 <button
                   onClick={loadAdminRentals}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
@@ -3523,11 +4139,85 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           />
         )}
 
+        {showRentalExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose rental status filter for PDF export"
+            onClick={() => setShowRentalExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Rentals as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose which rental status filter to include in the exported PDF.
+              </p>
+
+              <div className="space-y-3 mb-6">
+                {rentalExportOptions.map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                      rentalExportFilter === option.value
+                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="rental-export-filter"
+                        value={option.value}
+                        checked={rentalExportFilter === option.value}
+                        onChange={() => setRentalExportFilter(option.value)}
+                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                      />
+                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                    </div>
+                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowRentalExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveRentalsAsPdf(rentalExportFilter)}
+                  disabled={getRentalExportItems(rentalExportFilter).length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'appointments' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Appointment Management</h2>
               <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={openAppointmentExportModal}
+                  disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Save appointments as PDF"
+                >
+                  <Download className="w-5 h-5" />
+                  Save as PDF
+                </button>
                 <button
                   onClick={loadAdminAppointments}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
@@ -3810,11 +4500,85 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           </div>
         )}
 
+        {showAppointmentExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose appointment status filter for PDF export"
+            onClick={() => setShowAppointmentExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Appointments as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose which appointment status filter to include in the exported PDF.
+              </p>
+
+              <div className="space-y-3 mb-6">
+                {appointmentExportOptions.map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                      appointmentExportFilter === option.value
+                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="radio"
+                        name="appointment-export-filter"
+                        value={option.value}
+                        checked={appointmentExportFilter === option.value}
+                        onChange={() => setAppointmentExportFilter(option.value)}
+                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                      />
+                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                    </div>
+                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAppointmentExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveAppointmentsAsPdf(appointmentExportFilter)}
+                  disabled={getAppointmentExportItems(appointmentExportFilter).length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'bespoke' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center gap-4">
               <h2 className="text-2xl font-light">Bespoke Management</h2>
               <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={openCustomOrderExportModal}
+                  disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Save custom orders as PDF"
+                >
+                  <Download className="w-5 h-5" />
+                  Save as PDF
+                </button>
                 <button
                   onClick={loadAdminCustomOrders}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
@@ -3869,6 +4633,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     {status === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(status)}
                   </button>
                 ))}
+              </div>
+            )}
+
+            {showCustomOrderExportModal && (
+              <div
+                className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Choose custom order status filter for PDF export"
+                onClick={() => setShowCustomOrderExportModal(false)}
+              >
+                <div
+                  className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <h3 className="text-xl sm:text-2xl font-light mb-2">Save Custom Orders as PDF</h3>
+                  <p className="text-sm text-[#6B5D4F] mb-6">
+                    Choose which bespoke status filter to include in the exported PDF.
+                  </p>
+
+                  <div className="space-y-3 mb-6">
+                    {customOrderExportOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          customOrderExportFilter === option.value
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="radio"
+                            name="custom-order-export-filter"
+                            value={option.value}
+                            checked={customOrderExportFilter === option.value}
+                            onChange={() => setCustomOrderExportFilter(option.value)}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-row items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomOrderExportModal(false)}
+                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveCustomOrdersAsPdf(customOrderExportFilter)}
+                      disabled={getCustomOrderExportItems(customOrderExportFilter).length === 0}
+                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Save PDF
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -3996,6 +4824,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">User Management</h2>
               <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={openUserExportModal}
+                  disabled={usersLoading || !canOpenUserExportModal}
+                  className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Download className="w-5 h-5" />
+                  Save as PDF
+                </button>
                 {!showArchivedUsersOnly && !isCurrentUserStaff && (
                   <button
                     onClick={() => {
@@ -4009,6 +4845,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
+                  onClick={loadUsers}
+                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
+                >
+                  Refresh
+                </button>
+                <button
                   onClick={() => setShowArchivedUsersOnly((prev) => !prev)}
                   className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border ${
                     showArchivedUsersOnly
@@ -4018,12 +4860,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 >
                   <Archive className="w-5 h-5" />
                   {showArchivedUsersOnly ? 'Back' : 'Archive'}
-                </button>
-                <button
-                  onClick={loadUsers}
-                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
-                >
-                  Refresh
                 </button>
               </div>
             </div>
@@ -4218,6 +5054,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </div>
                 </div>
               )}
+
+              {showUserExportModal && (
+                <div
+                  className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Choose account type filter for user PDF export"
+                  onClick={() => setShowUserExportModal(false)}
+                >
+                  <div
+                    className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <h3 className="text-xl sm:text-2xl font-light mb-2">Save Users as PDF</h3>
+                    <p className="text-sm text-[#6B5D4F] mb-6">
+                      Choose which account type to include in the exported PDF.
+                    </p>
+
+                    <div className="space-y-3 mb-6">
+                      {userExportOptions.map((option) => (
+                        <label
+                          key={option.value}
+                          className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                            userExportFilter === option.value
+                              ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                              : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="radio"
+                              name="user-export-filter"
+                              value={option.value}
+                              checked={userExportFilter === option.value}
+                              onChange={() => setUserExportFilter(option.value)}
+                              className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                            />
+                            <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                          </div>
+                          <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-row items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowUserExportModal(false)}
+                        className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveUsersAsPdf(userExportFilter)}
+                        disabled={getUserExportItems(userExportFilter).length === 0}
+                        className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Save PDF
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -4226,12 +5126,22 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-light">Admin History</h2>
-              <button
-                onClick={loadAdminHistory}
-                className={`${adminHistoryActionButtonClass} py-2`}
-              >
-                Refresh
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveAdminHistoryAsPdf}
+                  disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
+                  className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <Download className="h-4 w-4" />
+                  Save as PDF
+                </button>
+                <button
+                  onClick={loadAdminHistory}
+                  className={`${adminHistoryActionButtonClass} py-2`}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-end gap-3">

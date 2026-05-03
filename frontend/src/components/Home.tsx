@@ -243,6 +243,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
   const [selectorError, setSelectorError] = useState<string | null>(null);
   const [inventoryOptions, setInventoryOptions] = useState<InventoryItem[]>([]);
   const [selectedFeaturedIds, setSelectedFeaturedIds] = useState<string[]>([]);
+  const [selectorSearch, setSelectorSearch] = useState('');
   const [selectorPage, setSelectorPage] = useState(1);
   const [selectedFeaturedGown, setSelectedFeaturedGown] = useState<FeaturedGownCard | null>(null);
   const featuredRef = useRef<HTMLDivElement>(null);
@@ -314,6 +315,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
   };
 
   const openFeaturedSelector = () => {
+    setSelectorSearch('');
     setShowFeaturedSelector(true);
     void loadInventoryOptions();
   };
@@ -443,14 +445,28 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
     setCurrentSlide((current) => Math.min(current, pageCount - 1));
   }, [featuredGowns.length]);
 
+  useEffect(() => {
+    setSelectorPage(1);
+  }, [selectorSearch]);
+
   const currentPair = [
     heroCollections[heroSlide],
     heroCollections[(heroSlide + 1) % heroCollections.length],
   ];
   const featuredGownsPageCount = Math.max(1, Math.ceil(featuredGowns.length / featuredGownsPerSlide));
-  const featuredSelectorPageCount = Math.max(1, Math.ceil(inventoryOptions.length / FEATURED_SELECTOR_PAGE_SIZE));
+  const normalizedSelectorSearch = selectorSearch.trim().toLowerCase();
+  const filteredInventoryOptions = inventoryOptions.filter((item) => {
+    if (!normalizedSelectorSearch) {
+      return true;
+    }
+
+    return [item.id, item.sku, item.name, item.category, item.branch, item.status]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedSelectorSearch));
+  });
+  const featuredSelectorPageCount = Math.max(1, Math.ceil(filteredInventoryOptions.length / FEATURED_SELECTOR_PAGE_SIZE));
   const safeSelectorPage = Math.min(selectorPage, featuredSelectorPageCount);
-  const paginatedInventoryOptions = inventoryOptions.slice(
+  const paginatedInventoryOptions = filteredInventoryOptions.slice(
     (safeSelectorPage - 1) * FEATURED_SELECTOR_PAGE_SIZE,
     safeSelectorPage * FEATURED_SELECTOR_PAGE_SIZE,
   );
@@ -855,12 +871,25 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
             className="flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden bg-white p-4 md:p-6"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div className="mb-6 flex flex-col gap-3">
               <div>
                 <h3 className="font-serif text-3xl font-light text-[#1a1a1a]">Select Gowns</h3>
-                <p className="mt-2 text-sm text-[#6B5D4F]">Choose up to {MAX_FEATURED_GOWNS} gowns from the database to replace the current Featured Gowns section.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-y-1 text-sm text-[#6B5D4F]">
+                  <span>{selectedFeaturedIds.length} / {MAX_FEATURED_GOWNS} selected</span>
+                  <span className="px-3">|</span>
+                  <p>Choose up to {MAX_FEATURED_GOWNS} gowns from the database to replace the current Featured Gowns section.</p>
+                </div>
               </div>
-              <div className="text-sm text-[#6B5D4F]">{selectedFeaturedIds.length} / {MAX_FEATURED_GOWNS} selected</div>
+              <div className="max-w-sm">
+                <input
+                  type="search"
+                  value={selectorSearch}
+                  onChange={(event) => setSelectorSearch(event.target.value)}
+                  placeholder="Search by ID, name, category, branch, or status"
+                  className="w-full rounded-lg border border-[#E8DCC8] px-4 py-3 text-sm text-[#1a1a1a] outline-none transition-colors placeholder:text-[#9B8B79] focus:border-[#D4AF37]"
+                  aria-label="Search gowns"
+                />
+              </div>
             </div>
 
             {selectorError && (
@@ -874,6 +903,8 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                 <div className="px-4 py-6 text-sm text-[#6B5D4F]">Loading gowns...</div>
               ) : inventoryOptions.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns found.</div>
+              ) : filteredInventoryOptions.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns match your search.</div>
               ) : (
                 <table className="w-full min-w-[720px]">
                   <thead className="bg-[#FAF7F0] sticky top-0">
@@ -920,11 +951,11 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
               )}
             </div>
 
-            {!selectorLoading && inventoryOptions.length > FEATURED_SELECTOR_PAGE_SIZE && (
+            {!selectorLoading && filteredInventoryOptions.length > FEATURED_SELECTOR_PAGE_SIZE && (
               <div className="mt-4 flex items-center justify-between gap-3">
                 <div className="text-sm leading-none text-[#6B5D4F]">
                   Showing {(safeSelectorPage - 1) * FEATURED_SELECTOR_PAGE_SIZE + 1}-
-                  {Math.min(safeSelectorPage * FEATURED_SELECTOR_PAGE_SIZE, inventoryOptions.length)} of {inventoryOptions.length}
+                  {Math.min(safeSelectorPage * FEATURED_SELECTOR_PAGE_SIZE, filteredInventoryOptions.length)} of {filteredInventoryOptions.length}
                 </div>
                 <div className="ml-auto flex items-center justify-end gap-3">
                   <button
