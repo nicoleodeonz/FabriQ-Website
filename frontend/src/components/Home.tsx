@@ -962,7 +962,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                     type="button"
                     onClick={() => setSelectorPage((page) => Math.max(1, page - 1))}
                     disabled={safeSelectorPage === 1}
-                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
                   >
                     Previous
                   </button>
@@ -971,7 +971,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                     type="button"
                     onClick={() => setSelectorPage((page) => Math.min(featuredSelectorPageCount, page + 1))}
                     disabled={safeSelectorPage === featuredSelectorPageCount}
-                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
                   >
                     Next
                   </button>
@@ -984,7 +984,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                 type="button"
                 onClick={() => setShowFeaturedSelector(false)}
                 disabled={selectorSaving}
-                className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -992,7 +992,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                 type="button"
                 onClick={() => void saveFeaturedGowns()}
                 disabled={selectorSaving || selectorLoading}
-                className="px-6 py-3 rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] text-white font-medium hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                className="px-6 py-3 rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] text-white font-medium hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors disabled:opacity-50"
               >
                 {selectorSaving ? 'Saving...' : 'Save Featured Gowns'}
               </button>
