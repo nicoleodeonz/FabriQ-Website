@@ -212,6 +212,8 @@ async function cancelExpiredPendingRentals() {
         phoneNumber: rental.contactNumber || '',
         payload: {
           type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
           status: 'cancelled',
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
@@ -388,6 +390,8 @@ export async function scheduleRentalPickup(req, res) {
         phoneNumber: rental.contactNumber || '',
         payload: {
           type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
           status: rental.status,
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
@@ -463,6 +467,8 @@ export async function submitRentalPayment(req, res) {
         phoneNumber: rental.contactNumber || '',
         payload: {
           type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
           status: rental.status,
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
@@ -574,6 +580,8 @@ export async function createRental(req, res) {
         phoneNumber: rental.contactNumber || '',
         payload: {
           type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
           status: 'pending',
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
@@ -741,6 +749,8 @@ export async function updateRentalStatus(req, res) {
         phoneNumber: rental.contactNumber || '',
         payload: {
           type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
           status,
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',

@@ -262,6 +262,8 @@ export const updateCustomOrderConsultationSchedule = async (req, res) => {
       email: order.email || '',
       phoneNumber: order.contactNumber || '',
       type: 'bespoke',
+      recordId: String(order._id || ''),
+      customerId: String(order.customerId || ''),
       status: 'design-approval',
       name: order.customerName || '',
       itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -285,6 +287,8 @@ export const updateCustomOrderFittingSchedule = async (req, res) => {
       email: order.email || '',
       phoneNumber: order.contactNumber || '',
       type: 'bespoke',
+      recordId: String(order._id || ''),
+      customerId: String(order.customerId || ''),
       status: 'fitting-scheduled',
       name: order.customerName || '',
       itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -383,6 +387,8 @@ export const updateCustomOrderStatus = async (req, res) => {
           phoneNumber: order.contactNumber || '',
           payload: {
             type: 'bespoke',
+            recordId: String(order._id || ''),
+            customerId: String(order.customerId || ''),
             status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -404,6 +410,8 @@ export const updateCustomOrderStatus = async (req, res) => {
           phoneNumber: order.contactNumber || '',
           payload: {
             type: 'bespoke',
+            recordId: String(order._id || ''),
+            customerId: String(order.customerId || ''),
             status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -425,6 +433,8 @@ export const updateCustomOrderStatus = async (req, res) => {
           phoneNumber: order.contactNumber || '',
           payload: {
             type: 'bespoke',
+            recordId: String(order._id || ''),
+            customerId: String(order.customerId || ''),
             status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -447,6 +457,8 @@ export const updateCustomOrderStatus = async (req, res) => {
           phoneNumber: order.contactNumber || '',
           payload: {
             type: 'bespoke',
+            recordId: String(order._id || ''),
+            customerId: String(order.customerId || ''),
             status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -520,6 +532,8 @@ export const archiveCustomOrder = async (req, res) => {
         phoneNumber: order.contactNumber || '',
         payload: {
           type: 'bespoke',
+          recordId: String(order._id || ''),
+          customerId: String(order.customerId || ''),
           status: 'completed',
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',

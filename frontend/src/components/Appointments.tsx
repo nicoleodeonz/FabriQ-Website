@@ -5,6 +5,7 @@ import type { InventoryItem } from '../services/inventoryAPI';
 import { appointmentAPI } from '../services/appointmentAPI';
 import type { AppointmentDetail as Appointment } from '../services/appointmentAPI';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
+import type { CustomerNotificationEntry } from '../services/notificationAPI';
 
 interface AppointmentsProps {
   token: string;
@@ -17,9 +18,31 @@ interface AppointmentsProps {
   };
   selectedGownId?: string | null;
   selectedAppointmentType?: string | null;
+  selectedAppointmentId?: string | null;
+  selectedAppointmentNotification?: CustomerNotificationEntry | null;
+  selectedAppointmentTab?: 'existing' | 'history' | null;
+  onSelectedAppointmentHandled?: () => void;
+  onSelectedAppointmentNotificationHandled?: () => void;
+  onSelectedAppointmentTabHandled?: () => void;
 }
 
-export function Appointments({ user, token, selectedGownId, selectedAppointmentType }: AppointmentsProps) {
+function normalizeNotificationText(value?: string | null) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getAppointmentNotificationLabel(appointment: Appointment) {
+  const type = normalizeNotificationText(appointment.type);
+  if (type === 'fitting') {
+    const gownName = String(appointment.selectedGownName || '').trim();
+    return normalizeNotificationText(gownName ? `Gown Fitting - ${gownName}` : 'Gown Fitting');
+  }
+  if (type === 'consultation') return 'design consultation';
+  if (type === 'measurement') return 'measurement session';
+  if (type === 'pickup') return 'pickup appointment';
+  return 'appointment service';
+}
+
+export function Appointments({ user, token, selectedGownId, selectedAppointmentType, selectedAppointmentId, selectedAppointmentNotification, selectedAppointmentTab, onSelectedAppointmentHandled, onSelectedAppointmentNotificationHandled, onSelectedAppointmentTabHandled }: AppointmentsProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -79,6 +102,8 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
   const [branchError, setBranchError] = useState('');
   const [gownError, setGownError] = useState('');
   const [isMissingPhoneModalOpen, setIsMissingPhoneModalOpen] = useState(false);
+  const [selectedAppointmentDetails, setSelectedAppointmentDetails] = useState<Appointment | null>(null);
+  const [isAppointmentDetailsOpen, setIsAppointmentDetailsOpen] = useState(false);
   const [selectedRescheduleAppointment, setSelectedRescheduleAppointment] = useState<Appointment | null>(null);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
@@ -91,13 +116,22 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     branch: '',
     reason: '',
   });
-  const isAnyAppointmentModalOpen = isMissingPhoneModalOpen || isRescheduleModalOpen;
+  const isAnyAppointmentModalOpen = isMissingPhoneModalOpen || isRescheduleModalOpen || isAppointmentDetailsOpen;
   const selectedGownDetails = useMemo(
     () => availableGowns.find((gown) => gown.id === formData.selectedGown) || null,
     [availableGowns, formData.selectedGown]
   );
 
   useModalInteractionLock(isAnyAppointmentModalOpen, modalRef);
+
+  useEffect(() => {
+    if (!selectedAppointmentTab) {
+      return;
+    }
+
+    setActiveTab(selectedAppointmentTab);
+    onSelectedAppointmentTabHandled?.();
+  }, [onSelectedAppointmentTabHandled, selectedAppointmentTab]);
 
   useEffect(() => {
     setFormData((prev) => ({
@@ -135,6 +169,51 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
       isMounted = false;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!selectedAppointmentId || appointments.length === 0) {
+      return;
+    }
+
+    const matchedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId);
+    if (!matchedAppointment) {
+      return;
+    }
+
+    const isHistorical = matchedAppointment.status === 'completed' || matchedAppointment.status === 'cancelled';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedAppointmentDetails(matchedAppointment);
+    setIsAppointmentDetailsOpen(true);
+    onSelectedAppointmentHandled?.();
+  }, [appointments, onSelectedAppointmentHandled, selectedAppointmentId]);
+
+  useEffect(() => {
+    if (!selectedAppointmentNotification || selectedAppointmentId || appointments.length === 0) {
+      return;
+    }
+
+    const notificationLabel = normalizeNotificationText(selectedAppointmentNotification.itemLabel);
+    const notificationStatus = normalizeNotificationText(selectedAppointmentNotification.status);
+    const notificationDate = String(selectedAppointmentNotification.date || '').trim();
+    const notificationLocation = normalizeNotificationText(selectedAppointmentNotification.location);
+
+    const matchedAppointment = appointments.find((appointment) => (
+      getAppointmentNotificationLabel(appointment) === notificationLabel
+      && normalizeNotificationText(appointment.status) === notificationStatus
+      && (!notificationDate || appointment.date === notificationDate)
+      && (!notificationLocation || normalizeNotificationText(appointment.branch) === notificationLocation)
+    ));
+
+    if (!matchedAppointment) {
+      return;
+    }
+
+    const isHistorical = matchedAppointment.status === 'completed' || matchedAppointment.status === 'cancelled';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedAppointmentDetails(matchedAppointment);
+    setIsAppointmentDetailsOpen(true);
+    onSelectedAppointmentNotificationHandled?.();
+  }, [appointments, onSelectedAppointmentNotificationHandled, selectedAppointmentId, selectedAppointmentNotification]);
 
   useEffect(() => {
     if (!formData.date || !formData.branch) {
@@ -427,6 +506,11 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     });
     setRescheduleError('');
     setIsRescheduleModalOpen(true);
+  };
+
+  const openAppointmentDetails = (appointment: Appointment) => {
+    setSelectedAppointmentDetails(appointment);
+    setIsAppointmentDetailsOpen(true);
   };
 
   const closeRescheduleModal = () => {
@@ -751,7 +835,16 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
             {currentAppointments.map((appointment) => (
               <div
                 key={appointment.id}
-                className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors"
+                className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors cursor-pointer"
+                role="button"
+                tabIndex={0}
+                onClick={() => openAppointmentDetails(appointment)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openAppointmentDetails(appointment);
+                  }
+                }}
               >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex-1">
@@ -849,7 +942,16 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
             {!appointmentsLoading && appointmentHistory.map((appointment) => (
               <div
                 key={appointment.id}
-                className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors"
+                className="bg-white rounded-2xl border border-[#E8DCC8] p-6 hover:border-[#D4AF37] transition-colors cursor-pointer"
+                role="button"
+                tabIndex={0}
+                onClick={() => openAppointmentDetails(appointment)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openAppointmentDetails(appointment);
+                  }
+                }}
               >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex-1">
@@ -932,6 +1034,76 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
               >
                 OK
               </button>
+            </div>
+          </div>
+        )}
+
+        {isAppointmentDetailsOpen && selectedAppointmentDetails && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Appointment details"
+            onClick={() => setIsAppointmentDetailsOpen(false)}
+          >
+            <div
+              ref={modalRef}
+              tabIndex={-1}
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between mb-6">
+                <h3 className="text-2xl font-light">Appointment Details</h3>
+                <button
+                  type="button"
+                  onClick={() => setIsAppointmentDetailsOpen(false)}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                  aria-label="Close appointment details"
+                >
+                  <span className="text-xl leading-none text-[#6B5D4F]">×</span>
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm">
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Type</span>
+                  <span className="text-right font-medium text-black">{getAppointmentTypeLabel(selectedAppointmentDetails.type)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Status</span>
+                  <span className="text-right font-medium text-black">{selectedAppointmentDetails.status.charAt(0).toUpperCase() + selectedAppointmentDetails.status.slice(1)}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Date</span>
+                  <span className="text-right font-medium text-black">{selectedAppointmentDetails.date}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Time</span>
+                  <span className="text-right font-medium text-black">{selectedAppointmentDetails.time}</span>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <span className="text-[#6B5D4F]">Branch</span>
+                  <span className="text-right font-medium text-black">{selectedAppointmentDetails.branch}</span>
+                </div>
+                {selectedAppointmentDetails.selectedGown && (
+                  <div className="flex justify-between gap-4">
+                    <span className="text-[#6B5D4F]">Gown</span>
+                    <span className="text-right font-medium text-black">{selectedAppointmentDetails.selectedGownName || availableGowns.find((gown) => gown.id === selectedAppointmentDetails.selectedGown)?.name || 'Selected gown'}</span>
+                  </div>
+                )}
+                {selectedAppointmentDetails.notes && (
+                  <div className="border-t border-[#E8DCC8] pt-3">
+                    <p className="text-[#6B5D4F] mb-1">Notes</p>
+                    <p className="text-black">{selectedAppointmentDetails.notes}</p>
+                  </div>
+                )}
+                {selectedAppointmentDetails.cancellationReason && (
+                  <div className="border-t border-[#E8DCC8] pt-3">
+                    <p className="text-[#6B5D4F] mb-1">Cancellation Reason</p>
+                    <p className="text-black">{selectedAppointmentDetails.cancellationReason}</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

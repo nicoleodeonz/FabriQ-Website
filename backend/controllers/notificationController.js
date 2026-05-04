@@ -1,8 +1,10 @@
 import AdminAction from '../models/AdminAction.js';
 import AppointmentDetail from '../models/AppointmentDetail.js';
+import CustomerNotification from '../models/CustomerNotification.js';
 import CustomOrder from '../models/CustomOrder.js';
 import RentalDetail from '../models/RentalDetail.js';
 import { buildNotificationEmailPayload, sendNotificationEmail } from '../services/emailService.js';
+import { persistCustomerNotification } from '../services/messageDeliveryService.js';
 import { isSmsConfigError, isSmsPhoneNumberError, sendNotificationSms } from '../services/smsService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
@@ -101,6 +103,24 @@ function buildDeliverySummary({ emailResult, smsResult, requestedMethod }) {
   return emailDelivered ? 'Notification email sent successfully.' : 'Notification email was not delivered.';
 }
 
+function mapCustomerNotification(notification) {
+  return {
+    id: String(notification?._id || notification?.id || ''),
+    type: String(notification?.type || '').trim(),
+    status: String(notification?.status || '').trim(),
+    title: String(notification?.title || '').trim(),
+    message: String(notification?.message || '').trim(),
+    itemLabel: String(notification?.itemLabel || '').trim(),
+    date: String(notification?.date || '').trim(),
+    dateType: String(notification?.dateType || '').trim(),
+    time: String(notification?.time || '').trim(),
+    location: String(notification?.location || '').trim(),
+    metadata: notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : null,
+    readAt: notification?.readAt ? new Date(notification.readAt).toISOString() : null,
+    createdAt: notification?.createdAt ? new Date(notification.createdAt).toISOString() : null,
+  };
+}
+
 async function buildNotificationInput(type, recordId, options = {}) {
   const normalizedType = String(type || '').trim().toLowerCase();
   const messageBody = String(options.messageBody || '').trim();
@@ -130,6 +150,8 @@ async function buildNotificationInput(type, recordId, options = {}) {
       phoneNumber: rental.contactNumber || '',
       payload: {
         type: 'rental',
+        recordId: String(rental._id || ''),
+        customerId: String(rental.customerId || ''),
         status,
         name: rental.customerName || '',
         itemOrServiceOrDesign: rental.gownName || 'Rental Item',
@@ -162,6 +184,8 @@ async function buildNotificationInput(type, recordId, options = {}) {
       phoneNumber: appointment.contactNumber || '',
       payload: {
         type: 'appointment',
+        recordId: String(appointment._id || ''),
+        customerId: String(appointment.customerId || ''),
         status: String(appointment.status || ''),
         name: appointment.customerName || '',
         itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),
@@ -214,6 +238,8 @@ async function buildNotificationInput(type, recordId, options = {}) {
       phoneNumber: order.contactNumber || '',
       payload: {
         type: 'bespoke',
+        recordId: String(order._id || ''),
+        customerId: String(order.customerId || ''),
         status,
         name: order.customerName || '',
         itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
@@ -227,6 +253,66 @@ async function buildNotificationInput(type, recordId, options = {}) {
   }
 
   throw new Error('Unsupported notification type.');
+}
+
+export async function getMyNotifications(req, res) {
+  try {
+    const userId = String(req.user?.id || '').trim();
+    const userEmail = String(req.user?.email || '').trim();
+
+    if (!userId && !userEmail) {
+      return res.status(401).json({ message: 'Unauthorized.' });
+    }
+
+    const notifications = await CustomerNotification.find({
+      $or: [
+        ...(userId ? [{ customerId: userId }] : []),
+        ...(userEmail ? [{ customerEmail: userEmail }] : []),
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    return res.json({ notifications: notifications.map(mapCustomerNotification) });
+  } catch (error) {
+    console.error('getMyNotifications error:', error);
+    return res.status(500).json({ message: 'Failed to fetch notifications.' });
+  }
+}
+
+export async function markMyNotificationRead(req, res) {
+  try {
+    const notificationId = String(req.params?.id || '').trim();
+
+    if (!notificationId) {
+      return res.status(400).json({ message: 'Notification ID is required.' });
+    }
+
+    const userId = String(req.user?.id || '').trim();
+    const userEmail = String(req.user?.email || '').trim().toLowerCase();
+
+    const notification = await CustomerNotification.findOne({
+      _id: notificationId,
+      $or: [
+        ...(userId ? [{ customerId: userId }] : []),
+        ...(userEmail ? [{ customerEmail: userEmail }] : []),
+      ],
+    });
+
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification not found.' });
+    }
+
+    if (!notification.readAt) {
+      notification.readAt = new Date();
+      await notification.save();
+    }
+
+    return res.json({ notification: mapCustomerNotification(notification) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || 'Failed to mark notification as read.' });
+  }
 }
 
 export async function sendServiceNotification(req, res) {
@@ -324,6 +410,23 @@ export async function sendServiceNotification(req, res) {
       } else {
         smsResult = buildSkippedResult('missing-phone-number', 'Customer phone number is missing for this notification.');
       }
+    }
+
+    try {
+      await persistCustomerNotification({
+        customerId: notificationInput.targetUserId,
+        customerEmail: notificationInput.email,
+        payload: notificationInput.payload,
+        metadata: {
+          requestedMethod: deliveryMethod,
+          email: emailResult,
+          sms: smsResult,
+          source: 'manual-admin-notification',
+          details: notificationInput.details,
+        },
+      });
+    } catch (persistError) {
+      console.error('manual notification persistence error:', persistError);
     }
 
     await logAdminAction(req, {

@@ -412,6 +412,8 @@ export async function updateAppointmentStatus(req, res) {
           phoneNumber: appointment.contactNumber || '',
           payload: {
             type: 'appointment',
+            recordId: String(appointment._id || ''),
+            customerId: String(appointment.customerId || ''),
             status: nextStatus,
             name: appointment.customerName || '',
             itemOrServiceOrDesign: getAppointmentServiceLabel(appointment),

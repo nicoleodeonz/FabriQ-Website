@@ -8,6 +8,7 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { Calendar as DateCalendar } from './ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import type { CustomerNotificationEntry } from '../services/notificationAPI';
 
 interface Rental {
   id: string;
@@ -47,6 +48,12 @@ interface RentalsProps {
     phoneVerified?: boolean;
   };
   selectedGownId?: string | null;
+  selectedRentalId?: string | null;
+  selectedRentalNotification?: CustomerNotificationEntry | null;
+  selectedRentalTab?: 'existing' | 'history' | null;
+  onSelectedRentalHandled?: () => void;
+  onSelectedRentalNotificationHandled?: () => void;
+  onSelectedRentalTabHandled?: () => void;
 }
 
 interface RentalFormData {
@@ -142,7 +149,29 @@ function addDaysToDateString(value: string, days: number) {
   return formatDateOnly(parsed);
 }
 
-export function Rentals({ user, token, selectedGownId }: RentalsProps) {
+function normalizeNotificationText(value?: string | null) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getRentalNotificationComparableStatus(status?: string | null) {
+  const normalizedStatus = normalizeNotificationText(status);
+  return normalizedStatus === 'overdue' ? 'active' : normalizedStatus;
+}
+
+function labelsMatch(left?: string | null, right?: string | null) {
+  const normalizedLeft = normalizeNotificationText(left);
+  const normalizedRight = normalizeNotificationText(right);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.includes(normalizedRight)
+    || normalizedRight.includes(normalizedLeft);
+}
+
+export function Rentals({ user, token, selectedGownId, selectedRentalId, selectedRentalNotification, selectedRentalTab, onSelectedRentalHandled, onSelectedRentalNotificationHandled, onSelectedRentalTabHandled }: RentalsProps) {
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');
     return digits.length >= 10;
@@ -339,6 +368,64 @@ export function Rentals({ user, token, selectedGownId }: RentalsProps) {
       isMounted = false;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (!selectedRentalTab) {
+      return;
+    }
+
+    setActiveTab(selectedRentalTab);
+    onSelectedRentalTabHandled?.();
+  }, [onSelectedRentalTabHandled, selectedRentalTab]);
+
+  useEffect(() => {
+    if (!selectedRentalId || rentals.length === 0) {
+      return;
+    }
+
+    const matchedRental = rentals.find((rental) => rental.id === selectedRentalId);
+    if (!matchedRental) {
+      return;
+    }
+
+    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedRentalDetails(matchedRental);
+    setIsRentalDetailsOpen(true);
+    onSelectedRentalHandled?.();
+  }, [onSelectedRentalHandled, rentals, selectedRentalId]);
+
+  useEffect(() => {
+    if (!selectedRentalNotification || selectedRentalId || rentals.length === 0) {
+      return;
+    }
+
+    const notificationLabel = normalizeNotificationText(selectedRentalNotification.itemLabel);
+    const notificationStatus = getRentalNotificationComparableStatus(selectedRentalNotification.status);
+    const notificationDate = String(selectedRentalNotification.date || '').trim();
+    const shouldMatchNotificationDate = normalizeNotificationText(selectedRentalNotification.dateType) === 'scheduled date';
+    const notificationLocation = normalizeNotificationText(selectedRentalNotification.location);
+
+    const matchedRental = rentals.find((rental) => {
+      const rentalStatus = getRentalNotificationComparableStatus(rental.status);
+      const rentalDates = [rental.startDate, rental.endDate, rental.pickupScheduleDate].filter(Boolean);
+
+      return labelsMatch(rental.gownName, notificationLabel)
+        && rentalStatus === notificationStatus
+        && (!shouldMatchNotificationDate || !notificationDate || rentalDates.includes(notificationDate))
+        && (!notificationLocation || normalizeNotificationText(rental.branch) === notificationLocation);
+    });
+
+    if (!matchedRental) {
+      return;
+    }
+
+    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedRentalDetails(matchedRental);
+    setIsRentalDetailsOpen(true);
+    onSelectedRentalNotificationHandled?.();
+  }, [onSelectedRentalNotificationHandled, rentals, selectedRentalId, selectedRentalNotification]);
 
   useEffect(() => {
     let isMounted = true;

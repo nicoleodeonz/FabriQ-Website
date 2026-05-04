@@ -5,6 +5,7 @@ import { customerAPI } from '../services/customerAPI';
 import { buildApiUrl } from '../services/apiConfig';
 import { toast } from 'sonner';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
+import type { CustomerNotificationEntry } from '../services/notificationAPI';
 
 interface CustomOrdersProps {
   user: {
@@ -15,6 +16,12 @@ interface CustomOrdersProps {
     phoneVerified?: boolean;
   };
   token: string;
+  selectedOrderId?: string | null;
+  selectedOrderNotification?: CustomerNotificationEntry | null;
+  selectedOrderTab?: 'existing' | 'history' | null;
+  onSelectedOrderHandled?: () => void;
+  onSelectedOrderNotificationHandled?: () => void;
+  onSelectedOrderTabHandled?: () => void;
 }
 
 interface CustomOrder {
@@ -42,7 +49,33 @@ interface CustomOrder {
   rejectionReason?: string | null;
 }
 
-export function CustomOrders({ user, token }: CustomOrdersProps) {
+function normalizeNotificationText(value?: string | null) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getComparableCustomOrderStatus(status?: string | null) {
+  const normalizedStatus = normalizeNotificationText(status);
+  return normalizedStatus === 'fitting-scheduled' ? 'fitting' : normalizedStatus;
+}
+
+function normalizeCustomOrderNotificationLabel(value?: string | null) {
+  return normalizeNotificationText(value).replace(/^bespoke\s+/, '').trim();
+}
+
+function labelsMatch(left?: string | null, right?: string | null) {
+  const normalizedLeft = normalizeCustomOrderNotificationLabel(left);
+  const normalizedRight = normalizeCustomOrderNotificationLabel(right);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+
+  return normalizedLeft === normalizedRight
+    || normalizedLeft.includes(normalizedRight)
+    || normalizedRight.includes(normalizedLeft);
+}
+
+export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotification, selectedOrderTab, onSelectedOrderHandled, onSelectedOrderNotificationHandled, onSelectedOrderTabHandled }: CustomOrdersProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const defaultCustomerName = useMemo(
     () => `${user.firstName} ${user.lastName}`.trim(),
@@ -124,11 +157,74 @@ export function CustomOrders({ user, token }: CustomOrdersProps) {
   }, [defaultCustomerName, user.email, user.phoneNumber]);
 
   useEffect(() => {
+    if (!selectedOrderTab) {
+      return;
+    }
+
+    setActiveTab(selectedOrderTab);
+    onSelectedOrderTabHandled?.();
+  }, [onSelectedOrderTabHandled, selectedOrderTab]);
+
+  useEffect(() => {
+    if (selectedOrderId && activeTab === 'new') {
+      setActiveTab('existing');
+    }
+  }, [activeTab, selectedOrderId]);
+
+  useEffect(() => {
     if (activeTab === 'existing' || activeTab === 'history') {
       fetchOrders();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!selectedOrderId || orders.length === 0) {
+      return;
+    }
+
+    const matchedOrder = orders.find((order) => String(order.id || order._id || '') === selectedOrderId);
+    if (!matchedOrder) {
+      return;
+    }
+
+    const isHistorical = matchedOrder.status === 'completed' || matchedOrder.status === 'rejected';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedOrderDetails(matchedOrder);
+    setIsOrderDetailsOpen(true);
+    onSelectedOrderHandled?.();
+  }, [onSelectedOrderHandled, orders, selectedOrderId]);
+
+  useEffect(() => {
+    if (!selectedOrderNotification || selectedOrderId || orders.length === 0) {
+      return;
+    }
+
+    const notificationLabel = normalizeCustomOrderNotificationLabel(selectedOrderNotification.itemLabel);
+    const notificationStatus = getComparableCustomOrderStatus(selectedOrderNotification.status);
+    const notificationDate = String(selectedOrderNotification.date || '').trim();
+    const shouldMatchNotificationDate = normalizeNotificationText(selectedOrderNotification.dateType) === 'scheduled date';
+    const notificationLocation = normalizeNotificationText(selectedOrderNotification.location);
+
+    const matchedOrder = orders.find((order) => {
+      const orderDates = [order.eventDate, order.consultationDate, order.fittingDate].filter(Boolean);
+
+      return labelsMatch(order.orderType, notificationLabel)
+        && getComparableCustomOrderStatus(order.status) === notificationStatus
+        && (!shouldMatchNotificationDate || !notificationDate || orderDates.includes(notificationDate))
+        && (!notificationLocation || normalizeNotificationText(order.branch) === notificationLocation);
+    });
+
+    if (!matchedOrder) {
+      return;
+    }
+
+    const isHistorical = matchedOrder.status === 'completed' || matchedOrder.status === 'rejected';
+    setActiveTab(isHistorical ? 'history' : 'existing');
+    setSelectedOrderDetails(matchedOrder);
+    setIsOrderDetailsOpen(true);
+    onSelectedOrderNotificationHandled?.();
+  }, [onSelectedOrderNotificationHandled, orders, selectedOrderId, selectedOrderNotification]);
 
   const hasPhoneNumber = (value: string) => {
     const digits = String(value || '').replace(/\D/g, '');

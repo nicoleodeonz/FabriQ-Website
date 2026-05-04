@@ -1,10 +1,13 @@
 import { buildNotificationEmailPayload, sendNotificationEmail } from './emailService.js';
+import CustomerNotification from '../models/CustomerNotification.js';
 import {
   isSmsConfigError,
   isSmsPhoneNumberError,
   sendNotificationSms,
   sendVerificationCodeSms,
 } from './smsService.js';
+
+const PERSISTED_NOTIFICATION_TYPES = new Set(['rental', 'appointment', 'bespoke']);
 
 function buildSkippedResult(reason, details = '') {
   return {
@@ -13,6 +16,40 @@ function buildSkippedResult(reason, details = '') {
     reason,
     details,
   };
+}
+
+export async function persistCustomerNotification({ customerId, customerEmail, payload, metadata = null }) {
+  const normalizedType = String(payload?.type || '').trim().toLowerCase();
+  if (!PERSISTED_NOTIFICATION_TYPES.has(normalizedType)) {
+    return null;
+  }
+
+  const resolvedCustomerId = String(customerId || '').trim();
+  const resolvedCustomerEmail = String(customerEmail || '').trim();
+  if (!resolvedCustomerId && !resolvedCustomerEmail) {
+    return null;
+  }
+
+  const emailPayload = buildNotificationEmailPayload(payload || {});
+
+  return CustomerNotification.create({
+    customerId: resolvedCustomerId,
+    customerEmail: resolvedCustomerEmail,
+    type: normalizedType,
+    status: String(payload?.status || '').trim(),
+    title: String(emailPayload.subject || '').trim() || 'Notification Update',
+    message: String(emailPayload.message_body || '').trim(),
+    itemLabel: String(payload?.itemOrServiceOrDesign || '').trim(),
+    date: String(emailPayload.date || '').trim(),
+    dateType: String(emailPayload.date_type || '').trim(),
+    time: String(emailPayload.time || '').trim(),
+    location: String(emailPayload.location || '').trim(),
+    metadata: {
+      recordId: String(payload?.recordId || '').trim(),
+      customerId: resolvedCustomerId,
+      ...(metadata && typeof metadata === 'object' ? metadata : {}),
+    },
+  });
 }
 
 export async function sendNotificationAcrossChannels({ email, phoneNumber, payload }) {
@@ -56,6 +93,20 @@ export async function sendNotificationAcrossChannels({ email, phoneNumber, paylo
     }
   } else {
     smsResult = buildSkippedResult('missing-phone-number', 'Customer phone number is missing for this notification.');
+  }
+
+  try {
+    await persistCustomerNotification({
+      customerId: payload?.customerId,
+      customerEmail: email,
+      payload,
+      metadata: {
+        email: emailResult,
+        sms: smsResult,
+      },
+    });
+  } catch (error) {
+    console.error('persistCustomerNotification error:', error);
   }
 
   return {

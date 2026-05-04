@@ -18,6 +18,7 @@ import { getPublicInventory } from './services/inventoryAPI';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import type { InventoryRating } from './services/inventoryAPI';
+import type { CustomerNotificationEntry } from './services/notificationAPI';
 
 export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin';
 
@@ -201,6 +202,15 @@ export default function App() {
   const [selectedGownId, setSelectedGownId] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedGownId);
   const [selectedAppointmentType, setSelectedAppointmentType] = useState<string | null>(() => parseHashRoute(window.location.hash).selectedAppointmentType);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(storedAuth.user);
+  const [selectedNotificationRentalId, setSelectedNotificationRentalId] = useState<string | null>(null);
+  const [selectedNotificationAppointmentId, setSelectedNotificationAppointmentId] = useState<string | null>(null);
+  const [selectedNotificationCustomOrderId, setSelectedNotificationCustomOrderId] = useState<string | null>(null);
+  const [selectedRentalNotification, setSelectedRentalNotification] = useState<CustomerNotificationEntry | null>(null);
+  const [selectedAppointmentNotification, setSelectedAppointmentNotification] = useState<CustomerNotificationEntry | null>(null);
+  const [selectedCustomOrderNotification, setSelectedCustomOrderNotification] = useState<CustomerNotificationEntry | null>(null);
+  const [selectedNotificationRentalTab, setSelectedNotificationRentalTab] = useState<'existing' | 'history' | null>(null);
+  const [selectedNotificationAppointmentTab, setSelectedNotificationAppointmentTab] = useState<'existing' | 'history' | null>(null);
+  const [selectedNotificationCustomOrderTab, setSelectedNotificationCustomOrderTab] = useState<'existing' | 'history' | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -502,6 +512,7 @@ export default function App() {
 
     clearAuthState();
     setAppView('home', { history: 'replace', selectedGownId: null });
+    window.location.reload();
   };
 
   const handleForceReauth = (message?: string) => {
@@ -625,6 +636,50 @@ export default function App() {
     });
   };
 
+  const handleNotificationSelect = (notification: CustomerNotificationEntry) => {
+    const recordId = String(notification.metadata?.recordId || '').trim();
+    const isHistoricalRentalNotification = notification.status === 'completed' || notification.status === 'cancelled';
+    const isHistoricalAppointmentNotification = notification.status === 'completed' || notification.status === 'cancelled';
+    const isHistoricalBespokeNotification = notification.status === 'completed' || notification.status === 'rejected';
+
+    setSelectedNotificationRentalId(null);
+    setSelectedNotificationAppointmentId(null);
+    setSelectedNotificationCustomOrderId(null);
+    setSelectedRentalNotification(null);
+    setSelectedAppointmentNotification(null);
+    setSelectedCustomOrderNotification(null);
+    setSelectedNotificationRentalTab(null);
+    setSelectedNotificationAppointmentTab(null);
+    setSelectedNotificationCustomOrderTab(null);
+
+    if (notification.type === 'rental') {
+      setSelectedRentalNotification(notification);
+      if (recordId) {
+        setSelectedNotificationRentalId(recordId);
+      }
+      setSelectedNotificationRentalTab(isHistoricalRentalNotification ? 'history' : 'existing');
+      setAppView('rentals', { selectedGownId: null, selectedAppointmentType: null });
+      return;
+    }
+
+    if (notification.type === 'appointment') {
+      setSelectedAppointmentNotification(notification);
+      if (recordId) {
+        setSelectedNotificationAppointmentId(recordId);
+      }
+      setSelectedNotificationAppointmentTab(isHistoricalAppointmentNotification ? 'history' : 'existing');
+      setAppView('appointments', { selectedGownId: null, selectedAppointmentType: null });
+      return;
+    }
+
+    setSelectedCustomOrderNotification(notification);
+    if (recordId) {
+      setSelectedNotificationCustomOrderId(recordId);
+    }
+    setSelectedNotificationCustomOrderTab(isHistoricalBespokeNotification ? 'history' : 'existing');
+    setAppView('custom-orders', { selectedGownId: null, selectedAppointmentType: null });
+  };
+
   if (showLanding) return <LandingPage onComplete={handleLandingComplete} />;
 
   return (
@@ -636,6 +691,9 @@ export default function App() {
         setIsAdmin={setIsAdmin}
         isLoggedIn={isLoggedIn}
         setIsLoggedIn={setIsLoggedIn}
+        notificationToken={authToken}
+        showCustomerNotifications={Boolean(isLoggedIn && authToken && currentUser && currentUser.role === 'customer')}
+        onNotificationSelect={handleNotificationSelect}
         navigateProtected={navigateProtectedFromHeader}
       />
       <main className="pt-20">
@@ -663,10 +721,44 @@ export default function App() {
           />
         )}
         {currentView === 'rentals' && currentUser && authToken && (
-          <Rentals user={currentUser} token={authToken} selectedGownId={selectedGownId} />
+          <Rentals
+            user={currentUser}
+            token={authToken}
+            selectedGownId={selectedGownId}
+            selectedRentalId={selectedNotificationRentalId}
+            selectedRentalNotification={selectedRentalNotification}
+            selectedRentalTab={selectedNotificationRentalTab}
+            onSelectedRentalHandled={() => setSelectedNotificationRentalId(null)}
+            onSelectedRentalNotificationHandled={() => setSelectedRentalNotification(null)}
+            onSelectedRentalTabHandled={() => setSelectedNotificationRentalTab(null)}
+          />
         )}
-        {currentView === 'custom-orders' && currentUser && authToken && <CustomOrders user={currentUser} token={authToken} />}
-        {currentView === 'appointments' && currentUser && authToken && <Appointments user={currentUser} token={authToken} selectedGownId={selectedGownId} selectedAppointmentType={selectedAppointmentType} />}
+        {currentView === 'custom-orders' && currentUser && authToken && (
+          <CustomOrders
+            user={currentUser}
+            token={authToken}
+            selectedOrderId={selectedNotificationCustomOrderId}
+            selectedOrderNotification={selectedCustomOrderNotification}
+            selectedOrderTab={selectedNotificationCustomOrderTab}
+            onSelectedOrderHandled={() => setSelectedNotificationCustomOrderId(null)}
+            onSelectedOrderNotificationHandled={() => setSelectedCustomOrderNotification(null)}
+            onSelectedOrderTabHandled={() => setSelectedNotificationCustomOrderTab(null)}
+          />
+        )}
+        {currentView === 'appointments' && currentUser && authToken && (
+          <Appointments
+            user={currentUser}
+            token={authToken}
+            selectedGownId={selectedGownId}
+            selectedAppointmentType={selectedAppointmentType}
+            selectedAppointmentId={selectedNotificationAppointmentId}
+            selectedAppointmentNotification={selectedAppointmentNotification}
+            selectedAppointmentTab={selectedNotificationAppointmentTab}
+            onSelectedAppointmentHandled={() => setSelectedNotificationAppointmentId(null)}
+            onSelectedAppointmentNotificationHandled={() => setSelectedAppointmentNotification(null)}
+            onSelectedAppointmentTabHandled={() => setSelectedNotificationAppointmentTab(null)}
+          />
+        )}
         {currentView === 'profile' && currentUser && authToken && (
           <CustomerProfile
             onLogout={handleLogout}
