@@ -2,6 +2,7 @@ import AppointmentDetail from '../models/AppointmentDetail.js';
 import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import AdminAction from '../models/AdminAction.js';
+import { emitAdminDashboardUpdate } from '../services/adminRealtimeService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
@@ -245,6 +246,8 @@ export async function createAppointment(req, res) {
       status: 'pending',
     });
 
+    emitAdminDashboardUpdate({ entity: 'appointment', action: 'created', id: String(appointment._id || '') });
+
     return res.status(201).json({ appointment: mapAppointment(appointment.toJSON()) });
   } catch (error) {
     console.error('createAppointment error:', error);
@@ -336,6 +339,7 @@ export async function rescheduleMyAppointment(req, res) {
     appointment.rescheduleReason = reason;
     appointment.status = 'pending';
     await appointment.save();
+    emitAdminDashboardUpdate({ entity: 'appointment', action: 'rescheduled', id: String(appointment._id || '') });
 
     return res.json({ appointment: mapAppointment(appointment.toJSON()) });
   } catch (error) {
@@ -404,6 +408,7 @@ export async function updateAppointmentStatus(req, res) {
     appointment.status = nextStatus;
     appointment.cancellationReason = nextStatus === 'cancelled' ? reason : appointment.cancellationReason;
     await appointment.save();
+    emitAdminDashboardUpdate({ entity: 'appointment', action: 'status-updated', id: String(appointment._id || '') });
 
     if (['scheduled', 'completed', 'cancelled'].includes(nextStatus)) {
       try {

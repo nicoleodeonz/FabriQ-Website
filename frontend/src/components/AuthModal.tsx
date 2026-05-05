@@ -13,6 +13,98 @@ type AuthErrors = {
 
 type AuthField = keyof AuthErrors;
 
+const accountTermsSections = [
+  {
+    title: '1. Eligibility',
+    body: [
+      'By registering for an account, you confirm that:',
+      'You are at least 18 years old.',
+      'You are legally capable of entering into a binding agreement under Philippine law.',
+      'All information you provide is accurate, complete, and up to date.',
+    ],
+  },
+  {
+    title: '2. Account Registration',
+    body: [
+      'Users must provide valid and truthful information, including a working email address.',
+      'You are responsible for maintaining the confidentiality of your account credentials.',
+      'You agree to notify us immediately of any unauthorized use of your account.',
+    ],
+  },
+  {
+    title: '3. User Responsibilities',
+    body: [
+      'By using this website, you agree:',
+      'Not to engage in fraudulent, illegal, or harmful activities.',
+      'Not to upload or transmit viruses, malicious code, or spam.',
+      'To use the website only for lawful purposes related to browsing and purchasing products.',
+      'To respect other users and avoid abusive or inappropriate behavior.',
+    ],
+  },
+  {
+    title: '4. Orders and Payments',
+    body: [
+      'All orders are subject to availability and confirmation.',
+      'Prices and product descriptions may change without prior notice.',
+      'You agree to provide accurate payment and billing information.',
+      'Hannah Vanessa Boutique reserves the right to cancel or refuse any order if fraud or unauthorized activity is suspected.',
+    ],
+  },
+  {
+    title: '5. Privacy and Data Protection',
+    body: [
+      'Your personal data will be handled in accordance with the Data Privacy Act of 2012 (Republic Act No. 10173).',
+      'By creating an account, you consent to the collection, use, and storage of your personal information for order processing and service improvement.',
+      'We implement reasonable security measures to protect your data, but absolute security cannot be guaranteed.',
+    ],
+  },
+  {
+    title: '6. Account Suspension or Termination',
+    body: [
+      'We reserve the right to:',
+      'Suspend or terminate accounts that violate these Terms and Conditions.',
+      'Remove or restrict access to content that is unlawful or harmful.',
+      'Deny service at our discretion, with or without prior notice.',
+    ],
+  },
+  {
+    title: '7. Intellectual Property',
+    body: [
+      'All content on this website, including logos, images, text, and designs, are the property of Hannah Vanessa Boutique.',
+      'You may not reproduce, distribute, or exploit any content without prior written permission.',
+    ],
+  },
+  {
+    title: '8. Limitation of Liability',
+    body: [
+      'Hannah Vanessa Boutique shall not be liable for any direct, indirect, or incidental damages arising from the use of the website.',
+      'All services are provided on an "as is" and "as available" basis.',
+    ],
+  },
+  {
+    title: '9. Changes to Terms',
+    body: [
+      'We reserve the right to update or modify these Terms at any time.',
+      'Continued use of the website after changes constitutes your acceptance of the updated Terms.',
+    ],
+  },
+  {
+    title: '10. Governing Law',
+    body: [
+      'These Terms and Conditions shall be governed by and interpreted in accordance with the laws of the Republic of the Philippines.',
+    ],
+  },
+  {
+    title: '11. Contact Information',
+    body: [
+      'For questions or concerns regarding these Terms, you may contact us at:',
+      'Email: hannahvanessaexclusive@gmail.com',
+      'Phone: 0917 593 1093',
+      'Address: Blk 185 Lot 09 Cadena de Amor St, corner Kampupot, Taguig, 1218',
+    ],
+  },
+];
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -57,6 +149,9 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
   const [verificationMessage, setVerificationMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [resendSecondsLeft, setResendSecondsLeft] = useState(0);
+  const [isTermsOpen, setIsTermsOpen] = useState(false);
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+  const [hasScrolledTermsToBottom, setHasScrolledTermsToBottom] = useState(false);
 
   useEffect(() => {
     if (resendSecondsLeft <= 0) return;
@@ -93,6 +188,34 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setShowPassword(false);
     setShowConfirmPassword(false);
     setResendSecondsLeft(0);
+    setIsTermsOpen(false);
+    setHasAcceptedTerms(false);
+    setHasScrolledTermsToBottom(false);
+  };
+
+  const submitSignUpRequest = async () => {
+    setIsSubmitting(true);
+    try {
+      const result = await onSignUp(
+        firstName,
+        lastName,
+        email,
+        password,
+        confirmPassword,
+        phone ? `+63${phone}` : undefined
+      );
+
+      setIsVerifyingSignUp(true);
+      setVerificationMessage(result.message);
+      setVerificationCode('');
+      setResendSecondsLeft(60);
+      setIsTermsOpen(false);
+      setHasScrolledTermsToBottom(false);
+    } catch (error: any) {
+      setServerError(error?.message || 'An error occurred. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const getFieldErrors = (field: AuthField, value: string, passwordValue = password) => {
@@ -204,23 +327,16 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     const hasErrors = Object.values(nextErrors).some((arr) => arr.length > 0);
     if (hasErrors) return;
 
+    if (isSignUp) {
+      setHasAcceptedTerms(false);
+      setHasScrolledTermsToBottom(false);
+      setIsTermsOpen(true);
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      if (isSignUp) {
-        const result = await onSignUp(
-          firstName,
-          lastName,
-          email,
-          password,
-          confirmPassword,
-          phone ? `+63${phone}` : undefined
-        );
-
-        setIsVerifyingSignUp(true);
-        setVerificationMessage(result.message);
-        setVerificationCode('');
-        setResendSecondsLeft(60);
-      } else {
+      if (!isSignUp) {
         await onSignIn(email, password);
         resetAllState();
       }
@@ -279,6 +395,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
   const toggleMode = () => {
     setIsSignUp(!isSignUp);
     setIsVerifyingSignUp(false);
+    setIsTermsOpen(false);
     setFirstName('');
     setLastName('');
     setPhone('');
@@ -293,6 +410,16 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setShowPassword(false);
     setShowConfirmPassword(false);
     setResendSecondsLeft(0);
+    setHasAcceptedTerms(false);
+    setHasScrolledTermsToBottom(false);
+  };
+
+  const handleTermsScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, clientHeight, scrollHeight } = event.currentTarget;
+    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 8;
+    if (isAtBottom) {
+      setHasScrolledTermsToBottom(true);
+    }
   };
 
   const handleClose = () => {
@@ -307,7 +434,14 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
-      <div ref={modalRef} tabIndex={-1} className="relative z-10 bg-[#FAF7F0] w-full max-w-[680px] max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5">
+      <div
+        ref={modalRef}
+        tabIndex={-1}
+        className="relative z-10 bg-[#FAF7F0] w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
+        style={{
+          maxWidth: isSignUp || isVerifyingSignUp ? '592px' : '580px',
+        }}
+      >
         <div className="flex-1 flex flex-col overflow-auto">
           <button onClick={handleClose} className="absolute top-4 right-4 text-[#6B5D4F] hover:text-black z-10">
             <X className="w-5 h-5" />
@@ -568,6 +702,125 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
           </div>
         </div>
       </div>
+
+      {isTermsOpen && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-[#1A1A1A]/45 backdrop-blur-[2px]" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
+          <div
+            className="relative z-10 w-full overflow-hidden border-2 border-[#3A342E] shadow-[8px_8px_0_rgba(58,52,46,0.35)]"
+            style={{ maxWidth: '720px', height: '500px', backgroundColor: '#F7F3EC' }}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Terms, Conditions, and Policies"
+          >
+            <div
+              className="h-full px-8 pb-6 pt-8 md:px-12 md:pb-8 md:pt-10"
+              style={{
+                display: 'grid',
+                gridTemplateRows: 'auto 1fr auto auto',
+                rowGap: '20px',
+                backgroundColor: '#F7F3EC',
+              }}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div className="text-left">
+                  <h3 className="font-serif text-[2rem] font-semibold leading-none text-[#1A1A1A]">Terms, Conditions, and Policies</h3>
+                  <p className="mt-3 text-sm leading-6 text-[#6B5D4F]">Please read and accept these terms before continuing with account creation.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTermsOpen(false)}
+                  disabled={isSubmitting}
+                  className="text-[#6B5D4F] transition-colors hover:text-black disabled:opacity-50"
+                  aria-label="Close terms and policies"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div
+                className="border-2 border-[#3A342E] bg-white px-6 py-6 md:px-8 md:py-8"
+                style={{
+                  minHeight: 0,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    overflowY: 'auto',
+                    paddingRight: '12px',
+                    scrollbarWidth: 'thin',
+                  }}
+                  onScroll={handleTermsScroll}
+                >
+                  <p className="text-sm font-semibold uppercase tracking-[0.04em] text-[#1A1A1A]">Terms and Conditions for Account Creation and Use</p>
+                  <p className="mt-2 text-lg font-semibold text-[#1A1A1A]">Hannah Vanessa Dress Shop</p>
+                  <p className="mt-1 text-sm text-[#6B5D4F]">Last Updated: May 4, 2026</p>
+                  <p className="mt-6 text-sm leading-7 text-[#3D2B1F]">
+                    Welcome to Hannah Vanessa Boutique. By creating an account and using our website, you agree to comply with and be bound by the following Terms and Conditions. Please read them carefully before registering.
+                  </p>
+
+                  <div className="mt-7 space-y-8 text-left">
+                    {accountTermsSections.map((section) => (
+                      <section key={section.title} className="pr-2">
+                        <h4 className="text-base font-semibold uppercase tracking-[0.02em] text-[#1A1A1A]">{section.title}</h4>
+                        <div className="mt-3 space-y-2 text-sm leading-7 text-[#3D2B1F]">
+                          {section.body.map((line) => (
+                            <p key={line}>{line}</p>
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <label className="flex items-start gap-3 rounded-md border border-[#D8CCBA] bg-[#F2EBE0] px-4 py-3 text-left">
+                <input
+                  type="checkbox"
+                  checked={hasAcceptedTerms}
+                  onChange={(event) => setHasAcceptedTerms(event.target.checked)}
+                  disabled={isSubmitting || !hasScrolledTermsToBottom}
+                  className="mt-1 h-4 w-4 accent-[#1A1A1A]"
+                />
+                <span className="text-sm italic leading-6 text-[#3D2B1F] underline underline-offset-2">
+                  I agree to the terms, conditions, and policies stated above
+                </span>
+              </label>
+              {!hasScrolledTermsToBottom && (
+                <p className="-mt-2 text-xs text-[#6B5D4F]">
+                  Scroll to the bottom of the terms and conditions before you can agree.
+                </p>
+              )}
+
+              <div className="border-t border-[#D8CCBA] bg-[#F2EBE0] px-5 py-4 md:px-6">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsTermsOpen(false)}
+                    disabled={isSubmitting}
+                    className="w-full sm:w-[170px] rounded-md border border-[#C8BEAF] bg-white px-5 py-3 text-sm font-medium text-[#4B433A] transition-colors hover:border-[#6B5D4F] hover:text-black disabled:opacity-50"
+                  >
+                    Refuse
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void submitSignUpRequest()}
+                    disabled={isSubmitting || !hasAcceptedTerms}
+                    className={`w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-colors ${
+                      isSubmitting || !hasAcceptedTerms ? 'cursor-not-allowed opacity-50' : ''
+                    }`}
+                    style={{ backgroundColor: '#1A1A1A', color: '#FFFFFF' }}
+                  >
+                    {isSubmitting ? 'Sending Verification Code…' : 'Continue'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

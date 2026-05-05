@@ -129,7 +129,7 @@ export function GownDetailsModal({
 
                 <div className="flex flex-1 overflow-y-auto px-8 pb-7 pt-10">
                   {displayRatings.length > 0 ? (
-                    <div className="w-full space-y-5">
+                    <div className="w-full">
                       {displayRatings.map((entry, index) => {
                         const ratingDate = entry.createdAt
                           ? new Date(entry.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
@@ -138,7 +138,8 @@ export function GownDetailsModal({
                         return (
                           <article
                             key={`${entry.reviewerName}-${entry.score}-${entry.createdAt || index}`}
-                            className={`rounded-[1.6rem] border border-[#E8DCC8] bg-white px-6 py-5 shadow-sm ${index === 0 ? 'mt-4' : ''}`}
+                            className="rounded-[1.6rem] border border-[#E8DCC8] bg-white px-6 py-5 shadow-sm"
+                            style={{ marginTop: index === 0 ? 16 : 10 }}
                           >
                             <div className="flex items-start justify-between gap-4">
                               <div className="flex-1 pt-2">

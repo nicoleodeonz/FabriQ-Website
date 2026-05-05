@@ -8,11 +8,18 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
 
 export const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const headerToken = authHeader && authHeader.startsWith('Bearer ')
+    ? authHeader.replace('Bearer ', '').trim()
+    : '';
+  const queryToken = typeof req.query?.access_token === 'string'
+    ? req.query.access_token.trim()
+    : '';
+  const token = headerToken || queryToken;
+
+  if (!token) {
     return res.status(401).json({ message: 'Missing authorization header.' });
   }
 
-  const token = authHeader.replace('Bearer ', '').trim();
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const { id, email, role, tokenVersion } = decoded;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
+import { Package, Users, TrendingUp, TrendingDown, Minus, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as inventoryAPI from '../services/inventoryAPI';
@@ -16,6 +16,7 @@ import type { AdminAppointmentDetail } from '../services/appointmentAPI';
 import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
 import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
 import { notificationAPI } from '../services/notificationAPI';
+import { createAdminDashboardEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
@@ -29,6 +30,7 @@ interface User {
   phone: string;
   branch: string;
   role: ManagedUserRole;
+  createdAt?: string;
   joinDate: string;
   status: 'active' | 'archived';
   lastActivity: string;
@@ -104,6 +106,7 @@ const RENTAL_LATE_FEE_PER_DAY = 200;
 const CUSTOM_ORDER_PAGE_SIZE = 4;
 const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
+const ADMIN_DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
 const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
@@ -116,6 +119,17 @@ type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
 type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
 type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
 type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
+
+type OverviewActivityRow = {
+  id: string;
+  source: 'Rental' | 'Appointment' | 'Custom Order';
+  title: string;
+  customerName: string;
+  detail: string;
+  branch: string;
+  timeLabel: string;
+  sortValue: number;
+};
 
 function parseAdminTabFromHash(hash: string): AdminTab {
   const normalizedHash = hash.replace(/^#\/?/, '');
@@ -151,7 +165,16 @@ function compareInventoryItemsAscending(left: InventoryItem, right: InventoryIte
   return leftKey.localeCompare(rightKey, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+function normalizeInventoryManagementStatus(status: InventoryItem['status'] | string | null | undefined): 'available' | 'maintenance' {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+
+  if (normalizedStatus === 'maintenance') return 'maintenance';
+  return 'available';
+}
+
 function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
+  const normalizedStatus = normalizeInventoryManagementStatus(item.status);
+
   return {
     id: item.id,
     name: item.name,
@@ -159,9 +182,7 @@ function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
     color: item.color,
     size: Array.isArray(item.size) ? item.size : [],
     price: item.price,
-    status: item.status === 'available' || item.status === 'rented' || item.status === 'reserved'
-      ? item.status
-      : 'maintenance',
+    status: normalizedStatus,
     branch: item.branch,
     image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
     rating: typeof item.rating === 'number' ? item.rating : 0,
@@ -179,9 +200,25 @@ function normalizeBranchName(value: string | null | undefined): string {
   return String(value || '').trim();
 }
 
+function getShortBranchLabel(value: string | null | undefined): string {
+  const normalizedBranch = normalizeBranchName(value);
+  if (!normalizedBranch) return 'No branch';
+  if (normalizedBranch === 'Taguig Main') return 'Taguig';
+  if (normalizedBranch === 'BGC Branch') return 'BGC';
+  if (normalizedBranch === 'Makati Branch') return 'Makati';
+  return normalizedBranch;
+}
+
 function matchesSelectedBranch(branch: string | null | undefined, selectedBranch: string): boolean {
   if (selectedBranch === 'All Branches') return true;
   return normalizeBranchName(branch) === normalizeBranchName(selectedBranch);
+}
+
+function toLocalDateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
@@ -348,6 +385,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   });
   const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
   const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
+  const canExportPdfs = !isCurrentUserStaff;
+  const dashboardTitle = isCurrentUserStaff ? 'Staff Dashboard' : 'Admin Dashboard';
 
   useEffect(() => {
     const syncActiveTabFromHash = () => {
@@ -476,11 +515,52 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   useEffect(() => {
     loadInventory();
     loadUsers();
+    loadAdminRentals();
+    loadAdminAppointments();
+    loadAdminCustomOrders();
   }, []);
 
   useEffect(() => {
     loadBranchPerformance(selectedBranch);
   }, [selectedBranch]);
+
+  const refreshAdminDashboardData = async (showLoading = false) => {
+    await Promise.all([
+      loadAdminRentals(showLoading),
+      loadAdminAppointments(showLoading),
+      loadAdminCustomOrders(showLoading),
+      loadBranchPerformance(selectedBranch, showLoading),
+    ]);
+  };
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+
+      void refreshAdminDashboardData(false);
+    }, ADMIN_DASHBOARD_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [selectedBranch, token]);
+
+  useEffect(() => {
+    const eventSource = createAdminDashboardEventSource(token);
+
+    const handleAdminDashboardUpdate = () => {
+      void refreshAdminDashboardData(false);
+    };
+
+    eventSource.addEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+
+    return () => {
+      eventSource.removeEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+      eventSource.close();
+    };
+  }, [selectedBranch, token]);
 
   useEffect(() => {
     if (activeTab !== 'history') return;
@@ -543,6 +623,18 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return () => window.removeEventListener('keydown', onEsc);
   }, [confirmAction, isConfirmingAction]);
 
+  const handleRefreshAdminRentals = () => {
+    void loadAdminRentals();
+  };
+
+  const handleRefreshAdminAppointments = () => {
+    void loadAdminAppointments();
+  };
+
+  const handleRefreshAdminCustomOrders = () => {
+    void loadAdminCustomOrders();
+  };
+
   async function loadInventory() {
     setInventoryLoading(true);
     setInventoryError(null);
@@ -569,8 +661,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   }
 
-  async function loadAdminRentals() {
-    setAdminRentalsLoading(true);
+  async function loadAdminRentals(showLoading = true) {
+    if (showLoading) {
+      setAdminRentalsLoading(true);
+    }
     setAdminRentalsError(null);
     try {
       const rentals = await rentalAPI.rentalAPI.getAdminRentals(token);
@@ -578,12 +672,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminRentalsError(err instanceof Error ? err.message : 'Failed to load rentals');
     } finally {
-      setAdminRentalsLoading(false);
+      if (showLoading) {
+        setAdminRentalsLoading(false);
+      }
     }
   }
 
-  async function loadAdminAppointments() {
-    setAdminAppointmentsLoading(true);
+  async function loadAdminAppointments(showLoading = true) {
+    if (showLoading) {
+      setAdminAppointmentsLoading(true);
+    }
     setAdminAppointmentsError(null);
     try {
       const appointments = await appointmentAPI.getAdminAppointments(token);
@@ -591,12 +689,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to load appointments');
     } finally {
-      setAdminAppointmentsLoading(false);
+      if (showLoading) {
+        setAdminAppointmentsLoading(false);
+      }
     }
   }
 
-  async function loadAdminCustomOrders() {
-    setAdminCustomOrdersLoading(true);
+  async function loadAdminCustomOrders(showLoading = true) {
+    if (showLoading) {
+      setAdminCustomOrdersLoading(true);
+    }
     setAdminCustomOrdersError(null);
     try {
       const orders = await adminCustomOrderAPI.getAllCustomOrders(token);
@@ -604,7 +706,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to load custom orders');
     } finally {
-      setAdminCustomOrdersLoading(false);
+      if (showLoading) {
+        setAdminCustomOrdersLoading(false);
+      }
     }
   }
 
@@ -763,6 +867,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       phone: user.phoneNumber || 'N/A',
       branch: user.preferredBranch || '',
       role: user.role,
+      createdAt: user.createdAt,
       joinDate: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A',
       status: normalizeManagedUserStatus(user.status),
       lastActivity: user.updatedAt ? new Date(user.updatedAt).toLocaleDateString() : 'N/A'
@@ -1112,6 +1217,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   );
 
   const handleSaveAdminHistoryAsPdf = () => {
+    if (!canExportPdfs) return;
+
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = filteredAdminHistory.map((entry) => [
@@ -1182,6 +1289,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   async function handleConfirmArchiveUser() {
     if (!confirmUserArchive) return;
+
+    const isElevatedTarget = confirmUserArchive.role === 'Admin' || confirmUserArchive.role === 'Staff';
+    if (isCurrentUserStaff && isElevatedTarget) {
+      setUsersError('Staff accounts cannot archive admin or staff accounts.');
+      setConfirmUserArchive(null);
+      return;
+    }
 
     const trimmedReason = userArchiveReason.trim();
     if (!trimmedReason) {
@@ -1326,8 +1440,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   }
 
-  async function loadBranchPerformance(branchFilter: string) {
-    setBranchPerformanceLoading(true);
+  async function loadBranchPerformance(branchFilter: string, showLoading = true) {
+    if (showLoading) {
+      setBranchPerformanceLoading(true);
+    }
     setBranchPerformanceError(null);
 
     try {
@@ -1354,7 +1470,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setBranchPerformanceError(err instanceof Error ? err.message : 'Failed to load branch performance');
     } finally {
-      setBranchPerformanceLoading(false);
+      if (showLoading) {
+        setBranchPerformanceLoading(false);
+      }
     }
   }
 
@@ -1611,14 +1729,352 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return Object.keys(errors).length === 0;
   };
 
-  const totalInventoryValue = branchSummary.inventoryValue;
-  const totalProducts = branchSummary.totalProducts;
-  const totalLowStock = branchSummary.lowStockItems;
-  const totalOutOfStock = branchSummary.outOfStockItems;
   const isArchiveView = inventoryView === 'archive';
+  const completedRentalStatuses = ['paid_for_confirmation', 'for_pickup', 'active', 'completed'];
+  const now = new Date();
+  const currentWeekStart = new Date(now);
+  currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+  const previousWeekStart = new Date(now);
+  previousWeekStart.setDate(previousWeekStart.getDate() - 14);
+  const isWithinRange = (value: string | null | undefined, start: Date, end: Date) => {
+    const parsed = value ? new Date(value) : null;
+    return Boolean(parsed && !Number.isNaN(parsed.getTime()) && parsed >= start && parsed < end);
+  };
+  const buildTrendSummary = (current: number, previous: number) => {
+    if (current === previous) {
+      return {
+        direction: 'flat' as const,
+        label: '0% from last week',
+        textClassName: 'text-[#9E8E80]',
+        iconClassName: 'text-[#9E8E80]'
+      };
+    }
+
+    if (previous <= 0) {
+      return {
+        direction: 'up' as const,
+        label: current > 0 ? 'New this week' : '0% from last week',
+        textClassName: current > 0 ? 'text-green-600' : 'text-[#9E8E80]',
+        iconClassName: current > 0 ? 'text-green-600' : 'text-[#9E8E80]'
+      };
+    }
+
+    const change = ((current - previous) / previous) * 100;
+    const roundedChange = Math.round(Math.abs(change));
+
+    if (change > 0) {
+      return {
+        direction: 'up' as const,
+        label: `+${roundedChange}% from last week`,
+        textClassName: 'text-green-600',
+        iconClassName: 'text-green-600'
+      };
+    }
+
+    return {
+      direction: 'down' as const,
+      label: `-${roundedChange}% from last week`,
+      textClassName: 'text-red-600',
+      iconClassName: 'text-red-600'
+    };
+  };
+  const overviewTodayKey = toLocalDateKey(now);
+  const formatOverviewScheduleTime = (value: string | null | undefined) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return 'Time not set';
+
+    const hoursMinutesMatch = rawValue.match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+    if (!hoursMinutesMatch) {
+      return rawValue;
+    }
+
+    let hours = Number(hoursMinutesMatch[1]);
+    const minutes = hoursMinutesMatch[2];
+    const explicitMeridiem = hoursMinutesMatch[3]?.toUpperCase();
+
+    if (explicitMeridiem) {
+      if (explicitMeridiem === 'PM' && hours < 12) {
+        hours += 12;
+      }
+      if (explicitMeridiem === 'AM' && hours === 12) {
+        hours = 0;
+      }
+    }
+
+    if (!Number.isInteger(hours) || hours < 0 || hours > 23) {
+      return rawValue;
+    }
+
+    const meridiem = hours >= 12 ? 'PM' : 'AM';
+    const hours12 = hours % 12 || 12;
+    return `${hours12}:${minutes} ${meridiem}`;
+  };
+  const getOverviewTimeSortValue = (value: string | null | undefined) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return Number.MAX_SAFE_INTEGER;
+
+    const hoursMinutesMatch = rawValue.match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+    if (!hoursMinutesMatch) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    let hours = Number(hoursMinutesMatch[1]);
+    const minutes = Number(hoursMinutesMatch[2]);
+    const explicitMeridiem = hoursMinutesMatch[3]?.toUpperCase();
+
+    if (explicitMeridiem) {
+      if (explicitMeridiem === 'PM' && hours < 12) {
+        hours += 12;
+      }
+      if (explicitMeridiem === 'AM' && hours === 12) {
+        hours = 0;
+      }
+    }
+
+    if (!Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    return hours * 60 + minutes;
+  };
+  const todaysActivity: OverviewActivityRow[] = [
+    ...adminRentals
+      .filter((rental) => (
+        matchesSelectedBranch(rental.branch, selectedBranch)
+        && (
+          String(rental.pickupScheduleDate || '').trim() === overviewTodayKey
+          || (rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey)
+        )
+      ))
+      .map((rental) => {
+        const isReturnActivity = rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey;
+
+        return {
+          id: `rental-${rental.id}`,
+          source: 'Rental' as const,
+          title: isReturnActivity ? 'Return' : 'Pick Up',
+          customerName: rental.customerName || 'Unknown customer',
+          detail: rental.referenceId || rental.id || 'N/A',
+          branch: getShortBranchLabel(rental.branch),
+          timeLabel: formatOverviewScheduleTime(rental.pickupScheduleTime),
+          sortValue: getOverviewTimeSortValue(rental.pickupScheduleTime),
+        };
+      }),
+    ...adminAppointments
+      .filter((appointment) => (
+        matchesSelectedBranch(appointment.branch, selectedBranch)
+        && appointment.status === 'scheduled'
+        && String(appointment.date || '').trim() === overviewTodayKey
+      ))
+      .map((appointment) => ({
+        id: `appointment-${appointment.id}`,
+        source: 'Appointment' as const,
+        title: appointment.type === 'consultation'
+          ? 'Design Consultation'
+          : appointment.type === 'measurement'
+            ? 'Measurement Session'
+            : appointment.type === 'fitting'
+              ? 'Fitting Appointment'
+              : 'Pickup / Return',
+        customerName: appointment.customerName || 'Unknown customer',
+        detail: appointment.referenceId || appointment.id || 'N/A',
+        branch: getShortBranchLabel(appointment.branch),
+        timeLabel: formatOverviewScheduleTime(appointment.time),
+        sortValue: getOverviewTimeSortValue(appointment.time),
+      })),
+    ...adminCustomOrders
+      .filter((order) => !order.isArchived && matchesSelectedBranch(order.branch, selectedBranch))
+      .flatMap((order) => {
+        const entries: OverviewActivityRow[] = [];
+        const orderId = String(order.id || order._id || order.referenceId || Math.random()).trim();
+        const consultationDate = String(order.consultationDate || '').trim();
+        const fittingDate = String(order.fittingDate || '').trim();
+
+        if (consultationDate === overviewTodayKey) {
+          entries.push({
+            id: `custom-order-consultation-${orderId}`,
+            source: 'Custom Order' as const,
+            title: 'Design Consultation',
+            customerName: order.customerName || 'Unknown customer',
+            detail: order.referenceId || orderId || 'N/A',
+            branch: getShortBranchLabel(order.branch),
+            timeLabel: formatOverviewScheduleTime(order.consultationTime),
+            sortValue: getOverviewTimeSortValue(order.consultationTime),
+          });
+        }
+
+        if (fittingDate === overviewTodayKey) {
+          entries.push({
+            id: `custom-order-fitting-${orderId}`,
+            source: 'Custom Order' as const,
+            title: 'Fitting Appointment',
+            customerName: order.customerName || 'Unknown customer',
+            detail: order.referenceId || orderId || 'N/A',
+            branch: getShortBranchLabel(order.branch),
+            timeLabel: formatOverviewScheduleTime(order.fittingTime),
+            sortValue: getOverviewTimeSortValue(order.fittingTime),
+          });
+        }
+
+        return entries;
+      }),
+  ].sort((left, right) => {
+    if (left.sortValue !== right.sortValue) {
+      return left.sortValue - right.sortValue;
+    }
+
+    return left.title.localeCompare(right.title);
+  });
+  const totalSales = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const inventoryItemsForLookup = [...inventory, ...archivedItems];
+  const topSellingItemEntry = Object.values(
+    adminRentals
+      .filter((rental) => completedRentalStatuses.includes(rental.status))
+      .reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+  ).sort((left, right) => right.count - left.count)[0] ?? null;
+  const numberOfOrders = adminRentals.length + adminCustomOrders.filter((order) => !order.isArchived).length;
+  const recentCustomerThreshold = new Date();
+  recentCustomerThreshold.setDate(recentCustomerThreshold.getDate() - 30);
+  const newCustomers = users.filter((user) => {
+    if (user.role !== 'Customer' || !user.createdAt) {
+      return false;
+    }
+
+    const createdAt = new Date(user.createdAt);
+    return !Number.isNaN(createdAt.getTime()) && createdAt >= recentCustomerThreshold;
+  }).length;
+  const topSellingInventoryItem = topSellingItemEntry
+    ? inventoryItemsForLookup.find((item) => {
+        const sku = String(item.sku || '').trim();
+        if (topSellingItemEntry.sku && sku) {
+          return sku.toLowerCase() === topSellingItemEntry.sku.toLowerCase();
+        }
+
+        return String(item.name || '').trim().toLowerCase() === topSellingItemEntry.gownName.toLowerCase();
+      }) ?? null
+    : null;
+  const topSellingItemName = topSellingInventoryItem?.name || topSellingItemEntry?.gownName || 'No sales yet';
+  const topSellingItemCount = topSellingItemEntry?.count ?? 0;
+  const salesThisWeek = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, currentWeekStart, now))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const salesLastWeek = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const ordersThisWeek = adminRentals.filter((rental) => isWithinRange(rental.createdAt, currentWeekStart, now)).length
+    + adminCustomOrders.filter((order) => !order.isArchived && isWithinRange(order.createdAt, currentWeekStart, now)).length;
+  const ordersLastWeek = adminRentals.filter((rental) => isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart)).length
+    + adminCustomOrders.filter((order) => !order.isArchived && isWithinRange(order.createdAt, previousWeekStart, currentWeekStart)).length;
+  const newCustomersThisWeek = users.filter((user) => user.role === 'Customer' && isWithinRange(user.createdAt, currentWeekStart, now)).length;
+  const newCustomersLastWeek = users.filter((user) => user.role === 'Customer' && isWithinRange(user.createdAt, previousWeekStart, currentWeekStart)).length;
+  const topSellingItemThisWeek = topSellingItemEntry
+    ? adminRentals.filter((rental) => {
+        const rentalSku = String(rental.sku || '').trim().toLowerCase();
+        const rentalName = String(rental.gownName || '').trim().toLowerCase();
+        const targetSku = String(topSellingItemEntry.sku || '').trim().toLowerCase();
+        const targetName = String(topSellingItemEntry.gownName || '').trim().toLowerCase();
+        const matchesItem = targetSku
+          ? rentalSku === targetSku
+          : rentalName === targetName;
+
+        return completedRentalStatuses.includes(rental.status)
+          && matchesItem
+          && isWithinRange(rental.createdAt, currentWeekStart, now);
+      }).length
+    : 0;
+  const topSellingItemLastWeek = topSellingItemEntry
+    ? adminRentals.filter((rental) => {
+        const rentalSku = String(rental.sku || '').trim().toLowerCase();
+        const rentalName = String(rental.gownName || '').trim().toLowerCase();
+        const targetSku = String(topSellingItemEntry.sku || '').trim().toLowerCase();
+        const targetName = String(topSellingItemEntry.gownName || '').trim().toLowerCase();
+        const matchesItem = targetSku
+          ? rentalSku === targetSku
+          : rentalName === targetName;
+
+        return completedRentalStatuses.includes(rental.status)
+          && matchesItem
+          && isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart);
+      }).length
+    : 0;
+  const salesTrend = buildTrendSummary(salesThisWeek, salesLastWeek);
+  const ordersTrend = buildTrendSummary(ordersThisWeek, ordersLastWeek);
+  const customersTrend = buildTrendSummary(newCustomersThisWeek, newCustomersLastWeek);
+  const topSellingTrend = buildTrendSummary(topSellingItemThisWeek, topSellingItemLastWeek);
+
+  const handleSaveOverviewKpisAsPdf = () => {
+    if (!canExportPdfs) return;
+
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text('Admin Overview KPI Report', 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`Branch: ${selectedBranch}`, 40, 80);
+
+    autoTable(document, {
+      startY: 96,
+      head: [['KPI', 'Current Value', 'Trend']],
+      body: [
+        ['Total Sales', `PHP ${totalSales.toLocaleString()}`, salesTrend.label],
+        ['Number of Orders', numberOfOrders.toLocaleString(), ordersTrend.label],
+        ['New Customers', newCustomers.toLocaleString(), customersTrend.label],
+        ['Top Selling Item', `${topSellingItemName} (${topSellingItemCount} rental${topSellingItemCount === 1 ? '' : 's'})`, topSellingTrend.label],
+      ],
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    document.save(`admin-overview-kpis-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
 
   // Inventory CRUD Functions
   const handleAddItem = async () => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot add gowns.');
+      return;
+    }
+
     if (!validateAddItem()) {
       setInventoryError('Please fill in all required fields');
       return;
@@ -1632,7 +2088,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         size: newItem.size || [],
         price: newItem.price!,
         branch: newItem.branch!,
-        status: newItem.status as 'available' | 'rented' | 'reserved' | 'maintenance',
+        status: normalizeInventoryManagementStatus(newItem.status),
         lastRented: newItem.lastRented ?? null,
         description: newItem.description || '',
         image: newItem.image || '',
@@ -1654,6 +2110,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const handleUpdateItem = async () => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot edit gowns.');
+      return;
+    }
+
     if (!editingItem) return;
     setInventoryError(null);
     try {
@@ -1664,7 +2125,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         size: editingItem.size,
         price: editingItem.price,
         branch: editingItem.branch,
-        status: editingItem.status,
+        status: normalizeInventoryManagementStatus(editingItem.status),
         lastRented: editingItem.lastRented ?? null,
         description: editingItem.description || '',
         image: editingItem.image || '',
@@ -1684,12 +2145,23 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const handleDeleteItem = async (id: string) => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot archive gowns.');
+      return;
+    }
+
     const target = inventory.find(item => item.id === id);
     if (!target) return;
     setConfirmAction({ type: 'delete', item: target });
   };
 
   const handleConfirmDelete = async (item: InventoryItem) => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot archive gowns.');
+      setConfirmAction(null);
+      return;
+    }
+
     setIsConfirmingAction(true);
     setInventoryError(null);
     try {
@@ -1835,11 +2307,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : userExportOptions.some((option) => option.count > 0);
 
   const openUserExportModal = () => {
+    if (!canExportPdfs) return;
+
     setUserExportFilter(showArchivedUsersOnly ? 'all' : userFilter);
     setShowUserExportModal(true);
   };
 
   const handleSaveUsersAsPdf = (filter: UserExportFilter) => {
+    if (!canExportPdfs) return;
+
     const exportItems = getUserExportItems(filter);
     const exportTitle = showArchivedUsersOnly ? 'Archived Users Report' : 'User Management Report';
     const filterLabel = getUserExportLabel(filter);
@@ -1938,6 +2414,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const inventoryCurrentPageCount = paginatedInventoryItems.length;
 
   const handleSaveInventoryAsPdf = () => {
+    if (!canExportPdfs) return;
+
     const exportTitle = inventoryView === 'archive' ? 'Archived Inventory Report' : 'Inventory Report';
     const statusHeader = inventoryView === 'archive' ? 'Deleted' : 'Status';
     const generatedAt = new Date().toLocaleString();
@@ -2062,6 +2540,27 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       .split('_')
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ');
+  };
+
+  const getAdminRentalStatusBadgeStyle = (status?: string | null) => {
+    switch (String(status || '').trim().toLowerCase()) {
+      case 'active':
+        return { backgroundColor: '#DCFCE7', color: '#166534' };
+      case 'pending':
+        return { backgroundColor: '#FEF3C7', color: '#92400E' };
+      case 'for_payment':
+        return { backgroundColor: '#FFE4E6', color: '#9F1239' };
+      case 'paid_for_confirmation':
+        return { backgroundColor: '#EDE9FE', color: '#6D28D9' };
+      case 'for_pickup':
+        return { backgroundColor: '#CFFAFE', color: '#155E75' };
+      case 'cancelled':
+        return { backgroundColor: '#FEE2E2', color: '#991B1B' };
+      case 'completed':
+        return { backgroundColor: '#D1FAE5', color: '#065F46' };
+      default:
+        return { backgroundColor: '#F5EFE6', color: '#6B5D4F' };
+    }
   };
 
   const normalizeRentalStatus = (status: unknown) => String(status || '').trim().toLowerCase();
@@ -2211,6 +2710,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : rentalExportOptions.some((option) => option.count > 0);
 
   const openRentalExportModal = () => {
+    if (!canExportPdfs) return;
+
     setRentalExportFilter(rentalManagementView === 'archive' ? 'archive' : rentalViewFilter);
     setShowRentalExportModal(true);
   };
@@ -2218,6 +2719,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
   const handleSaveRentalsAsPdf = (filter: RentalExportFilter) => {
+    if (!canExportPdfs) return;
+
     const exportItems = getRentalExportItems(filter);
     const exportTitle = filter === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
     const filterLabel = getRentalExportLabel(filter);
@@ -2432,11 +2935,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : appointmentExportOptions.some((option) => option.count > 0);
 
   const openAppointmentExportModal = () => {
+    if (!canExportPdfs) return;
+
     setAppointmentExportFilter(appointmentManagementView === 'archive' ? 'archive' : appointmentStatusFilter);
     setShowAppointmentExportModal(true);
   };
 
   const handleSaveAppointmentsAsPdf = (filter: AppointmentExportFilter) => {
+    if (!canExportPdfs) return;
+
     const exportItems = getAppointmentExportItems(filter);
     const exportTitle = filter === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
     const filterLabel = getAppointmentExportLabel(filter);
@@ -2693,11 +3200,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : customOrderExportOptions.some((option) => option.count > 0);
 
   const openCustomOrderExportModal = () => {
+    if (!canExportPdfs) return;
+
     setCustomOrderExportFilter(customOrderManagementView === 'archive' ? 'archive' : customOrderStatusFilter);
     setShowCustomOrderExportModal(true);
   };
 
   const handleSaveCustomOrdersAsPdf = (filter: CustomOrderExportFilter) => {
+    if (!canExportPdfs) return;
+
     const exportItems = getCustomOrderExportItems(filter);
     const exportTitle = filter === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
     const filterLabel = getCustomOrderExportLabel(filter);
@@ -2974,7 +3485,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-light mb-2">Admin Dashboard</h1>
+          <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
           <p className="text-[#6B5D4F]">Manage your boutique operations across all branches</p>
         </div>
 
@@ -3070,122 +3581,269 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         {/* Content */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <div className="flex items-center justify-between mb-4">
-                  <span
-                    className="w-8 h-8 text-[#D4AF37] text-3xl leading-none inline-flex items-center justify-center"
-                    role="img"
-                    aria-label="Philippine Peso"
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-light">Overview</h2>
+              {!isCurrentUserStaff && (
+                <div className="flex items-center gap-3">
+                  {canExportPdfs && (
+                    <button
+                      type="button"
+                      onClick={handleSaveOverviewKpisAsPdf}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                      aria-label="Save overview KPIs as PDF"
+                    >
+                      <Download className="w-5 h-5" />
+                      Save as PDF
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void Promise.all([
+                        loadInventory(),
+                        loadUsers(),
+                        loadAdminRentals(),
+                        loadAdminAppointments(),
+                        loadAdminCustomOrders(),
+                        loadBranchPerformance(selectedBranch),
+                      ]);
+                    }}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
                   >
-                    ₱
-                  </span>
-                  <TrendingUp className="w-5 h-5 text-green-600" />
+                    <RotateCcw className="w-5 h-5" />
+                    Refresh
+                  </button>
                 </div>
-                <p className="text-sm text-[#6B5D4F] mb-1">Inventory Value</p>
-                <p className="text-2xl font-light">₱{totalInventoryValue.toLocaleString()}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <Package className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Total Products</p>
-                <p className="text-2xl font-light">{totalProducts}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <AlertCircle className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Low Stock Items</p>
-                <p className="text-2xl font-light">{totalLowStock}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <Users className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Out of Stock</p>
-                <p className="text-2xl font-light">{totalOutOfStock}</p>
-              </div>
+              )}
             </div>
 
-            {/* Branch Performance */}
             <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-              <h2 className="text-2xl font-light mb-6">Branch Performance</h2>
-              {branchPerformanceError && (
-                <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-                  {branchPerformanceError}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-2xl font-light text-[#1A1A1A]">Today's Activity</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Scheduled rentals, appointments, and custom order sessions for {selectedBranch}.
+                  </p>
                 </div>
-              )}
-              {branchPerformanceLoading && (
-                <div className="mb-4 text-sm text-[#6B5D4F]">Loading branch performance...</div>
-              )}
-              <div className="space-y-6">
-                {branchStats.map((branch) => (
-                  <div key={branch.branch} className="pt-1">
-                    <div className="flex items-center justify-between mb-5">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-5 h-5 text-[#6B5D4F]" />
-                        <h3 className="font-medium">{branch.branch}</h3>
-                      </div>
-                      <span className="text-xl font-light">₱{branch.inventoryValue.toLocaleString()}</span>
-                    </div>
+                <div className="inline-flex items-center gap-2 rounded-full bg-[#FAF7F0] px-4 py-2 text-sm text-[#6B5D4F] border border-[#E8DCC8]">
+                  <Calendar className="w-4 h-4 text-[#D4AF37]" />
+                  {todaysActivity.length} scheduled
+                </div>
+              </div>
 
-                    <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Total Products</p>
-                        <p className="font-medium">{branch.totalProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Available</p>
-                        <p className="font-medium text-green-600">{branch.availableProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Rented</p>
-                        <p className="font-medium text-blue-600">{branch.rentedProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Low Stock</p>
-                        <p className="font-medium text-amber-600">{branch.lowStockItems}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Out of Stock</p>
-                        <p className="font-medium text-red-600">{branch.outOfStockItems}</p>
-                      </div>
-
-                      <div className="hidden sm:block bg-transparent rounded-2xl border border-dashed border-[#EDE1CE] px-4 py-4 md:px-5 md:py-5" aria-hidden="true" />
-                    </div>
-
-                    <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Items Sold</p>
-                        <p className="font-medium">{branch.totalItemsSold}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Turnover Rate</p>
-                        <p className="font-medium">{branch.inventoryTurnoverRate}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Inventory Health</p>
-                        <p className={`font-medium ${
-                          branch.outOfStockItems > 0
-                            ? 'text-red-600'
-                            : branch.lowStockItems > 0
-                              ? 'text-amber-600'
-                              : 'text-green-600'
-                        }`}>
-                          {branch.outOfStockItems > 0
-                            ? 'At Risk'
-                            : branch.lowStockItems > 0
-                              ? 'Watch'
-                              : 'Healthy'}
-                        </p>
-                      </div>
+              <div className="mt-6">
+                {todaysActivity.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-[#E8DCC8] bg-[#FCFAF5] px-6 py-10 text-center">
+                    <p className="text-base text-[#3D2B1F]">No scheduled activity for today.</p>
+                    <p className="mt-2 text-sm text-[#8A7763]">New rentals, appointments, and bespoke sessions will appear here in time order.</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[900px]">
+                        <thead className="bg-[#FAF7F0]">
+                          <tr>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Time</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Type</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Activity</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Customer</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Reference ID</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E8DCC8] bg-white">
+                        {todaysActivity.map((activity) => {
+                          return (
+                            <tr key={activity.id} className="hover:bg-[#FAF7F0] transition-colors align-top">
+                              <td className="px-6 py-4 text-sm text-[#3D2B1F] whitespace-nowrap">
+                                {activity.timeLabel}
+                              </td>
+                              <td className="px-6 py-4 text-sm whitespace-nowrap">
+                                {activity.source}
+                              </td>
+                              <td className="px-6 py-4 text-sm font-medium text-[#1A1A1A] leading-6">{activity.title}</td>
+                              <td className="px-6 py-4 text-sm text-[#3D2B1F] leading-6">{activity.customerName}</td>
+                              <td className="px-6 py-4 text-sm text-[#6B5D4F] leading-6">{activity.detail}</td>
+                              <td className="px-6 py-4 text-sm text-[#6B5D4F] whitespace-nowrap">{activity.branch}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      </table>
                     </div>
                   </div>
-                ))}
-                {!branchPerformanceLoading && branchStats.length === 0 && (
-                  <p className="text-sm text-[#6B5D4F]">No branch inventory data available.</p>
                 )}
               </div>
             </div>
+
+            {!isCurrentUserStaff && (
+              <>
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <span
+                        className="w-8 h-8 text-[#D4AF37] text-3xl leading-none inline-flex items-center justify-center"
+                        role="img"
+                        aria-label="Philippine Peso"
+                      >
+                        ₱
+                      </span>
+                      {salesTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      ) : salesTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Total Sales</p>
+                    <p className="text-2xl font-light">₱{totalSales.toLocaleString()}</p>
+                    <p className={`mt-2 text-sm ${salesTrend.textClassName}`}>{salesTrend.label}</p>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="w-8 h-8 text-[#D4AF37]" />
+                      {ordersTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      ) : ordersTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Number of Orders</p>
+                    <p className="text-2xl font-light">{numberOfOrders}</p>
+                    <p className={`mt-2 text-sm ${ordersTrend.textClassName}`}>{ordersTrend.label}</p>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <Users className="w-8 h-8 text-[#D4AF37]" />
+                      {customersTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      ) : customersTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">New Customers</p>
+                    <p className="text-2xl font-light">{newCustomers}</p>
+                    <p className={`mt-2 text-sm ${customersTrend.textClassName}`}>{customersTrend.label}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (topSellingInventoryItem) {
+                        setHoverPreviewItem(topSellingInventoryItem);
+                      }
+                    }}
+                    disabled={!topSellingInventoryItem}
+                    className="bg-white p-6 rounded-2xl border border-[#E8DCC8] text-left transition-colors hover:border-[#D4AF37] disabled:hover:border-[#E8DCC8] disabled:cursor-default"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="w-8 h-8 text-[#D4AF37]" />
+                      {topSellingTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      ) : topSellingTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Top Selling Item</p>
+                    <p className="text-lg font-light leading-tight text-[#1a1a1a]">{topSellingItemName}</p>
+                    <p className="mt-2 text-sm text-[#6B5D4F]">{topSellingItemCount} rental{topSellingItemCount === 1 ? '' : 's'}</p>
+                    <p className={`mt-1 text-sm ${topSellingTrend.textClassName}`}>{topSellingTrend.label}</p>
+                    <p className="mt-1 text-xs text-[#9E8E80]">{topSellingInventoryItem ? 'Click to view item details' : 'Details unavailable for this item'}</p>
+                  </button>
+                </div>
+
+                {/* Branch Performance */}
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <h2 className="text-2xl font-light mb-6">Branch Performance</h2>
+                  {branchPerformanceError && (
+                    <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                      {branchPerformanceError}
+                    </div>
+                  )}
+                  {branchPerformanceLoading && (
+                    <div className="mb-4 text-sm text-[#6B5D4F]">Loading branch performance...</div>
+                  )}
+                  <div className="space-y-6">
+                    {branchStats.map((branch) => (
+                      <div key={branch.branch} className="pt-1">
+                        <div className="flex items-center justify-between mb-5">
+                          <div className="flex items-center gap-2">
+                            <MapPin className="w-5 h-5 text-[#6B5D4F]" />
+                            <h3 className="font-medium">{branch.branch}</h3>
+                          </div>
+                          <span className="text-xl font-light">₱{branch.inventoryValue.toLocaleString()}</span>
+                        </div>
+
+                        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Total Products</p>
+                            <p className="font-medium">{branch.totalProducts}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Available</p>
+                            <p className="font-medium text-green-600">{branch.availableProducts}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Rented</p>
+                            <p className="font-medium text-blue-600">{branch.rentedProducts}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Low Stock</p>
+                            <p className="font-medium text-amber-600">{branch.lowStockItems}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Out of Stock</p>
+                            <p className="font-medium text-red-600">{branch.outOfStockItems}</p>
+                          </div>
+
+                          <div className="hidden sm:block bg-transparent rounded-2xl border border-dashed border-[#EDE1CE] px-4 py-4 md:px-5 md:py-5" aria-hidden="true" />
+                        </div>
+
+                        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Items Sold</p>
+                            <p className="font-medium">{branch.totalItemsSold}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Turnover Rate</p>
+                            <p className="font-medium">{branch.inventoryTurnoverRate}</p>
+                          </div>
+                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
+                            <p className="text-[#6B5D4F]">Inventory Health</p>
+                            <p className={`font-medium ${
+                              branch.outOfStockItems > 0
+                                ? 'text-red-600'
+                                : branch.lowStockItems > 0
+                                  ? 'text-amber-600'
+                                  : 'text-green-600'
+                            }`}>
+                              {branch.outOfStockItems > 0
+                                ? 'At Risk'
+                                : branch.lowStockItems > 0
+                                  ? 'Watch'
+                                  : 'Healthy'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {!branchPerformanceLoading && branchStats.length === 0 && (
+                      <p className="text-sm text-[#6B5D4F]">No branch inventory data available.</p>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -3195,38 +3853,42 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Inventory Management</h2>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSaveInventoryAsPdf}
-                  disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save inventory as PDF"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isArchiveView) {
-                      void loadArchivedInventory();
-                      return;
-                    }
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={handleSaveInventoryAsPdf}
+                    disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save inventory as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
+                {(isArchiveView || !isCurrentUserStaff) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isArchiveView) {
+                        void loadArchivedInventory();
+                        return;
+                      }
 
-                    setShowAddItem(true);
-                  }}
-                  disabled={isArchiveView ? archiveLoading : false}
-                  title={isArchiveView ? 'Refresh archived inventory' : 'Add a new gown'}
-                  aria-label={isArchiveView ? 'Refresh archived inventory' : 'Add New Gown'}
-                  className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors ${
-                    isArchiveView
-                      ? 'border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed'
-                      : 'bg-[#1a1a1a] text-white hover:bg-[#D4AF37]'
-                  }`}
-                >
-                  {isArchiveView ? <RotateCcw className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
-                  {isArchiveView ? 'Refresh' : 'Add New Gown'}
-                </button>
+                      setShowAddItem(true);
+                    }}
+                    disabled={isArchiveView ? archiveLoading : false}
+                    title={isArchiveView ? 'Refresh archived inventory' : 'Add item'}
+                    aria-label={isArchiveView ? 'Refresh archived inventory' : 'Add'}
+                    className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors ${
+                      isArchiveView
+                        ? 'border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed'
+                        : 'bg-[#1a1a1a] text-white hover:bg-[#D4AF37]'
+                    }`}
+                  >
+                    {isArchiveView ? <RotateCcw className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                    {isArchiveView ? 'Refresh' : 'Add'}
+                  </button>
+                )}
                 <button
                   onClick={handleToggleArchiveView}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
@@ -3256,7 +3918,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'gown' : 'gowns'}
             </div>
 
-            {/* Inventory status messages */}
             {inventoryError && (
               <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {inventoryError}
@@ -3272,132 +3933,102 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 {archiveError}
               </div>
             )}
-            {inventoryLoading && (
-              <div className="py-12 text-center text-[#6B5D4F]">Loading inventory...</div>
-            )}
-            {inventoryView === 'archive' && archiveLoading && (
-              <div className="py-12 text-center text-[#6B5D4F]">Loading archive...</div>
+            {(inventoryLoading || (inventoryView === 'archive' && archiveLoading)) && (
+              <div className="py-12 text-center text-[#6B5D4F]">
+                {inventoryView === 'archive' ? 'Loading archived inventory...' : 'Loading inventory...'}
+              </div>
             )}
 
-            {/* Inventory Table */}
-            <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
-              <div style={{ height: '650px' }} className="overflow-y-auto overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#FAF7F0]">
-                    <tr>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">ID</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Name</th>
-                      {inventoryView === 'archive' && <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Image</th>}
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Category</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Color</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Price</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
-                      {inventoryView === 'archive'
-                        ? <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Deleted</th>
-                        : <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Status</th>
-                      }
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#E8DCC8]">
-                    {inventoryView === 'active' && !inventoryLoading && filteredInventory.length === 0 && (
-                      <tr><td colSpan={8} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No inventory items match your search.' : 'No items in inventory. Add a gown to get started.'}</td></tr>
-                    )}
-                    {inventoryView === 'archive' && !archiveLoading && filteredArchivedItems.length === 0 && (
-                      <tr><td colSpan={9} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No archived gowns match your search.' : 'No archived gowns found.'}</td></tr>
-                    )}
-                    {inventoryView === 'active' && paginatedInventoryItems.map((item) => (
-                      <tr
-                        key={item.id}
-                        className="hover:bg-[#FAF7F0] transition-colors"
-                      >
-                        <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
-                        <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
-                        <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
-                        <td className="px-6 py-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                            item.status === 'available'
-                              ? 'bg-green-100 text-green-800'
-                              : item.status === 'rented'
-                              ? 'bg-blue-100 text-blue-800'
-                              : item.status === 'reserved'
-                              ? 'bg-purple-100 text-purple-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => setHoverPreviewItem(item)}
-                              className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
-                              title="View details"
-                              aria-label={`View details for ${item.name}`}
-                            >
-                              <Eye className="w-4 h-4 text-[#6B5D4F]" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingItem(item);
-                              }}
-                              className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
-                              title="Edit"
-                            >
-                              <Edit className="w-4 h-4 text-[#6B5D4F]" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                handleDeleteItem(item.id);
-                              }}
-                              className="p-2 hover:bg-red-50 rounded-full transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </button>
-                          </div>
-                        </td>
+            {!inventoryLoading && !(inventoryView === 'archive' && archiveLoading) && (
+              <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px]">
+                    <thead className="bg-[#FAF7F0]">
+                      <tr>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">ID</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Name</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Category</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Color</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Price</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Status</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Actions</th>
                       </tr>
-                    ))}
-                    {inventoryView === 'archive' && paginatedInventoryItems.map((item) => (
-                      <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
-                        <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
-                        <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                        <td className="px-6 py-4">
-                          <div className="w-10 h-10 rounded-md bg-[#FAF7F0] border border-[#E8DCC8] overflow-hidden">
-                            {item.image ? (
-                              <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center text-[10px] text-[#9E8E80]">N/A</div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
-                        <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">
-                          {item.deletedAt ? new Date(item.deletedAt).toLocaleString() : 'Unknown'}
-                        </td>
-                        <td className="px-6 py-4">
-                          <button
-                            onClick={() => handleRestoreItem(item.id)}
-                            disabled={restoringItemId === item.id}
-                            className="px-3 py-2 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            {restoringItemId === item.id ? 'Restoring...' : 'Restore'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8DCC8] bg-white">
+                      {paginatedInventoryItems.map((item) => {
+                        const inventoryStatus = normalizeInventoryManagementStatus(item.status);
+
+                        return (
+                        <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
+                          <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
+                          <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
+                          <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
+                          <td className="px-6 py-4">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              inventoryStatus === 'available'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {inventoryStatus.charAt(0).toUpperCase() + inventoryStatus.slice(1)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setHoverPreviewItem(item)}
+                                className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                                title="View details"
+                                aria-label={`View details for ${item.name}`}
+                              >
+                                <Eye className="w-4 h-4 text-[#6B5D4F]" />
+                              </button>
+                              {!isArchiveView && !isCurrentUserStaff && (
+                                <button
+                                  onClick={() => {
+                                    setEditingItem(item);
+                                  }}
+                                  className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                                  title="Edit"
+                                >
+                                  <Edit className="w-4 h-4 text-[#6B5D4F]" />
+                                </button>
+                              )}
+                              {isArchiveView ? (
+                                <button
+                                  onClick={() => handleRestoreItem(item.id)}
+                                  disabled={restoringItemId === item.id}
+                                  className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Restore"
+                                >
+                                  <RotateCcw className="w-4 h-4 text-[#6B5D4F]" />
+                                </button>
+                              ) : (
+                                !isCurrentUserStaff && (
+                                  <button
+                                    onClick={() => {
+                                      handleDeleteItem(item.id);
+                                    }}
+                                    className="p-2 hover:bg-red-50 rounded-full transition-colors"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-red-600" />
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            )}
 
             {inventoryItemsForCurrentView.length > INVENTORY_PAGE_SIZE && (
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -3432,18 +4063,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Rental Management</h2>
               <div className="flex items-center gap-3">
+                  {canExportPdfs && (
+                    <button
+                      type="button"
+                      onClick={openRentalExportModal}
+                      disabled={adminRentalsLoading || !canOpenRentalExportModal}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Save rentals as PDF"
+                    >
+                      <Download className="w-5 h-5" />
+                      Save as PDF
+                    </button>
+                  )}
                 <button
-                  type="button"
-                  onClick={openRentalExportModal}
-                  disabled={adminRentalsLoading || !canOpenRentalExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save rentals as PDF"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminRentals}
+                  onClick={handleRefreshAdminRentals}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
                 >
                   Refresh
@@ -3623,17 +4256,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             <div className="flex items-center gap-3 mb-2 flex-wrap">
                               <h4 className="font-medium">{rental.gownName}</h4>
                               <span
-                                className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                  rental.status === 'pending'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : rental.status === 'for_payment'
-                                    ? 'bg-rose-100 text-rose-800'
-                                    : rental.status === 'paid_for_confirmation'
-                                    ? 'bg-violet-100 text-violet-800'
-                                    : rental.status === 'for_pickup'
-                                    ? 'bg-cyan-100 text-cyan-800'
-                                    : 'bg-amber-100 text-amber-800'
-                                }`}
+                                className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                                style={getAdminRentalStatusBadgeStyle(rental.status)}
                               >
                                 {getRentalStatusLabel(rental)}
                               </span>
@@ -3803,11 +4427,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
                             <span
-                              className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                rental.status === 'paid_for_confirmation'
-                                  ? 'bg-violet-100 text-violet-800'
-                                  : 'bg-rose-100 text-rose-800'
-                              }`}
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
                             >
                               {rental.status === 'paid_for_confirmation' ? 'Paid - For Confirmation' : 'For Payment'}
                             </span>
@@ -3878,7 +4499,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
-                            <span className="px-3 py-1 bg-cyan-100 text-cyan-800 text-xs rounded-full font-medium">
+                            <span
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
+                            >
                               {getRentalStatusLabel(rental)}
                             </span>
                           </div>
@@ -4034,22 +4658,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
                             <span
-                              style={isCancelledRentalStatus(rental.status) ? { backgroundColor: '#fee2e2', color: '#991b1b' } : undefined}
-                              className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                rental.status === 'completed'
-                                  ? 'bg-green-100 text-green-800'
-                                  : isCancelledRentalStatus(rental.status)
-                                  ? 'bg-red-100 text-red-800'
-                                  : rental.status === 'for_payment'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : rental.status === 'paid_for_confirmation'
-                                  ? 'bg-violet-100 text-violet-800'
-                                  : rental.status === 'for_pickup'
-                                  ? 'bg-cyan-100 text-cyan-800'
-                                  : rental.status === 'active'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
                             >
                               {rental.status === 'paid_for_confirmation'
                                 ? 'Paid - For Confirmation'
@@ -4193,7 +4803,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <button
                   type="button"
                   onClick={() => handleSaveRentalsAsPdf(rentalExportFilter)}
-                  disabled={getRentalExportItems(rentalExportFilter).length === 0}
+                  disabled={!canExportPdfs || getRentalExportItems(rentalExportFilter).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -4208,18 +4818,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Appointment Management</h2>
               <div className="flex items-center gap-3">
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={openAppointmentExportModal}
+                    disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save appointments as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
-                  type="button"
-                  onClick={openAppointmentExportModal}
-                  disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save appointments as PDF"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminAppointments}
+                  onClick={handleRefreshAdminAppointments}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
                 >
                   Refresh
@@ -4303,18 +4915,26 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
-                            <span className={`px-3 py-1 text-xs rounded-full font-medium ${
-                              appointment.status === 'scheduled'
-                                ? 'bg-blue-100 text-blue-800'
-                                : appointment.rescheduleReason
-                                ? 'bg-orange-100 text-orange-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {appointment.status === 'scheduled'
-                                ? 'Scheduled'
-                                : appointment.rescheduleReason
+                            <span
+                              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                                appointment.rescheduleReason
+                                  ? ''
+                                  : appointment.status === 'scheduled'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-amber-100 text-amber-800'
+                              }`}
+                              style={appointment.rescheduleReason
+                                ? {
+                                    backgroundColor: '#FDE7C7',
+                                    color: '#B45309'
+                                  }
+                                : undefined}
+                            >
+                              {appointment.rescheduleReason
                                 ? 'Rescheduled'
-                                : 'Pending'}
+                                : appointment.status === 'scheduled'
+                                  ? 'Scheduled'
+                                  : 'Pending'}
                             </span>
                           </div>
                           <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
@@ -4554,7 +5174,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 <button
                   type="button"
                   onClick={() => handleSaveAppointmentsAsPdf(appointmentExportFilter)}
-                  disabled={getAppointmentExportItems(appointmentExportFilter).length === 0}
+                  disabled={!canExportPdfs || getAppointmentExportItems(appointmentExportFilter).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -4569,18 +5189,20 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center gap-4">
               <h2 className="text-2xl font-light">Bespoke Management</h2>
               <div className="flex items-center gap-3">
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={openCustomOrderExportModal}
+                    disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save custom orders as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
-                  type="button"
-                  onClick={openCustomOrderExportModal}
-                  disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save custom orders as PDF"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminCustomOrders}
+                  onClick={handleRefreshAdminCustomOrders}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
                 >
                   Refresh
@@ -4690,7 +5312,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     <button
                       type="button"
                       onClick={() => handleSaveCustomOrdersAsPdf(customOrderExportFilter)}
-                      disabled={getCustomOrderExportItems(customOrderExportFilter).length === 0}
+                      disabled={!canExportPdfs || getCustomOrderExportItems(customOrderExportFilter).length === 0}
                       className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Save PDF
@@ -4824,14 +5446,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">User Management</h2>
               <div className="flex gap-2 shrink-0">
-                <button
-                  onClick={openUserExportModal}
-                  disabled={usersLoading || !canOpenUserExportModal}
-                  className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
+                {canExportPdfs && (
+                  <button
+                    onClick={openUserExportModal}
+                    disabled={usersLoading || !canOpenUserExportModal}
+                    className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 {!showArchivedUsersOnly && !isCurrentUserStaff && (
                   <button
                     onClick={() => {
@@ -5004,23 +5628,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             : isStaffRestricted
                               ? 'Staff accounts cannot archive admin or staff accounts'
                               : undefined;
+                          if (isStaffRestricted) {
+                            return null;
+                          }
+
                           return (
-                        <button
-                          onClick={() => handleArchiveUser(user)}
-                          disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin || isStaffRestricted}
-                          className="px-4 py-2 text-sm bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={archiveTitle}
-                        >
-                          {user.status === 'archived'
-                            ? 'Archived'
-                            : isSelfAdmin
-                              ? 'Logged In'
-                            : isStaffRestricted
-                              ? 'Restricted'
-                            : archivingUserId === user.id
-                              ? 'Archiving...'
-                              : 'Archive'}
-                        </button>
+                            <button
+                              onClick={() => handleArchiveUser(user)}
+                              disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin}
+                              className="px-4 py-2 text-sm bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={archiveTitle}
+                            >
+                              {user.status === 'archived'
+                                ? 'Archived'
+                                : isSelfAdmin
+                                  ? 'Logged In'
+                                  : archivingUserId === user.id
+                                    ? 'Archiving...'
+                                    : 'Archive'}
+                            </button>
                           );
                         })()
                       )}
@@ -5109,7 +5735,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       <button
                         type="button"
                         onClick={() => handleSaveUsersAsPdf(userExportFilter)}
-                        disabled={getUserExportItems(userExportFilter).length === 0}
+                        disabled={!canExportPdfs || getUserExportItems(userExportFilter).length === 0}
                         className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Save PDF
@@ -5127,14 +5753,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-light">Admin History</h2>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleSaveAdminHistoryAsPdf}
-                  disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
-                  className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  <Download className="h-4 w-4" />
-                  Save as PDF
-                </button>
+                {canExportPdfs && (
+                  <button
+                    onClick={handleSaveAdminHistoryAsPdf}
+                    disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
+                    className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    <Download className="h-4 w-4" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
                   onClick={loadAdminHistory}
                   className={`${adminHistoryActionButtonClass} py-2`}
@@ -5299,11 +5927,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         )}
 
         {/* Add/Edit Item Modal */}
-        {(showAddItem || editingItem) && !isConfirmCustomCategoryOpen && !pendingCategoryDeletion && (
+        {!isCurrentUserStaff && (showAddItem || editingItem) && !isConfirmCustomCategoryOpen && !pendingCategoryDeletion && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <h3 className="text-2xl font-light mb-6">
-                {editingItem ? 'Edit Gown' : 'Add New Gown'}
+                {editingItem ? 'Edit Item' : 'Add New Item'}
               </h3>
 
               <div className="space-y-6">
@@ -5480,7 +6108,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       required={!editingItem}
                       aria-invalid={!editingItem && Boolean(addItemErrors.status)}
                       aria-describedby={!editingItem && addItemErrors.status ? 'add-item-status-error' : undefined}
-                      value={editingItem?.status || newItem.status}
+                      value={normalizeInventoryManagementStatus(editingItem?.status || newItem.status)}
                       onChange={(e) => editingItem
                         ? setEditingItem({ ...editingItem, status: e.target.value as any })
                         : (setNewItem({ ...newItem, status: e.target.value as any }), setAddItemErrors(prev => ({ ...prev, status: '' })))
@@ -5488,8 +6116,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.status ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                     >
                       <option value="available">Available</option>
-                      <option value="rented">Rented</option>
-                      <option value="reserved">Reserved</option>
                       <option value="maintenance">Maintenance</option>
                     </select>
                     {!editingItem && addItemErrors.status && <p id="add-item-status-error" className="text-sm text-red-600 mt-1">{addItemErrors.status}</p>}
@@ -5649,7 +6275,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     onClick={editingItem ? handleUpdateItem : handleAddItem}
                     className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
                   >
-                    {editingItem ? 'Update' : 'Add'} Gown
+                    {editingItem ? 'Update' : 'Add'} Item
                   </button>
                 </div>
               </div>

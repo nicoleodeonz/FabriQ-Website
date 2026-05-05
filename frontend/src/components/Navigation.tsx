@@ -192,6 +192,14 @@ export function Navigation({
     return `${year}-${month}-${day} | ${hours}:${minutes}`;
   };
 
+  const isPhoneVerifiedNotification = (notification: CustomerNotificationEntry) => {
+    const notificationTitle = String(notification.title || '').trim().toLowerCase();
+    const notificationItemLabel = String(notification.itemLabel || '').trim().toLowerCase();
+
+    return notification.type === 'bespoke'
+      && (notificationTitle === 'phone number verified' || notificationItemLabel === 'verified phone number');
+  };
+
   const navItems: { view: View; label: string; protected?: boolean }[] = isAdmin
     ? []
     : [
@@ -345,6 +353,11 @@ export function Navigation({
                               tabIndex={0}
                               onClick={async () => {
                                 await markNotificationAsRead(notification);
+
+                                if (isPhoneVerifiedNotification(notification)) {
+                                  return;
+                                }
+
                                 onNotificationSelect(notification);
                                 setShowNotificationModal(false);
                               }}
@@ -352,6 +365,11 @@ export function Navigation({
                                 if (event.key === 'Enter' || event.key === ' ') {
                                   event.preventDefault();
                                   await markNotificationAsRead(notification);
+
+                                  if (isPhoneVerifiedNotification(notification)) {
+                                    return;
+                                  }
+
                                   onNotificationSelect(notification);
                                   setShowNotificationModal(false);
                                 }
