@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, MapPin, ChevronRight, X, Star } from 'lucide-react';
 import { customerAPI } from '../services/customerAPI';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
 import { rentalAPI } from '../services/rentalAPI';
+import { createCustomerActivityEventSource } from '../services/adminRealtime';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { Calendar as DateCalendar } from './ui/calendar';
@@ -392,62 +393,76 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     };
   }, [token, user.email, user.firstName, user.lastName, user.phoneNumber]);
 
+  const loadMyRentals = useCallback(async () => {
+    setRentalsLoading(true);
+    setRentalsError('');
+
+    try {
+      const myRentals = await rentalAPI.getMyRentals(token);
+      setRentals(
+        myRentals.map((rental) => ({
+          id: rental.id,
+          referenceId: rental.referenceId ?? rental.id,
+          gownName: rental.gownName,
+          gownImage: rental.gownImage,
+          sku: rental.sku,
+          startDate: rental.startDate,
+          endDate: rental.endDate,
+          status: rental.status,
+          totalPrice: rental.totalPrice,
+          downpayment: rental.downpayment,
+          branch: rental.branch,
+          eventType: rental.eventType,
+          paymentSubmittedAt: rental.paymentSubmittedAt,
+          paymentAmountPaid: rental.paymentAmountPaid,
+          paymentReferenceNumber: rental.paymentReferenceNumber,
+          paymentReceiptUrl: rental.paymentReceiptUrl,
+          paymentReceiptFilename: rental.paymentReceiptFilename,
+          rejectionReason: rental.rejectionReason,
+          rejectedAt: rental.rejectedAt,
+          pickupScheduleDate: rental.pickupScheduleDate,
+          pickupScheduleTime: rental.pickupScheduleTime,
+          hasReview: rental.hasReview,
+          reviewSubmittedAt: rental.reviewSubmittedAt,
+          reviewScore: rental.reviewScore,
+          reviewComment: rental.reviewComment,
+        }))
+      );
+    } catch (error) {
+      setRentalsError(error instanceof Error ? error.message : 'Failed to load your rentals.');
+    } finally {
+      setRentalsLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
     let isMounted = true;
 
-    const loadMyRentals = async () => {
-      setRentalsLoading(true);
-      setRentalsError('');
-
-      try {
-        const myRentals = await rentalAPI.getMyRentals(token);
-        if (!isMounted) return;
-
-        setRentals(
-          myRentals.map((rental) => ({
-            id: rental.id,
-            referenceId: rental.referenceId ?? rental.id,
-            gownName: rental.gownName,
-            gownImage: rental.gownImage,
-            sku: rental.sku,
-            startDate: rental.startDate,
-            endDate: rental.endDate,
-            status: rental.status,
-            totalPrice: rental.totalPrice,
-            downpayment: rental.downpayment,
-            branch: rental.branch,
-            eventType: rental.eventType,
-            paymentSubmittedAt: rental.paymentSubmittedAt,
-            paymentAmountPaid: rental.paymentAmountPaid,
-            paymentReferenceNumber: rental.paymentReferenceNumber,
-            paymentReceiptUrl: rental.paymentReceiptUrl,
-            paymentReceiptFilename: rental.paymentReceiptFilename,
-            rejectionReason: rental.rejectionReason,
-            rejectedAt: rental.rejectedAt,
-            pickupScheduleDate: rental.pickupScheduleDate,
-            pickupScheduleTime: rental.pickupScheduleTime,
-            hasReview: rental.hasReview,
-            reviewSubmittedAt: rental.reviewSubmittedAt,
-            reviewScore: rental.reviewScore,
-            reviewComment: rental.reviewComment,
-          }))
-        );
-      } catch (error) {
-        if (!isMounted) return;
-        setRentalsError(error instanceof Error ? error.message : 'Failed to load your rentals.');
-      } finally {
-        if (isMounted) {
-          setRentalsLoading(false);
-        }
+    void loadMyRentals().catch(() => {
+      if (isMounted) {
+        setRentalsError('Failed to load your rentals.');
       }
-    };
-
-    void loadMyRentals();
+    });
 
     return () => {
       isMounted = false;
     };
-  }, [token]);
+  }, [loadMyRentals]);
+
+  useEffect(() => {
+    const eventSource = createCustomerActivityEventSource(token);
+
+    const handleCustomerActivityUpdate = () => {
+      void loadMyRentals();
+    };
+
+    eventSource.addEventListener('customer-activity-update', handleCustomerActivityUpdate);
+
+    return () => {
+      eventSource.removeEventListener('customer-activity-update', handleCustomerActivityUpdate);
+      eventSource.close();
+    };
+  }, [loadMyRentals, token]);
 
   useEffect(() => {
     if (!selectedRentalTab) {

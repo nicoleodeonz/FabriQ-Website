@@ -3,7 +3,7 @@ import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
 import Review from '../models/Review.js';
 import AdminAction from '../models/AdminAction.js';
-import { emitAdminDashboardUpdate } from '../services/adminRealtimeService.js';
+import { emitAdminDashboardUpdate, emitCustomerActivityUpdate } from '../services/adminRealtimeService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { toPublicUrl } from '../utils/media.js';
@@ -395,6 +395,7 @@ export async function scheduleRentalPickup(req, res) {
     rental.status = 'for_pickup';
     await rental.save();
     emitAdminDashboardUpdate({ entity: 'rental', action: 'pickup-scheduled', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'pickup-scheduled', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -473,6 +474,7 @@ export async function submitRentalPayment(req, res) {
 
     await rental.save();
     emitAdminDashboardUpdate({ entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -587,6 +589,7 @@ export async function createRental(req, res) {
     await product.save();
     await syncProductAvailabilityByCapacity(product._id);
     emitAdminDashboardUpdate({ entity: 'rental', action: 'created', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'created', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -763,6 +766,7 @@ export async function updateRentalStatus(req, res) {
     await rental.save();
     await syncProductAvailabilityByCapacity(rental.productId);
     emitAdminDashboardUpdate({ entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
 
     try {
       const hasPickupSchedule = Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);

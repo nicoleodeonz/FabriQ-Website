@@ -2,7 +2,7 @@ import AppointmentDetail from '../models/AppointmentDetail.js';
 import CustomerAccount from '../models/Customer.js';
 import ProductDetail from '../models/ProductDetail.js';
 import AdminAction from '../models/AdminAction.js';
-import { emitAdminDashboardUpdate } from '../services/adminRealtimeService.js';
+import { emitAdminDashboardUpdate, emitCustomerActivityUpdate } from '../services/adminRealtimeService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
@@ -247,6 +247,7 @@ export async function createAppointment(req, res) {
     });
 
     emitAdminDashboardUpdate({ entity: 'appointment', action: 'created', id: String(appointment._id || '') });
+  emitCustomerActivityUpdate(appointment.customerId, { entity: 'appointment', action: 'created', id: String(appointment._id || '') });
 
     return res.status(201).json({ appointment: mapAppointment(appointment.toJSON()) });
   } catch (error) {
@@ -340,6 +341,7 @@ export async function rescheduleMyAppointment(req, res) {
     appointment.status = 'pending';
     await appointment.save();
     emitAdminDashboardUpdate({ entity: 'appointment', action: 'rescheduled', id: String(appointment._id || '') });
+    emitCustomerActivityUpdate(appointment.customerId, { entity: 'appointment', action: 'rescheduled', id: String(appointment._id || '') });
 
     return res.json({ appointment: mapAppointment(appointment.toJSON()) });
   } catch (error) {
@@ -409,6 +411,7 @@ export async function updateAppointmentStatus(req, res) {
     appointment.cancellationReason = nextStatus === 'cancelled' ? reason : appointment.cancellationReason;
     await appointment.save();
     emitAdminDashboardUpdate({ entity: 'appointment', action: 'status-updated', id: String(appointment._id || '') });
+    emitCustomerActivityUpdate(appointment.customerId, { entity: 'appointment', action: 'status-updated', id: String(appointment._id || '') });
 
     if (['scheduled', 'completed', 'cancelled'].includes(nextStatus)) {
       try {

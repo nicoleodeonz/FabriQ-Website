@@ -9,8 +9,16 @@ function toAbsoluteUrl(pathname: string) {
   return new URL(apiUrl, window.location.origin);
 }
 
-export function createAdminDashboardEventSource(token: string) {
-  const url = toAbsoluteUrl('/realtime/admin-dashboard');
+function createRealtimeEventSource(pathname: string, token: string) {
+  const url = toAbsoluteUrl(pathname);
   url.searchParams.set('access_token', token);
   return new EventSource(url.toString());
+}
+
+export function createAdminDashboardEventSource(token: string) {
+  return createRealtimeEventSource('/realtime/admin-dashboard', token);
+}
+
+export function createCustomerActivityEventSource(token: string) {
+  return createRealtimeEventSource('/realtime/customer-activity', token);
 }

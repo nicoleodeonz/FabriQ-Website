@@ -1,7 +1,7 @@
 import CustomOrder from '../models/CustomOrder.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
-import { emitAdminDashboardUpdate } from '../services/adminRealtimeService.js';
+import { emitAdminDashboardUpdate, emitCustomerActivityUpdate } from '../services/adminRealtimeService.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
@@ -147,6 +147,7 @@ async function updateCustomOrderVisitSchedule(req, res, config) {
     order.updatedAt = new Date();
     await order.save();
     emitAdminDashboardUpdate({ entity: 'custom-order', action: 'schedule-updated', id: String(order._id || '') });
+    emitCustomerActivityUpdate(order.customerId, { entity: 'custom-order', action: 'schedule-updated', id: String(order._id || '') });
 
     if (typeof config.buildNotificationPayload === 'function') {
       try {
@@ -236,7 +237,8 @@ export const createCustomOrder = async (req, res) => {
     });
 
     await customOrder.save();
-  emitAdminDashboardUpdate({ entity: 'custom-order', action: 'created', id: String(customOrder._id || '') });
+    emitAdminDashboardUpdate({ entity: 'custom-order', action: 'created', id: String(customOrder._id || '') });
+    emitCustomerActivityUpdate(customOrder.customerId, { entity: 'custom-order', action: 'created', id: String(customOrder._id || '') });
     res.status(201).json(mapCustomOrder(customOrder));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -383,6 +385,7 @@ export const updateCustomOrderStatus = async (req, res) => {
     order.updatedAt = new Date();
     await order.save();
     emitAdminDashboardUpdate({ entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
+    emitCustomerActivityUpdate(order.customerId, { entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
 
     if (previousStatus === 'inquiry' && nextStatus === 'design-approval') {
       try {

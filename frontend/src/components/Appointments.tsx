@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, Clock, MapPin, User, Mail, Phone, ChevronRight, Sparkles, Ruler, Scissors, Package } from 'lucide-react';
 import { getPublicInventory } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
 import { appointmentAPI } from '../services/appointmentAPI';
 import type { AppointmentDetail as Appointment } from '../services/appointmentAPI';
+import { createCustomerActivityEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import type { CustomerNotificationEntry } from '../services/notificationAPI';
 
@@ -142,33 +143,48 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     }));
   }, [defaultCustomerName, user.email, user.phoneNumber]);
 
+  const loadAppointments = useCallback(async () => {
+    setAppointmentsLoading(true);
+    setAppointmentsError('');
+
+    try {
+      const items = await appointmentAPI.getMyAppointments(token);
+      setAppointments(items);
+    } catch (error) {
+      setAppointmentsError(error instanceof Error ? error.message : 'Failed to load appointments.');
+    } finally {
+      setAppointmentsLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
     let isMounted = true;
 
-    const loadAppointments = async () => {
-      setAppointmentsLoading(true);
-      setAppointmentsError('');
-
-      try {
-        const items = await appointmentAPI.getMyAppointments(token);
-        if (!isMounted) return;
-        setAppointments(items);
-      } catch (error) {
-        if (!isMounted) return;
-        setAppointmentsError(error instanceof Error ? error.message : 'Failed to load appointments.');
-      } finally {
-        if (isMounted) {
-          setAppointmentsLoading(false);
-        }
+    void loadAppointments().catch(() => {
+      if (isMounted) {
+        setAppointmentsError('Failed to load appointments.');
       }
-    };
-
-    void loadAppointments();
+    });
 
     return () => {
       isMounted = false;
     };
-  }, [token]);
+  }, [loadAppointments]);
+
+  useEffect(() => {
+    const eventSource = createCustomerActivityEventSource(token);
+
+    const handleCustomerActivityUpdate = () => {
+      void loadAppointments();
+    };
+
+    eventSource.addEventListener('customer-activity-update', handleCustomerActivityUpdate);
+
+    return () => {
+      eventSource.removeEventListener('customer-activity-update', handleCustomerActivityUpdate);
+      eventSource.close();
+    };
+  }, [loadAppointments, token]);
 
   useEffect(() => {
     if (!selectedAppointmentId || appointments.length === 0) {
