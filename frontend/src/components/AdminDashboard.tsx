@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Package, Users, TrendingUp, TrendingDown, Minus, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
+import { BarElement, CategoryScale, Chart as ChartJS, Legend, LinearScale, Tooltip as ChartTooltip } from 'chart.js';
+import type { ChartOptions, TooltipItem } from 'chart.js';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { Bar } from 'react-chartjs-2';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
@@ -19,6 +22,8 @@ import { notificationAPI } from '../services/notificationAPI';
 import { createAdminDashboardEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip, Legend);
 
 export type { InventoryItem };
 
@@ -85,6 +90,7 @@ interface AdminDashboardProps {
 }
 
 type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
+type DashboardRefreshScope = 'overview' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history' | null;
 
 type AddItemField =
   | 'name'
@@ -98,6 +104,20 @@ type AddItemField =
   | 'description';
 
 type RentalExportFilter = 'archive' | 'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns';
+type OverviewExportTypeFilter = OverviewActivityRow['source'];
+type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
+type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
+type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
+type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
+type AppointmentExportSelectableFilter = Exclude<AppointmentExportFilter, 'all'>;
+type RentalExportSelectableFilter = Exclude<RentalExportFilter, 'all'>;
+type CustomOrderExportSelectableFilter = Exclude<CustomOrderExportFilter, 'all'>;
+type BranchComparisonMetric = 'revenue' | 'rents' | 'appointments' | 'bespoke';
+type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
+
+const OVERVIEW_EXPORT_TYPE_OPTIONS = ['Rental', 'Appointment', 'Custom Order'] as const satisfies OverviewExportTypeFilter[];
+const APPOINTMENT_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'scheduled'] as const satisfies AppointmentExportSelectableFilter[];
+const RENTAL_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'active', 'for-payment', 'for-pickup', 'returns'] as const satisfies RentalExportSelectableFilter[];
 
 const INVENTORY_PAGE_SIZE = 8;
 const APPOINTMENT_PAGE_SIZE = 3;
@@ -109,16 +129,11 @@ const USER_PAGE_SIZE = 5;
 const ADMIN_DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
+const CUSTOM_ORDER_EXPORT_FILTER_OPTIONS = ['archive', ...CUSTOM_ORDER_FILTER_TABS] as const satisfies readonly CustomOrderExportSelectableFilter[];
 const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
 const DEFAULT_INVENTORY_CATEGORIES = ['Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress'];
 const DEFAULT_INVENTORY_CATEGORY = DEFAULT_INVENTORY_CATEGORIES[0];
 const NEW_CATEGORY_OPTION = '__new_category__';
-
-type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
-type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
-type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
-type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
-type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
 
 type OverviewActivityRow = {
   id: string;
@@ -244,6 +259,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
   const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
+  const [branchComparisonMetric, setBranchComparisonMetric] = useState<BranchComparisonMetric>('revenue');
 
   const setActiveTabWithHash = (tab: AdminTab, history: 'push' | 'replace' = 'push') => {
     setActiveTab(tab);
@@ -412,11 +428,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [appointmentPage, setAppointmentPage] = useState(1);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatusFilter>('all');
   const [showAppointmentExportModal, setShowAppointmentExportModal] = useState(false);
-  const [appointmentExportFilter, setAppointmentExportFilter] = useState<AppointmentExportFilter>('all');
+  const [selectedAppointmentExportFilters, setSelectedAppointmentExportFilters] = useState<AppointmentExportSelectableFilter[]>(['pending', 'scheduled']);
+  const [selectedAppointmentExportBranch, setSelectedAppointmentExportBranch] = useState<string>('All Branches');
   const [appointmentSearchQuery, setAppointmentSearchQuery] = useState('');
   const [adminAppointments, setAdminAppointments] = useState<AdminAppointmentDetail[]>([]);
   const [adminAppointmentsLoading, setAdminAppointmentsLoading] = useState(false);
   const [adminAppointmentsError, setAdminAppointmentsError] = useState<string | null>(null);
+  const [showOverviewExportModal, setShowOverviewExportModal] = useState(false);
+  const [showStoreOverviewExportModal, setShowStoreOverviewExportModal] = useState(false);
+  const [overviewExportBranchFilter, setOverviewExportBranchFilter] = useState<string>('All Branches');
+  const [overviewExportTypeFilter, setOverviewExportTypeFilter] = useState<OverviewExportTypeFilter[]>([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+  const [selectedStoreOverviewExportBranches, setSelectedStoreOverviewExportBranches] = useState<string[]>(['All Branches']);
   const [appointmentStatusUpdatingId, setAppointmentStatusUpdatingId] = useState<string | null>(null);
   const [selectedPendingAppointment, setSelectedPendingAppointment] = useState<AdminAppointmentDetail | null>(null);
   const [isApproveAppointmentConfirmOpen, setIsApproveAppointmentConfirmOpen] = useState(false);
@@ -429,12 +451,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adminCustomOrders, setAdminCustomOrders] = useState<AdminCustomOrderRecord[]>([]);
   const [adminCustomOrdersLoading, setAdminCustomOrdersLoading] = useState(false);
   const [adminCustomOrdersError, setAdminCustomOrdersError] = useState<string | null>(null);
+  const [dashboardRefreshScope, setDashboardRefreshScope] = useState<DashboardRefreshScope>(null);
   const [customOrderManagementView, setCustomOrderManagementView] = useState<'active' | 'archive'>('active');
   const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
   const [customOrderPage, setCustomOrderPage] = useState(1);
   const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<CustomOrderStatusFilter>('all');
   const [showCustomOrderExportModal, setShowCustomOrderExportModal] = useState(false);
-  const [customOrderExportFilter, setCustomOrderExportFilter] = useState<CustomOrderExportFilter>('all');
+  const [selectedCustomOrderExportFilters, setSelectedCustomOrderExportFilters] = useState<CustomOrderExportSelectableFilter[]>([...CUSTOM_ORDER_FILTER_TABS]);
+  const [selectedCustomOrderExportBranch, setSelectedCustomOrderExportBranch] = useState<string>('All Branches');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
@@ -448,7 +472,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
   const [rentalViewFilter, setRentalViewFilter] = useState<'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('all');
   const [showRentalExportModal, setShowRentalExportModal] = useState(false);
-  const [rentalExportFilter, setRentalExportFilter] = useState<RentalExportFilter>('all');
+  const [selectedRentalExportFilters, setSelectedRentalExportFilters] = useState<RentalExportSelectableFilter[]>(['pending', 'active', 'for-payment', 'for-pickup', 'returns']);
+  const [selectedRentalExportBranch, setSelectedRentalExportBranch] = useState<string>('All Branches');
   const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
   const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
   const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
@@ -483,6 +508,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     showUserExportModal ||
     showAddUserModal ||
     showPendingRentalModal ||
+    showOverviewExportModal ||
+    showStoreOverviewExportModal ||
     showRentalExportModal ||
     showAppointmentExportModal ||
     showCustomOrderExportModal ||
@@ -623,16 +650,57 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return () => window.removeEventListener('keydown', onEsc);
   }, [confirmAction, isConfirmingAction]);
 
+  const runRefreshForScope = async (scope: Exclude<DashboardRefreshScope, null>, refreshAction: () => Promise<void>) => {
+    setDashboardRefreshScope(scope);
+    try {
+      await refreshAction();
+    } finally {
+      setDashboardRefreshScope((current) => (current === scope ? null : current));
+    }
+  };
+
+  const handleRefreshOverview = () => {
+    void runRefreshForScope('overview', async () => {
+      await Promise.all([
+        loadInventory(),
+        loadUsers(),
+        loadAdminRentals(),
+        loadAdminAppointments(),
+        loadAdminCustomOrders(),
+        loadBranchPerformance(selectedBranch),
+        loadAdminHistory(),
+      ]);
+    });
+  };
+
   const handleRefreshAdminRentals = () => {
-    void loadAdminRentals();
+    void runRefreshForScope('rentals', async () => {
+      await loadAdminRentals();
+    });
   };
 
   const handleRefreshAdminAppointments = () => {
-    void loadAdminAppointments();
+    void runRefreshForScope('appointments', async () => {
+      await loadAdminAppointments();
+    });
   };
 
   const handleRefreshAdminCustomOrders = () => {
-    void loadAdminCustomOrders();
+    void runRefreshForScope('bespoke', async () => {
+      await loadAdminCustomOrders();
+    });
+  };
+
+  const handleRefreshUsers = () => {
+    void runRefreshForScope('users', async () => {
+      await loadUsers();
+    });
+  };
+
+  const handleRefreshAdminHistory = () => {
+    void runRefreshForScope('history', async () => {
+      await loadAdminHistory();
+    });
   };
 
   async function loadInventory() {
@@ -1837,14 +1905,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
     return hours * 60 + minutes;
   };
-  const todaysActivity: OverviewActivityRow[] = [
+  const allTodaysActivity: OverviewActivityRow[] = [
     ...adminRentals
       .filter((rental) => (
-        matchesSelectedBranch(rental.branch, selectedBranch)
-        && (
-          String(rental.pickupScheduleDate || '').trim() === overviewTodayKey
-          || (rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey)
-        )
+        String(rental.pickupScheduleDate || '').trim() === overviewTodayKey
+        || (rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey)
       ))
       .map((rental) => {
         const isReturnActivity = rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey;
@@ -1862,8 +1927,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       }),
     ...adminAppointments
       .filter((appointment) => (
-        matchesSelectedBranch(appointment.branch, selectedBranch)
-        && appointment.status === 'scheduled'
+        appointment.status === 'scheduled'
         && String(appointment.date || '').trim() === overviewTodayKey
       ))
       .map((appointment) => ({
@@ -1883,7 +1947,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         sortValue: getOverviewTimeSortValue(appointment.time),
       })),
     ...adminCustomOrders
-      .filter((order) => !order.isArchived && matchesSelectedBranch(order.branch, selectedBranch))
+      .filter((order) => !order.isArchived)
       .flatMap((order) => {
         const entries: OverviewActivityRow[] = [];
         const orderId = String(order.id || order._id || order.referenceId || Math.random()).trim();
@@ -1925,6 +1989,67 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
     return left.title.localeCompare(right.title);
   });
+  const todaysActivity = allTodaysActivity.filter((activity) => matchesSelectedBranch(activity.branch, selectedBranch));
+  const overviewExportBranchOptions = Array.from(new Set(allTodaysActivity.map((activity) => activity.branch))).sort((left, right) => left.localeCompare(right));
+  const getOverviewExportItems = (branchFilter: string, typeFilter: OverviewExportTypeFilter[]) => (
+    allTodaysActivity.filter((activity) => {
+      const matchesBranch = branchFilter === 'All Branches' || activity.branch === branchFilter;
+      const matchesType = typeFilter.length === 0 || typeFilter.includes(activity.source);
+      return matchesBranch && matchesType;
+    })
+  );
+  const overviewExportItems = getOverviewExportItems(overviewExportBranchFilter, overviewExportTypeFilter);
+  const overviewExportTypeOptions: Array<{ value: OverviewExportTypeFilter; label: string; count: number }> = [
+    { value: 'Rental', label: 'Rentals', count: getOverviewExportItems(overviewExportBranchFilter, ['Rental']).length },
+    { value: 'Appointment', label: 'Appointments', count: getOverviewExportItems(overviewExportBranchFilter, ['Appointment']).length },
+    { value: 'Custom Order', label: 'Custom Orders', count: getOverviewExportItems(overviewExportBranchFilter, ['Custom Order']).length },
+  ];
+  const overviewExportTypeLabel = overviewExportTypeFilter.length === 0
+    ? 'All Types'
+    : overviewExportTypeFilter.length === overviewExportTypeOptions.length
+      ? 'All Types'
+      : overviewExportTypeFilter.join(', ');
+  const openOverviewExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setOverviewExportBranchFilter(selectedBranch === 'All Branches' ? 'All Branches' : getShortBranchLabel(selectedBranch));
+    setOverviewExportTypeFilter([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+    setShowOverviewExportModal(true);
+  };
+  const openStoreOverviewExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setSelectedStoreOverviewExportBranches(
+      selectedBranch === 'All Branches'
+        ? ['All Branches']
+        : [selectedBranch]
+    );
+    setShowStoreOverviewExportModal(true);
+  };
+  const toggleStoreOverviewExportBranch = (branchOption: string) => {
+    setSelectedStoreOverviewExportBranches((current) => {
+      if (branchOption === 'All Branches') {
+        return ['All Branches'];
+      }
+
+      const withoutAll = current.filter((branch) => branch !== 'All Branches');
+      if (withoutAll.includes(branchOption)) {
+        const nextBranches = withoutAll.filter((branch) => branch !== branchOption);
+        return nextBranches.length > 0 ? nextBranches : ['All Branches'];
+      }
+
+      return [...withoutAll, branchOption];
+    });
+  };
+  const matchesStoreOverviewExportBranch = (branch: string | null | undefined) => (
+    selectedStoreOverviewExportBranches.includes('All Branches')
+      || selectedStoreOverviewExportBranches.some((selectedExportBranch) => (
+        normalizeBranchName(selectedExportBranch) === normalizeBranchName(branch)
+      ))
+  );
+  const storeOverviewBranchFilterLabel = selectedStoreOverviewExportBranches.includes('All Branches')
+    ? 'All Branches'
+    : selectedStoreOverviewExportBranches.join(', ');
   const totalSales = adminRentals
     .filter((rental) => completedRentalStatuses.includes(rental.status))
     .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
@@ -1977,6 +2102,322 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : null;
   const topSellingItemName = topSellingInventoryItem?.name || topSellingItemEntry?.gownName || 'No sales yet';
   const topSellingItemCount = topSellingItemEntry?.count ?? 0;
+  const rentedItemPalette = ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'];
+  const completedRentalItemCounts = Object.values(
+    adminRentals
+      .filter((rental) => completedRentalStatuses.includes(rental.status))
+      .reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+  )
+    .map((entry) => {
+      const inventoryMatch = inventoryItemsForLookup.find((item) => {
+        const itemSku = String(item.sku || '').trim().toLowerCase();
+        const itemName = String(item.name || '').trim().toLowerCase();
+        const targetSku = String(entry.sku || '').trim().toLowerCase();
+        const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+        return targetSku
+          ? itemSku === targetSku
+          : itemName === targetName;
+      });
+
+      return {
+        name: inventoryMatch?.name || entry.gownName,
+        count: entry.count,
+        inventoryItem: inventoryMatch ?? null,
+      };
+    });
+  const mostRentedItems = completedRentalItemCounts
+    .slice()
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, 5)
+    .map((item, index) => ({
+      ...item,
+      fill: rentedItemPalette[index % rentedItemPalette.length],
+    }));
+  const leastRentedItems = completedRentalItemCounts
+    .slice()
+    .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))
+    .slice(0, 5)
+    .map((item, index) => ({
+      ...item,
+      fill: rentedItemPalette[index % rentedItemPalette.length],
+    }));
+  const itemsPerCategory = useMemo(() => (
+    Object.entries(
+      inventory.reduce<Record<string, number>>((counts, item) => {
+        if (!matchesSelectedBranch(item.branch, selectedBranch)) {
+          return counts;
+        }
+
+        const category = String(item.category || '').trim();
+        if (!category) {
+          return counts;
+        }
+
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {})
+    )
+      .map(([category, count]) => ({ category, count }))
+      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category))
+  ), [inventory, selectedBranch]);
+  const mostRentedItemsChartData = useMemo(() => ({
+    labels: mostRentedItems.map((item) => item.name),
+    datasets: [
+      {
+        label: 'Rentals',
+        data: mostRentedItems.map((item) => item.count),
+        backgroundColor: mostRentedItems.map((item) => item.fill),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 26,
+      },
+    ],
+  }), [mostRentedItems]);
+  const mostRentedItemsChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (_event, elements) => {
+      const clickedIndex = elements[0]?.index;
+      if (clickedIndex === undefined) return;
+
+      const selectedItem = mostRentedItems[clickedIndex]?.inventoryItem;
+      if (selectedItem) {
+        setHoverPreviewItem(selectedItem);
+      }
+    },
+    onHover: (event, elements) => {
+      const target = event.native?.target;
+      if (target instanceof HTMLCanvasElement) {
+        target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      }
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Item: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} rental${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [mostRentedItems]);
+  const itemsPerCategoryChartData = useMemo(() => ({
+    labels: itemsPerCategory.map((item) => item.category),
+    datasets: [
+      {
+        label: 'Items',
+        data: itemsPerCategory.map((item) => item.count),
+        backgroundColor: itemsPerCategory.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 56,
+      },
+    ],
+  }), [itemsPerCategory, rentedItemPalette]);
+  const itemsPerCategoryChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Category: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.y ?? 0).toLocaleString()} item${Number(context.parsed.y ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [itemsPerCategory, rentedItemPalette]);
+  const leastRentedItemsChartData = useMemo(() => ({
+    labels: leastRentedItems.map((item) => item.name),
+    datasets: [
+      {
+        label: 'Rentals',
+        data: leastRentedItems.map((item) => item.count),
+        backgroundColor: leastRentedItems.map((item) => item.fill),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 26,
+      },
+    ],
+  }), [leastRentedItems]);
+  const leastRentedItemsChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (_event, elements) => {
+      const clickedIndex = elements[0]?.index;
+      if (clickedIndex === undefined) return;
+
+      const selectedItem = leastRentedItems[clickedIndex]?.inventoryItem;
+      if (selectedItem) {
+        setHoverPreviewItem(selectedItem);
+      }
+    },
+    onHover: (event, elements) => {
+      const target = event.native?.target;
+      if (target instanceof HTMLCanvasElement) {
+        target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      }
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Item: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} rental${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        max: 5,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [leastRentedItems]);
   const salesThisWeek = adminRentals
     .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, currentWeekStart, now))
     .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
@@ -2023,30 +2464,191 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const ordersTrend = buildTrendSummary(ordersThisWeek, ordersLastWeek);
   const customersTrend = buildTrendSummary(newCustomersThisWeek, newCustomersLastWeek);
   const topSellingTrend = buildTrendSummary(topSellingItemThisWeek, topSellingItemLastWeek);
+  const branchComparisonMetricOptions: Array<{ value: BranchComparisonMetric; label: string }> = [
+    { value: 'revenue', label: 'Revenue' },
+    { value: 'rents', label: 'Rents' },
+    { value: 'appointments', label: 'Appointments' },
+    { value: 'bespoke', label: 'Bespoke' },
+  ];
+  const getBranchComparisonMetricLabel = (metric: BranchComparisonMetric) => (
+    branchComparisonMetricOptions.find((option) => option.value === metric)?.label || 'Revenue'
+  );
+  const getBranchComparisonMetricValue = (
+    entry: { revenue: number; rents: number; appointments: number; bespoke: number },
+    metric: BranchComparisonMetric,
+  ) => {
+    if (metric === 'revenue') return entry.revenue;
+    if (metric === 'rents') return entry.rents;
+    if (metric === 'appointments') return entry.appointments;
+    return entry.bespoke;
+  };
+  const formatBranchComparisonMetricValue = (metric: BranchComparisonMetric, value: number) => (
+    metric === 'revenue'
+      ? `₱${value.toLocaleString()}`
+      : value.toLocaleString()
+  );
+  const branchComparisonMetricLabel = getBranchComparisonMetricLabel(branchComparisonMetric);
+  const branchComparisonDescription = branchComparisonMetric === 'revenue'
+    ? 'Completed rental revenue by branch'
+    : branchComparisonMetric === 'rents'
+      ? 'Rental records by branch'
+      : branchComparisonMetric === 'appointments'
+        ? 'Appointments by branch'
+        : 'Bespoke orders by branch';
+  const branchComparisonSummaryLabel = branchComparisonMetric === 'revenue'
+    ? 'Compared Revenue'
+    : `Compared ${branchComparisonMetricLabel}`;
+  const formatBranchComparisonValue = (value: number) => (
+    formatBranchComparisonMetricValue(branchComparisonMetric, value)
+  );
+  const branchComparisonEmptyLabel = branchComparisonMetric === 'revenue'
+    ? 'No completed rental revenue is available for comparison yet.'
+    : `No ${branchComparisonMetricLabel.toLowerCase()} data is available for comparison yet.`;
+  const branchComparisonBranches = (branchStats.length > 0
+    ? branchStats.map((branchStat) => branchStat.branch)
+    : Array.from(new Set([
+        ...adminRentals.map((rental) => rental.branch),
+        ...adminAppointments.map((appointment) => appointment.branch),
+        ...adminCustomOrders.map((order) => order.branch),
+      ].filter((branch): branch is string => Boolean(branch))))
+  );
+  const branchComparisonData = branchComparisonBranches
+    .map((branchName, index) => {
+      const normalizedBranch = normalizeBranchName(branchName);
+      const revenue = adminRentals
+        .filter((rental) => (
+          completedRentalStatuses.includes(rental.status)
+          && normalizeBranchName(rental.branch) === normalizedBranch
+        ))
+        .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+      const rents = adminRentals.filter((rental) => normalizeBranchName(rental.branch) === normalizedBranch).length;
+      const appointments = adminAppointments.filter((appointment) => normalizeBranchName(appointment.branch) === normalizedBranch).length;
+      const bespoke = adminCustomOrders.filter((order) => normalizeBranchName(order.branch) === normalizedBranch).length;
+
+      return {
+        branch: getShortBranchLabel(branchName),
+        fullBranch: normalizedBranch || branchName,
+        revenue,
+        rents,
+        appointments,
+        bespoke,
+        value: getBranchComparisonMetricValue({ revenue, rents, appointments, bespoke }, branchComparisonMetric),
+        fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+      };
+    })
+    .sort((left, right) => right.value - left.value);
+  const storeOverviewExportBranchOptions = branchComparisonData.map((entry) => entry.fullBranch);
+  const storeOverviewComparisonData = branchComparisonData.filter((entry) => matchesStoreOverviewExportBranch(entry.fullBranch));
+  const totalComparedMetric = branchComparisonData.reduce((sum, branch) => sum + branch.value, 0);
+  const buildStoreOverviewComparisonMetricData = (metric: BranchComparisonMetric) => (
+    branchComparisonData
+      .filter((entry) => matchesStoreOverviewExportBranch(entry.fullBranch))
+      .map((entry) => ({
+        ...entry,
+        value: getBranchComparisonMetricValue(entry, metric),
+      }))
+      .sort((left, right) => right.value - left.value)
+  );
+  const revenueComparisonChartData = useMemo(() => ({
+    labels: branchComparisonData.map((entry) => entry.branch),
+    datasets: [
+      {
+        label: branchComparisonMetricLabel,
+        data: branchComparisonData.map((entry) => entry.value),
+        backgroundColor: branchComparisonData.map((entry) => entry.fill),
+        borderRadius: 12,
+        borderSkipped: false as const,
+        maxBarThickness: 56,
+      },
+    ],
+  }), [branchComparisonData, branchComparisonMetricLabel]);
+  const revenueComparisonChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Branch: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${branchComparisonMetricLabel}: ${formatBranchComparisonValue(Number(context.parsed.y ?? 0))}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+          callback: (value: string | number) => formatBranchComparisonValue(Number(value)),
+        },
+      },
+    },
+  }), [branchComparisonMetricLabel, branchComparisonMetric]);
 
   const handleSaveOverviewKpisAsPdf = () => {
     if (!canExportPdfs) return;
 
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const exportItems = getOverviewExportItems(overviewExportBranchFilter, overviewExportTypeFilter);
+    const activityRows = exportItems.map((activity) => [
+      activity.timeLabel,
+      activity.source,
+      activity.title,
+      activity.customerName,
+      activity.detail,
+      activity.branch,
+    ]);
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
-    document.text('Admin Overview KPI Report', 40, 44);
+    document.text("Today's Activity Report", 40, 44);
     document.setFontSize(10);
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
-    document.text(`Branch: ${selectedBranch}`, 40, 80);
+    document.text(`Branch Filter: ${overviewExportBranchFilter}`, 40, 80);
+    document.text(`Type Filter: ${overviewExportTypeLabel}`, 40, 96);
+    document.text(`Scheduled Activities: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 96,
-      head: [['KPI', 'Current Value', 'Trend']],
-      body: [
-        ['Total Sales', `PHP ${totalSales.toLocaleString()}`, salesTrend.label],
-        ['Number of Orders', numberOfOrders.toLocaleString(), ordersTrend.label],
-        ['New Customers', newCustomers.toLocaleString(), customersTrend.label],
-        ['Top Selling Item', `${topSellingItemName} (${topSellingItemCount} rental${topSellingItemCount === 1 ? '' : 's'})`, topSellingTrend.label],
-      ],
+      startY: 128,
+      head: [['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch']],
+      body: activityRows.length > 0
+        ? activityRows
+        : [['No activities scheduled for today.', '', '', '', '', '']],
       theme: 'grid',
       styles: {
         fontSize: 10,
@@ -2065,7 +2667,636 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    document.save(`admin-overview-kpis-${new Date().toISOString().slice(0, 10)}.pdf`);
+    setShowOverviewExportModal(false);
+    document.save(`todays-activities-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+  const handleSaveStoreOverviewAsPdf = () => {
+    if (!canExportPdfs) return;
+
+    const renderStoreOverviewChartImage = (metric: BranchComparisonMetric) => {
+      const metricData = buildStoreOverviewComparisonMetricData(metric);
+      if (metricData.length === 0) {
+        return null;
+      }
+
+      const metricLabel = getBranchComparisonMetricLabel(metric);
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: metricData.map((entry) => entry.branch),
+          datasets: [
+            {
+              label: metricLabel,
+              data: metricData.map((entry) => entry.value),
+              backgroundColor: metricData.map((entry) => entry.fill),
+              borderRadius: 16,
+              borderSkipped: false,
+              maxBarThickness: 72,
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 22,
+                },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+                callback: (value) => formatBranchComparisonMetricValue(metric, Number(value)),
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: `store-overview-chart-background-${metric}`,
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric,
+        metricLabel,
+        image,
+      };
+    };
+    const renderMostRentedItemsChartImage = (
+      items: Array<{ name: string; count: number; fill: string }>,
+      options?: { metricLabel?: string; xAxisMax?: number }
+    ) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: items.map((item) => item.name),
+          datasets: [
+            {
+              label: 'Rentals',
+              data: items.map((item) => item.count),
+              backgroundColor: items.map((item) => item.fill),
+              borderRadius: 12,
+              borderSkipped: false,
+              maxBarThickness: 44,
+            },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              max: options?.xAxisMax,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                precision: 0,
+                font: {
+                  size: 20,
+                },
+              },
+            },
+            y: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-most-rented-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: options?.metricLabel || 'Most Rented Items',
+        image,
+      };
+    };
+    const renderItemsPerCategoryChartImage = (items: Array<{ category: string; count: number; fill: string }>) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: items.map((item) => item.category),
+          datasets: [
+            {
+              label: 'Items',
+              data: items.map((item) => item.count),
+              backgroundColor: items.map((item) => item.fill),
+              borderRadius: 12,
+              borderSkipped: false,
+              maxBarThickness: 70,
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                precision: 0,
+                font: {
+                  size: 20,
+                },
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-items-per-category-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: 'Items per Category',
+        image,
+      };
+    };
+
+    const generatedAt = new Date().toLocaleString();
+    const pdfDocument = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const completedRentalsForExport = adminRentals.filter((rental) => (
+      completedRentalStatuses.includes(rental.status)
+      && matchesStoreOverviewExportBranch(rental.branch)
+    ));
+    const activeCustomOrdersForExport = adminCustomOrders.filter((order) => (
+      !order.isArchived
+      && matchesStoreOverviewExportBranch(order.branch)
+    ));
+    const newCustomersForExport = users.filter((user) => {
+      if (user.role !== 'Customer' || !user.createdAt) {
+        return false;
+      }
+
+      const createdAt = new Date(user.createdAt);
+      if (Number.isNaN(createdAt.getTime()) || createdAt < recentCustomerThreshold) {
+        return false;
+      }
+
+      return matchesStoreOverviewExportBranch(user.branch);
+    }).length;
+    const totalSalesForExport = completedRentalsForExport.reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+    const numberOfOrdersForExport = completedRentalsForExport.length + activeCustomOrdersForExport.length;
+    const topSellingEntryForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    ).sort((left, right) => right.count - left.count)[0] ?? null;
+    const topSellingNameForExport = topSellingEntryForExport?.gownName || 'No sales yet';
+    const topSellingCountForExport = topSellingEntryForExport?.count ?? 0;
+    const mostRentedItemsForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    )
+      .map((entry, index) => {
+        const inventoryMatch = inventoryItemsForLookup.find((item) => {
+          const itemSku = String(item.sku || '').trim().toLowerCase();
+          const itemName = String(item.name || '').trim().toLowerCase();
+          const targetSku = String(entry.sku || '').trim().toLowerCase();
+          const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+          return targetSku
+            ? itemSku === targetSku
+            : itemName === targetName;
+        });
+
+        return {
+          name: inventoryMatch?.name || entry.gownName,
+          count: entry.count,
+          fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+        };
+      })
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 5);
+    const leastRentedItemsForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    )
+      .map((entry, index) => {
+        const inventoryMatch = inventoryItemsForLookup.find((item) => {
+          const itemSku = String(item.sku || '').trim().toLowerCase();
+          const itemName = String(item.name || '').trim().toLowerCase();
+          const targetSku = String(entry.sku || '').trim().toLowerCase();
+          const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+          return targetSku
+            ? itemSku === targetSku
+            : itemName === targetName;
+        });
+
+        return {
+          name: inventoryMatch?.name || entry.gownName,
+          count: entry.count,
+          fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+        };
+      })
+      .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))
+      .slice(0, 5);
+    const itemsPerCategoryForExport = inventory
+      .filter((item) => matchesStoreOverviewExportBranch(item.branch))
+      .reduce<Record<string, number>>((counts, item) => {
+        const category = String(item.category || '').trim();
+        if (!category) {
+          return counts;
+        }
+
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+    const itemsPerCategoryChartItemsForExport = Object.entries(itemsPerCategoryForExport)
+      .map(([category, count], index) => ({
+        category,
+        count,
+        fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+      }))
+      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category));
+    const pesoCanvas = globalThis.document.createElement('canvas');
+    pesoCanvas.width = 32;
+    pesoCanvas.height = 32;
+    const pesoContext = pesoCanvas.getContext('2d');
+    if (pesoContext) {
+      pesoContext.clearRect(0, 0, pesoCanvas.width, pesoCanvas.height);
+      pesoContext.fillStyle = '#1A1A1A';
+      pesoContext.font = '22px Arial';
+      pesoContext.textAlign = 'center';
+      pesoContext.textBaseline = 'middle';
+      pesoContext.fillText('₱', 16, 17);
+    }
+    const pesoSymbolImage = pesoCanvas.toDataURL('image/png');
+    const summaryRows = [
+      ['Total Sales', totalSalesForExport.toLocaleString()],
+      ['Number of Orders', numberOfOrdersForExport.toLocaleString()],
+      ['New Customers', newCustomersForExport.toLocaleString()],
+      ['Top Selling Item', `${topSellingNameForExport}${topSellingCountForExport > 0 ? ` (${topSellingCountForExport} rental${topSellingCountForExport === 1 ? '' : 's'})` : ''}`],
+    ];
+    const comparisonRows = storeOverviewComparisonData.map((entry) => [
+      entry.fullBranch,
+      entry.revenue.toLocaleString(),
+      entry.rents.toLocaleString(),
+      entry.appointments.toLocaleString(),
+      entry.bespoke.toLocaleString(),
+    ]);
+    const chartImages = branchComparisonMetricOptions
+      .map((option) => renderStoreOverviewChartImage(option.value))
+      .filter((chart): chart is NonNullable<typeof chart> => Boolean(chart));
+    const itemsPerCategoryChartImage = renderItemsPerCategoryChartImage(itemsPerCategoryChartItemsForExport);
+    if (itemsPerCategoryChartImage) {
+      chartImages.push(itemsPerCategoryChartImage);
+    }
+    const mostRentedChartImage = renderMostRentedItemsChartImage(mostRentedItemsForExport);
+    if (mostRentedChartImage) {
+      chartImages.push(mostRentedChartImage);
+    }
+    const leastRentedChartImage = renderMostRentedItemsChartImage(leastRentedItemsForExport, {
+      metricLabel: 'Least Rented Items',
+      xAxisMax: 5,
+    });
+    if (leastRentedChartImage) {
+      chartImages.push(leastRentedChartImage);
+    }
+
+    pdfDocument.setFont('times', 'normal');
+    pdfDocument.setFontSize(22);
+    pdfDocument.text('Store Overview Report', 40, 44);
+    pdfDocument.setFontSize(10);
+    pdfDocument.setTextColor(107, 93, 79);
+    pdfDocument.text(`Generated: ${generatedAt}`, 40, 64);
+    pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, 80);
+    pdfDocument.text(`Comparison Metric: ${branchComparisonMetricLabel}`, 40, 96);
+
+    autoTable(pdfDocument, {
+      startY: 120,
+      head: [['Metric', 'Value']],
+      body: summaryRows,
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        const rowValues = Array.isArray(data.row.raw) ? data.row.raw : [];
+        if (String(rowValues[0] || '') !== 'Total Sales') return;
+
+        data.cell.styles.cellPadding = { top: 8, right: 8, bottom: 8, left: 22 };
+      },
+      didDrawCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        const rowValues = Array.isArray(data.row.raw) ? data.row.raw : [];
+        if (String(rowValues[0] || '') !== 'Total Sales') return;
+
+        pdfDocument.addImage(pesoSymbolImage, 'PNG', data.cell.x + 8, data.cell.y + 9, 8, 8);
+      },
+    });
+
+    const summaryTable = (pdfDocument as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    autoTable(pdfDocument, {
+      startY: (summaryTable?.finalY ?? 120) + 24,
+      head: [['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke']],
+      body: comparisonRows.length > 0
+        ? comparisonRows
+        : [['No branch data available for the selected filter.', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        if (comparisonRows.length === 0) return;
+
+        data.cell.styles.cellPadding = { top: 8, right: 8, bottom: 8, left: 22 };
+      },
+      didDrawCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        if (comparisonRows.length === 0) return;
+
+        pdfDocument.addImage(pesoSymbolImage, 'PNG', data.cell.x + 8, data.cell.y + 9, 8, 8);
+      },
+    });
+
+    chartImages.forEach((chart, index) => {
+      if (index % 2 === 0) {
+        pdfDocument.addPage();
+      }
+
+      const isTopChart = index % 2 === 0;
+      const sectionTop = isTopChart ? 48 : 414;
+
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(16);
+      pdfDocument.setTextColor(26, 26, 26);
+      pdfDocument.text(`${chart.metricLabel} Comparison Chart`, 40, sectionTop);
+      pdfDocument.setFontSize(10);
+      pdfDocument.setTextColor(107, 93, 79);
+      pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, sectionTop + 18);
+      pdfDocument.addImage(chart.image, 'PNG', 40, sectionTop + 32, 515, 190);
+    });
+
+    setShowStoreOverviewExportModal(false);
+    pdfDocument.save(`store-overview-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   // Inventory CRUD Functions
@@ -2657,73 +3888,103 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             ? filteredForPickupRentals
             : filteredPendingReturns;
 
-  const getRentalExportItems = (filter: RentalExportFilter) => {
-    if (filter === 'archive') {
-      return filteredArchivedRentalCards.length > 0 ? filteredArchivedRentalCards : archivedRentalCards;
+  const getRentalExportItems = (filters: RentalExportSelectableFilter[], branchFilter: string) => {
+    const hasFilter = (filter: RentalExportSelectableFilter) => filters.includes(filter);
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+
+    const items: Array<AdminRentalCard | PendingReturn> = [];
+
+    if (hasFilter('archive')) {
+      items.push(...archivedRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'all') {
-      return filteredAllActiveStatusRentals;
+    if (hasFilter('pending')) {
+      items.push(...pendingRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'pending') {
-      return filteredPendingRentalCards;
+    if (hasFilter('active')) {
+      items.push(...displayedActiveRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'active') {
-      return filteredActiveRentalCards;
+    if (hasFilter('for-payment')) {
+      items.push(...forPaymentRentals.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'for-payment') {
-      return filteredForPaymentRentals;
+    if (hasFilter('for-pickup')) {
+      items.push(...forPickupRentals.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'for-pickup') {
-      return filteredForPickupRentals;
+    if (hasFilter('returns')) {
+      items.push(...pendingReturns.filter((rental) => {
+        const rentalBranch = activeRentalCards.find((activeRental) => activeRental.id === rental.id)?.branch;
+        if (!branchMatches(rentalBranch)) return false;
+        if (!rentalQuery) return true;
+        return [rental.id, rental.gownName, rental.customer, rental.dueDate]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(rentalQuery));
+      }));
     }
 
-    return filteredPendingReturns;
+    const deduped = new Map<string, AdminRentalCard | PendingReturn>();
+    items.forEach((item) => {
+      const key = `customerName` in item ? `rental-${item.id}` : `return-${item.id}`;
+      deduped.set(key, item);
+    });
+
+    return Array.from(deduped.values());
   };
 
-  const getRentalExportLabel = (filter: RentalExportFilter) => {
-    if (filter === 'archive') return 'Archived Rentals';
-    if (filter === 'all') return 'All Rentals';
-    if (filter === 'pending') return 'Pending Rentals';
-    if (filter === 'active') return 'Active Rentals';
-    if (filter === 'for-payment') return 'For Payment';
-    if (filter === 'for-pickup') return 'For Pickup';
-    return 'Pending Returns';
+  const getRentalExportLabel = (filters: RentalExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === RENTAL_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Rental Statuses';
+    }
+
+    return filters
+      .map((filter) => {
+        if (filter === 'archive') return 'Archived Rentals';
+        if (filter === 'pending') return 'Pending Rentals';
+        if (filter === 'active') return 'Active Rentals';
+        if (filter === 'for-payment') return 'For Payment';
+        if (filter === 'for-pickup') return 'For Pickup';
+        return 'Pending Returns';
+      })
+      .join(', ');
   };
 
-  const rentalExportOptions: Array<{ value: RentalExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Rentals', count: filteredArchivedRentalCards.length },
-    { value: 'all', label: 'All Rentals', count: filteredAllActiveStatusRentals.length },
-    { value: 'pending', label: 'Pending Rentals', count: filteredPendingRentalCards.length },
-    { value: 'active', label: 'Active Rentals', count: filteredActiveRentalCards.length },
-    { value: 'for-payment', label: 'For Payment', count: filteredForPaymentRentals.length },
-    { value: 'for-pickup', label: 'For Pickup', count: filteredForPickupRentals.length },
-    { value: 'returns', label: 'Pending Returns', count: filteredPendingReturns.length },
+  const rentalExportBranchOptions = ['All Branches', 'Taguig Main', 'BGC Branch', 'Makati Branch', 'Quezon City'];
+  const rentalExportOptions: Array<{ value: RentalExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Rentals', count: getRentalExportItems(['archive'], selectedRentalExportBranch).length },
+    { value: 'pending', label: 'Pending Rentals', count: getRentalExportItems(['pending'], selectedRentalExportBranch).length },
+    { value: 'active', label: 'Active Rentals', count: getRentalExportItems(['active'], selectedRentalExportBranch).length },
+    { value: 'for-payment', label: 'For Payment', count: getRentalExportItems(['for-payment'], selectedRentalExportBranch).length },
+    { value: 'for-pickup', label: 'For Pickup', count: getRentalExportItems(['for-pickup'], selectedRentalExportBranch).length },
+    { value: 'returns', label: 'Pending Returns', count: getRentalExportItems(['returns'], selectedRentalExportBranch).length },
   ];
 
-  const canOpenRentalExportModal = rentalManagementView === 'archive'
-    ? archivedRentalCards.length > 0
-    : rentalExportOptions.some((option) => option.count > 0);
+  const canOpenRentalExportModal = rentalExportOptions.some((option) => option.count > 0);
 
   const openRentalExportModal = () => {
     if (!canExportPdfs) return;
 
-    setRentalExportFilter(rentalManagementView === 'archive' ? 'archive' : rentalViewFilter);
+    setSelectedRentalExportBranch(selectedBranch);
+    setSelectedRentalExportFilters(
+      rentalManagementView === 'archive'
+        ? ['archive']
+        : rentalViewFilter === 'all'
+          ? ['pending', 'active', 'for-payment', 'for-pickup', 'returns']
+          : [rentalViewFilter]
+    );
     setShowRentalExportModal(true);
   };
 
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
-  const handleSaveRentalsAsPdf = (filter: RentalExportFilter) => {
+  const handleSaveRentalsAsPdf = (filters: RentalExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
-    const exportItems = getRentalExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
-    const filterLabel = getRentalExportLabel(filter);
+    const exportItems = getRentalExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
+    const filterLabel = getRentalExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((rental) => {
@@ -2744,7 +4005,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       }
 
       const detailedRental = adminRentals.find((entry) => entry.id === rental.id);
-      const statusValue = filter === 'archive'
+      const statusValue = filters.length === 1 && filters[0] === 'archive'
         ? (rental.status === 'paid_for_confirmation'
             ? 'Paid - For Confirmation'
             : rental.status
@@ -2777,10 +4038,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount']],
       body: rows.length > 0 ? rows : [['-', 'No rental records available for export.', '', '', '', '', '', '']],
       theme: 'grid',
@@ -2801,7 +4063,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-rentals' : `rentals-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-rentals' : 'rentals-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowRentalExportModal(false);
   };
@@ -2860,8 +4122,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const appointmentQuery = appointmentSearchQuery.trim().toLowerCase();
-  const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
-    if (!matchesSelectedBranch(appointment.branch, selectedBranch)) return false;
+  const matchesAppointmentSearchTerm = (appointment: AdminAppointmentDetail) => {
     if (!appointmentQuery) return true;
 
     return [
@@ -2878,6 +4139,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     ]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(appointmentQuery));
+  };
+  const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
+    if (!matchesSelectedBranch(appointment.branch, selectedBranch)) return false;
+    return matchesAppointmentSearchTerm(appointment);
   };
 
   const pendingAppointments = adminAppointments.filter((appointment) => appointment.status === 'pending');
@@ -2900,53 +4165,81 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       ? filteredPendingAppointments
       : filteredScheduledAppointments;
 
-  const getAppointmentExportItems = (filter: AppointmentExportFilter) => {
-    if (filter === 'archive') {
-      return filteredArchivedAppointments.length > 0 ? filteredArchivedAppointments : archivedAppointments;
-    }
-
-    if (filter === 'all') {
-      return filteredAllAppointments;
-    }
-
-    if (filter === 'pending') {
-      return filteredPendingAppointments;
-    }
-
-    return filteredScheduledAppointments;
-  };
-
-  const getAppointmentExportLabel = (filter: AppointmentExportFilter) => {
-    if (filter === 'archive') return 'Archived Appointments';
-    if (filter === 'all') return 'All Appointments';
-    if (filter === 'pending') return 'Pending Appointments';
-    return 'Scheduled Appointments';
-  };
-
-  const appointmentExportOptions: Array<{ value: AppointmentExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Appointments', count: filteredArchivedAppointments.length },
-    { value: 'all', label: 'All Appointments', count: filteredAllAppointments.length },
-    { value: 'pending', label: 'Pending Appointments', count: filteredPendingAppointments.length },
-    { value: 'scheduled', label: 'Scheduled Appointments', count: filteredScheduledAppointments.length },
+  const appointmentExportBranchOptions = [
+    'All Branches',
+    ...Array.from(
+      new Set(
+        adminAppointments
+          .map((appointment) => appointment.branch)
+          .filter((branch): branch is string => Boolean(branch))
+      )
+    ).sort((left, right) => left.localeCompare(right)),
   ];
 
-  const canOpenAppointmentExportModal = appointmentManagementView === 'archive'
-    ? archivedAppointments.length > 0
-    : appointmentExportOptions.some((option) => option.count > 0);
+  const getAppointmentExportItems = (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+    const items: AdminAppointmentDetail[] = [];
+
+    if (filters.includes('archive')) {
+      items.push(...archivedAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    if (filters.includes('pending')) {
+      items.push(...pendingAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    if (filters.includes('scheduled')) {
+      items.push(...scheduledAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    const deduped = new Map<string, AdminAppointmentDetail>();
+    items.forEach((appointment) => {
+      deduped.set(String(appointment.id), appointment);
+    });
+
+    return Array.from(deduped.values());
+  };
+
+  const getAppointmentExportLabel = (filters: AppointmentExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === APPOINTMENT_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Appointment Statuses';
+    }
+
+    return filters.map((filter) => {
+      if (filter === 'archive') return 'Archived Appointments';
+      if (filter === 'pending') return 'Pending Appointments';
+      return 'Scheduled Appointments';
+    }).join(', ');
+  };
+
+  const appointmentExportOptions: Array<{ value: AppointmentExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Appointments', count: getAppointmentExportItems(['archive'], selectedAppointmentExportBranch).length },
+    { value: 'pending', label: 'Pending Appointments', count: getAppointmentExportItems(['pending'], selectedAppointmentExportBranch).length },
+    { value: 'scheduled', label: 'Scheduled Appointments', count: getAppointmentExportItems(['scheduled'], selectedAppointmentExportBranch).length },
+  ];
+
+  const canOpenAppointmentExportModal = appointmentExportOptions.some((option) => option.count > 0);
 
   const openAppointmentExportModal = () => {
     if (!canExportPdfs) return;
 
-    setAppointmentExportFilter(appointmentManagementView === 'archive' ? 'archive' : appointmentStatusFilter);
+    setSelectedAppointmentExportBranch(selectedBranch);
+    setSelectedAppointmentExportFilters(
+      appointmentManagementView === 'archive'
+        ? ['archive']
+        : appointmentStatusFilter === 'all'
+          ? ['pending', 'scheduled']
+          : [appointmentStatusFilter]
+    );
     setShowAppointmentExportModal(true);
   };
 
-  const handleSaveAppointmentsAsPdf = (filter: AppointmentExportFilter) => {
+  const handleSaveAppointmentsAsPdf = (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
-    const exportItems = getAppointmentExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
-    const filterLabel = getAppointmentExportLabel(filter);
+    const exportItems = getAppointmentExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
+    const filterLabel = getAppointmentExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((appointment) => [
@@ -2969,10 +4262,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown']],
       body: rows.length > 0 ? rows : [['-', 'No appointment records available for export.', '', '', '', '', '', '', '', '']],
       theme: 'grid',
@@ -2993,7 +4287,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-appointments' : `appointments-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-appointments' : 'appointments-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowAppointmentExportModal(false);
   };
@@ -3114,104 +4408,112 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return rawValue;
   };
 
-  const getCustomOrderExportItems = (filter: CustomOrderExportFilter) => {
-    const archivedCustomOrders = adminCustomOrders.filter((order) => {
-      const isArchivedOrder = Boolean(order.isArchived);
-      return matchesSelectedBranch(order.branch, selectedBranch) && (isArchivedOrder || order.status === 'rejected');
+  const customOrderMatchesSearchTerm = (order: AdminCustomOrderRecord) => {
+    if (!customOrderQuery) return true;
+
+    return [
+      order.id,
+      order._id,
+      order.referenceId,
+      order.customerName,
+      order.email,
+      order.contactNumber,
+      order.orderType,
+      order.branch,
+      order.status,
+      order.eventDate,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(customOrderQuery));
+  };
+
+  const customOrderExportBranchOptions = [
+    'All Branches',
+    ...Array.from(
+      new Set(
+        adminCustomOrders
+          .map((order) => order.branch)
+          .filter((branch): branch is string => Boolean(branch))
+      )
+    ).sort((left, right) => left.localeCompare(right)),
+  ];
+
+  const getCustomOrderExportItems = (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+    const items: AdminCustomOrderRecord[] = [];
+
+    if (filters.includes('archive')) {
+      items.push(...adminCustomOrders.filter((order) => {
+        const isArchivedOrder = Boolean(order.isArchived);
+        return branchMatches(order.branch)
+          && (isArchivedOrder || order.status === 'rejected')
+          && customOrderMatchesSearchTerm(order);
+      }));
+    }
+
+    CUSTOM_ORDER_FILTER_TABS.forEach((status) => {
+      if (!filters.includes(status)) return;
+
+      items.push(...adminCustomOrders.filter((order) => {
+        const isArchivedOrder = Boolean(order.isArchived);
+        return branchMatches(order.branch)
+          && !isArchivedOrder
+          && order.status !== 'rejected'
+          && order.status === status
+          && customOrderMatchesSearchTerm(order);
+      }));
     });
 
-    return adminCustomOrders.filter((order) => {
-      const isArchivedOrder = Boolean(order.isArchived);
-      if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
+    const deduped = new Map<string, AdminCustomOrderRecord>();
+    items.forEach((order) => {
+      deduped.set(String(order.id || order._id || order.referenceId), order);
+    });
 
-      const matchesStatus = filter === 'archive'
-        ? isArchivedOrder || order.status === 'rejected'
-        : !isArchivedOrder && order.status !== 'rejected' && (
-          filter === 'all' || order.status === filter
-        );
-
-      if (!matchesStatus) return false;
-      if (!customOrderQuery) return true;
-
-      return [
-        order.id,
-        order._id,
-        order.referenceId,
-        order.customerName,
-        order.email,
-        order.contactNumber,
-        order.orderType,
-        order.branch,
-        order.status,
-        order.eventDate,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(customOrderQuery));
-    }).length > 0 || filter !== 'archive'
-      ? adminCustomOrders.filter((order) => {
-          const isArchivedOrder = Boolean(order.isArchived);
-          if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
-
-          const matchesStatus = filter === 'archive'
-            ? isArchivedOrder || order.status === 'rejected'
-            : !isArchivedOrder && order.status !== 'rejected' && (
-              filter === 'all' || order.status === filter
-            );
-
-          if (!matchesStatus) return false;
-          if (!customOrderQuery) return true;
-
-          return [
-            order.id,
-            order._id,
-            order.referenceId,
-            order.customerName,
-            order.email,
-            order.contactNumber,
-            order.orderType,
-            order.branch,
-            order.status,
-            order.eventDate,
-          ]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(customOrderQuery));
-        })
-      : archivedCustomOrders;
+    return Array.from(deduped.values());
   };
 
-  const getCustomOrderExportLabel = (filter: CustomOrderExportFilter) => {
-    if (filter === 'archive') return 'Archived Custom Orders';
-    if (filter === 'all') return 'All Orders';
-    return filter === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(filter);
+  const getCustomOrderExportLabel = (filters: CustomOrderExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === CUSTOM_ORDER_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Bespoke Statuses';
+    }
+
+    return filters.map((filter) => {
+      if (filter === 'archive') return 'Archived Custom Orders';
+      return filter === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(filter);
+    }).join(', ');
   };
 
-  const customOrderExportOptions: Array<{ value: CustomOrderExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Custom Orders', count: getCustomOrderExportItems('archive').length },
-    { value: 'all', label: 'All Orders', count: getCustomOrderExportItems('all').length },
+  const customOrderExportOptions: Array<{ value: CustomOrderExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Custom Orders', count: getCustomOrderExportItems(['archive'], selectedCustomOrderExportBranch).length },
     ...CUSTOM_ORDER_FILTER_TABS.map((status) => ({
-      value: status as CustomOrderExportFilter,
+      value: status as CustomOrderExportSelectableFilter,
       label: status === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(status),
-      count: getCustomOrderExportItems(status).length,
+      count: getCustomOrderExportItems([status], selectedCustomOrderExportBranch).length,
     })),
   ];
 
-  const canOpenCustomOrderExportModal = customOrderManagementView === 'archive'
-    ? adminCustomOrders.some((order) => matchesSelectedBranch(order.branch, selectedBranch) && (Boolean(order.isArchived) || order.status === 'rejected'))
-    : customOrderExportOptions.some((option) => option.count > 0);
+  const canOpenCustomOrderExportModal = customOrderExportOptions.some((option) => option.count > 0);
 
   const openCustomOrderExportModal = () => {
     if (!canExportPdfs) return;
 
-    setCustomOrderExportFilter(customOrderManagementView === 'archive' ? 'archive' : customOrderStatusFilter);
+    setSelectedCustomOrderExportBranch(selectedBranch);
+    setSelectedCustomOrderExportFilters(
+      customOrderManagementView === 'archive'
+        ? ['archive']
+        : customOrderStatusFilter === 'all'
+          ? [...CUSTOM_ORDER_FILTER_TABS]
+          : [customOrderStatusFilter]
+    );
     setShowCustomOrderExportModal(true);
   };
 
-  const handleSaveCustomOrdersAsPdf = (filter: CustomOrderExportFilter) => {
+  const handleSaveCustomOrdersAsPdf = (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
-    const exportItems = getCustomOrderExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
-    const filterLabel = getCustomOrderExportLabel(filter);
+    const exportItems = getCustomOrderExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
+    const filterLabel = getCustomOrderExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((order) => [
@@ -3233,10 +4535,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget']],
       body: rows.length > 0 ? rows : [['-', 'No custom order records available for export.', '', '', '', '', '', '', '']],
       theme: 'grid',
@@ -3257,7 +4560,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-custom-orders' : `custom-orders-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-custom-orders' : 'custom-orders-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowCustomOrderExportModal(false);
   };
@@ -3582,13 +4885,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         {activeTab === 'overview' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-light">Overview</h2>
+              <h2 className="text-2xl font-light">Scheduled Activities</h2>
               {!isCurrentUserStaff && (
                 <div className="flex items-center gap-3">
                   {canExportPdfs && (
                     <button
                       type="button"
-                      onClick={handleSaveOverviewKpisAsPdf}
+                      onClick={openOverviewExportModal}
                       className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
                       aria-label="Save overview KPIs as PDF"
                     >
@@ -3598,34 +4901,26 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   )}
                   <button
                     type="button"
-                    onClick={() => {
-                      void Promise.all([
-                        loadInventory(),
-                        loadUsers(),
-                        loadAdminRentals(),
-                        loadAdminAppointments(),
-                        loadAdminCustomOrders(),
-                        loadBranchPerformance(selectedBranch),
-                      ]);
-                    }}
-                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                    onClick={handleRefreshOverview}
+                    disabled={dashboardRefreshScope === 'overview'}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <RotateCcw className="w-5 h-5" />
-                    Refresh
+                    <RotateCcw className={`w-5 h-5 ${dashboardRefreshScope === 'overview' ? 'animate-spin' : ''}`} />
+                    {dashboardRefreshScope === 'overview' ? 'Refreshing...' : 'Refresh'}
                   </button>
                 </div>
               )}
             </div>
 
             <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:w-full">
+                <div className="sm:flex-1 sm:pr-6">
                   <h3 className="text-2xl font-light text-[#1A1A1A]">Today's Activity</h3>
                   <p className="text-sm text-[#6B5D4F] mt-1">
                     Scheduled rentals, appointments, and custom order sessions for {selectedBranch}.
                   </p>
                 </div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-[#FAF7F0] px-4 py-2 text-sm text-[#6B5D4F] border border-[#E8DCC8]">
+                <div className="inline-flex items-center gap-2 rounded-full bg-[#FAF7F0] px-4 py-2 text-sm text-[#6B5D4F] border border-[#E8DCC8] sm:ml-auto sm:self-start">
                   <Calendar className="w-4 h-4 text-[#D4AF37]" />
                   {todaysActivity.length} scheduled
                 </div>
@@ -3678,6 +4973,34 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
             {!isCurrentUserStaff && (
               <>
+                <div className="border-t border-[#E8DCC8]" aria-hidden="true" />
+
+                <div className="flex items-center justify-between gap-4">
+                  <h2 className="text-2xl font-light text-[#1A1A1A]">Store Overview</h2>
+                  <div className="flex items-center gap-3">
+                    {canExportPdfs && (
+                      <button
+                        type="button"
+                        onClick={openStoreOverviewExportModal}
+                        className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                        aria-label="Save overview KPIs as PDF"
+                      >
+                        <Download className="w-5 h-5" />
+                        Save as PDF
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleRefreshOverview}
+                      disabled={dashboardRefreshScope === 'overview'}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RotateCcw className={`w-5 h-5 ${dashboardRefreshScope === 'overview' ? 'animate-spin' : ''}`} />
+                      {dashboardRefreshScope === 'overview' ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
@@ -3762,85 +5085,168 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 </div>
 
-                {/* Branch Performance */}
+                {/* Revenue Comparison */}
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-                  <h2 className="text-2xl font-light mb-6">Branch Performance</h2>
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div className="flex min-w-0 flex-1 items-start gap-8">
+                      <div className="min-w-0 flex-1">
+                        <h2 className="text-2xl font-light">{branchComparisonMetricLabel} Comparison</h2>
+                        <p className="mt-1 text-sm text-[#6B5D4F]">
+                          {branchComparisonDescription}{selectedBranch === 'All Branches' ? '' : ` for ${selectedBranch}` }.
+                        </p>
+                      </div>
+                      <div className="w-[220px] shrink-0 text-left">
+                        <p className="text-xs uppercase tracking-[0.18em] text-[#9E8E80]">{branchComparisonSummaryLabel}</p>
+                        <p className="mt-1 text-2xl font-light text-[#1A1A1A]">{formatBranchComparisonValue(totalComparedMetric)}</p>
+                      </div>
+                    </div>
+                    <div className="flex w-[220px] shrink-0 justify-end">
+                      <select
+                        aria-label="Select branch comparison metric"
+                        value={branchComparisonMetric}
+                        onChange={(event) => setBranchComparisonMetric(event.target.value as BranchComparisonMetric)}
+                        className="min-w-[180px] rounded-lg border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#1A1A1A] focus:outline-none focus:border-[#D4AF37]"
+                      >
+                        {branchComparisonMetricOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                   {branchPerformanceError && (
                     <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                       {branchPerformanceError}
                     </div>
                   )}
                   {branchPerformanceLoading && (
-                    <div className="mb-4 text-sm text-[#6B5D4F]">Loading branch performance...</div>
+                    <div className="mb-4 text-sm text-[#6B5D4F]">Loading {branchComparisonMetricLabel.toLowerCase()} comparison...</div>
                   )}
-                  <div className="space-y-6">
-                    {branchStats.map((branch) => (
-                      <div key={branch.branch} className="pt-1">
-                        <div className="flex items-center justify-between mb-5">
-                          <div className="flex items-center gap-2">
-                            <MapPin className="w-5 h-5 text-[#6B5D4F]" />
-                            <h3 className="font-medium">{branch.branch}</h3>
-                          </div>
-                          <span className="text-xl font-light">₱{branch.inventoryValue.toLocaleString()}</span>
+                  <div className="mb-[20px] rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {!branchPerformanceLoading && branchComparisonData.length > 0 && (
+                      <>
+                        <div className="h-[320px] w-full">
+                          <Bar data={revenueComparisonChartData} options={revenueComparisonChartOptions} />
                         </div>
-
-                        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Total Products</p>
-                            <p className="font-medium">{branch.totalProducts}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Available</p>
-                            <p className="font-medium text-green-600">{branch.availableProducts}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Rented</p>
-                            <p className="font-medium text-blue-600">{branch.rentedProducts}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Low Stock</p>
-                            <p className="font-medium text-amber-600">{branch.lowStockItems}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Out of Stock</p>
-                            <p className="font-medium text-red-600">{branch.outOfStockItems}</p>
-                          </div>
-
-                          <div className="hidden sm:block bg-transparent rounded-2xl border border-dashed border-[#EDE1CE] px-4 py-4 md:px-5 md:py-5" aria-hidden="true" />
+                        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          {branchComparisonData.map((entry) => (
+                            <div key={entry.fullBranch} className="rounded-2xl border border-[#E8DCC8] bg-white px-4 py-4">
+                              <p className="text-sm text-[#6B5D4F]">{entry.fullBranch}</p>
+                              <p className="mt-1 text-lg font-light text-[#1A1A1A]">{formatBranchComparisonValue(entry.value)}</p>
+                            </div>
+                          ))}
                         </div>
-
-                        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Items Sold</p>
-                            <p className="font-medium">{branch.totalItemsSold}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Turnover Rate</p>
-                            <p className="font-medium">{branch.inventoryTurnoverRate}</p>
-                          </div>
-                          <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                            <p className="text-[#6B5D4F]">Inventory Health</p>
-                            <p className={`font-medium ${
-                              branch.outOfStockItems > 0
-                                ? 'text-red-600'
-                                : branch.lowStockItems > 0
-                                  ? 'text-amber-600'
-                                  : 'text-green-600'
-                            }`}>
-                              {branch.outOfStockItems > 0
-                                ? 'At Risk'
-                                : branch.lowStockItems > 0
-                                  ? 'Watch'
-                                  : 'Healthy'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                    {!branchPerformanceLoading && branchStats.length === 0 && (
-                      <p className="text-sm text-[#6B5D4F]">No branch inventory data available.</p>
+                      </>
+                    )}
+                    {!branchPerformanceLoading && branchComparisonData.length === 0 && (
+                      <p className="text-sm text-[#6B5D4F]">{branchComparisonEmptyLabel}</p>
                     )}
                   </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Items per Category</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Total active inventory items in each category.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {itemsPerCategory.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={itemsPerCategoryChartData} options={itemsPerCategoryChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No inventory category data is available for the selected branch yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Most Rented Items</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Top five rented items based on completed rentals.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {mostRentedItems.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={mostRentedItemsChartData} options={mostRentedItemsChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No completed rental data is available for the most rented items chart yet.</p>
+                    )}
+                  </div>
+                  {mostRentedItems.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-3" style={{ marginTop: '20px' }}>
+                      <p className="text-sm font-medium text-[#6B5D4F]">View Items:</p>
+                      <div className="flex flex-wrap gap-3" style={{ marginLeft: '12px' }}>
+                        {mostRentedItems.map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => {
+                              if (item.inventoryItem) {
+                                setHoverPreviewItem(item.inventoryItem);
+                              }
+                            }}
+                            disabled={!item.inventoryItem}
+                            className="rounded-full border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#3D2B1F] transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0] disabled:cursor-default disabled:opacity-60"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Least Rented Items</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Bottom five rented items based on completed rentals.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {leastRentedItems.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={leastRentedItemsChartData} options={leastRentedItemsChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No completed rental data is available for the least rented items chart yet.</p>
+                    )}
+                  </div>
+                  {leastRentedItems.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-3" style={{ marginTop: '20px' }}>
+                      <p className="text-sm font-medium text-[#6B5D4F]">View Items:</p>
+                      <div className="flex flex-wrap gap-3" style={{ marginLeft: '12px' }}>
+                        {leastRentedItems.map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => {
+                              if (item.inventoryItem) {
+                                setHoverPreviewItem(item.inventoryItem);
+                              }
+                            }}
+                            disabled={!item.inventoryItem}
+                            className="rounded-full border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#3D2B1F] transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0] disabled:cursor-default disabled:opacity-60"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -3909,10 +5315,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
               />
             </div>
-
-            <p className="text-sm text-[#6B5D4F]">
-              Use the eye icon in Actions to view a product's details.
-            </p>
 
             <div className="text-sm text-[#6B5D4F]">
               Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'gown' : 'gowns'}
@@ -4076,10 +5478,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </button>
                   )}
                 <button
+                  type="button"
                   onClick={handleRefreshAdminRentals}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                  disabled={dashboardRefreshScope === 'rentals'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'rentals' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setRentalManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -4749,47 +6153,232 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           />
         )}
 
+        {showOverviewExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose scheduled activity filters for PDF export"
+            onClick={() => setShowOverviewExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Today's Activities as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose which branch and activity type to include in the exported PDF.
+              </p>
+
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="overview-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
+                  </label>
+                  <select
+                    id="overview-export-branch-filter"
+                    value={overviewExportBranchFilter}
+                    onChange={(event) => setOverviewExportBranchFilter(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {['All Branches', ...overviewExportBranchOptions].map((branchOption) => {
+                      const count = getOverviewExportItems(branchOption, overviewExportTypeFilter).length;
+
+                      return (
+                        <option key={branchOption} value={branchOption}>
+                          {`${branchOption} (${count})`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Type</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more activity types.</p>
+                  <div className="space-y-3">
+                    {overviewExportTypeOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          overviewExportTypeFilter.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`overview-export-type-filter-${option.value}`}
+                            value={option.value}
+                            checked={overviewExportTypeFilter.includes(option.value)}
+                            onChange={() => setOverviewExportTypeFilter((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowOverviewExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveOverviewKpisAsPdf}
+                  disabled={!canExportPdfs || overviewExportItems.length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showStoreOverviewExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose store overview branches for PDF export"
+            onClick={() => setShowStoreOverviewExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Store Overview as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose one or more branches to include in the exported PDF.
+              </p>
+
+              <div className="space-y-3 mb-6">
+                {['All Branches', ...storeOverviewExportBranchOptions].map((branchOption) => (
+                  <label
+                    key={branchOption}
+                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                      selectedStoreOverviewExportBranches.includes(branchOption)
+                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      name={`store-overview-export-branch-${branchOption}`}
+                      value={branchOption}
+                      checked={selectedStoreOverviewExportBranches.includes(branchOption)}
+                      onChange={() => toggleStoreOverviewExportBranch(branchOption)}
+                      className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                    />
+                    <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowStoreOverviewExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveStoreOverviewAsPdf}
+                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showRentalExportModal && (
           <div
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose rental status filter for PDF export"
+            aria-label="Choose rental export filters for PDF export"
             onClick={() => setShowRentalExportModal(false)}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="text-xl sm:text-2xl font-light mb-2">Save Rentals as PDF</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which rental status filter to include in the exported PDF.
+                Choose which branch and rental statuses to include in the exported PDF.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {rentalExportOptions.map((option) => (
-                  <label
-                    key={option.value}
-                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                      rentalExportFilter === option.value
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="rental-export-filter"
-                        value={option.value}
-                        checked={rentalExportFilter === option.value}
-                        onChange={() => setRentalExportFilter(option.value)}
-                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                      />
-                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                    </div>
-                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="rental-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
                   </label>
-                ))}
+                  <select
+                    id="rental-export-branch-filter"
+                    value={selectedRentalExportBranch}
+                    onChange={(event) => setSelectedRentalExportBranch(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {rentalExportBranchOptions.map((branchOption) => (
+                      <option key={branchOption} value={branchOption}>
+                        {branchOption}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more rental statuses.</p>
+                  <div className="space-y-3">
+                    {rentalExportOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          selectedRentalExportFilters.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`rental-export-filter-${option.value}`}
+                            value={option.value}
+                            checked={selectedRentalExportFilters.includes(option.value)}
+                            onChange={() => setSelectedRentalExportFilters((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -4802,8 +6391,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSaveRentalsAsPdf(rentalExportFilter)}
-                  disabled={!canExportPdfs || getRentalExportItems(rentalExportFilter).length === 0}
+                  onClick={() => handleSaveRentalsAsPdf(selectedRentalExportFilters, selectedRentalExportBranch)}
+                  disabled={!canExportPdfs || getRentalExportItems(selectedRentalExportFilters, selectedRentalExportBranch).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -4831,10 +6420,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={handleRefreshAdminAppointments}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                  disabled={dashboardRefreshScope === 'appointments'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'appointments' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setAppointmentManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -5125,42 +6716,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose appointment status filter for PDF export"
+            aria-label="Choose appointment export filters for PDF export"
             onClick={() => setShowAppointmentExportModal(false)}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="text-xl sm:text-2xl font-light mb-2">Save Appointments as PDF</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which appointment status filter to include in the exported PDF.
+                Choose which branch and appointment statuses to include in the exported PDF.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {appointmentExportOptions.map((option) => (
-                  <label
-                    key={option.value}
-                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                      appointmentExportFilter === option.value
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="appointment-export-filter"
-                        value={option.value}
-                        checked={appointmentExportFilter === option.value}
-                        onChange={() => setAppointmentExportFilter(option.value)}
-                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                      />
-                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                    </div>
-                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="appointment-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
                   </label>
-                ))}
+                  <select
+                    id="appointment-export-branch-filter"
+                    value={selectedAppointmentExportBranch}
+                    onChange={(event) => setSelectedAppointmentExportBranch(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {appointmentExportBranchOptions.map((branchOption) => (
+                      <option key={branchOption} value={branchOption}>
+                        {branchOption}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more appointment statuses.</p>
+                  <div className="space-y-3">
+                    {appointmentExportOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          selectedAppointmentExportFilters.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`appointment-export-filter-${option.value}`}
+                            value={option.value}
+                            checked={selectedAppointmentExportFilters.includes(option.value)}
+                            onChange={() => setSelectedAppointmentExportFilters((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -5173,8 +6792,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSaveAppointmentsAsPdf(appointmentExportFilter)}
-                  disabled={!canExportPdfs || getAppointmentExportItems(appointmentExportFilter).length === 0}
+                  onClick={() => handleSaveAppointmentsAsPdf(selectedAppointmentExportFilters, selectedAppointmentExportBranch)}
+                  disabled={!canExportPdfs || getAppointmentExportItems(selectedAppointmentExportFilters, selectedAppointmentExportBranch).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -5202,10 +6821,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
+                  type="button"
                   onClick={handleRefreshAdminCustomOrders}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
+                  disabled={dashboardRefreshScope === 'bespoke'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'bespoke' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setCustomOrderManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -5263,42 +6884,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Choose custom order status filter for PDF export"
+                aria-label="Choose bespoke export filters for PDF export"
                 onClick={() => setShowCustomOrderExportModal(false)}
               >
                 <div
-                  className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+                  className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
                   onClick={(event) => event.stopPropagation()}
                 >
                   <h3 className="text-xl sm:text-2xl font-light mb-2">Save Custom Orders as PDF</h3>
                   <p className="text-sm text-[#6B5D4F] mb-6">
-                    Choose which bespoke status filter to include in the exported PDF.
+                    Choose which branch and bespoke statuses to include in the exported PDF.
                   </p>
 
-                  <div className="space-y-3 mb-6">
-                    {customOrderExportOptions.map((option) => (
-                      <label
-                        key={option.value}
-                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                          customOrderExportFilter === option.value
-                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="radio"
-                            name="custom-order-export-filter"
-                            value={option.value}
-                            checked={customOrderExportFilter === option.value}
-                            onChange={() => setCustomOrderExportFilter(option.value)}
-                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                          />
-                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                        </div>
-                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                  <div className="space-y-6 mb-6">
+                    <div>
+                      <label htmlFor="custom-order-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                        Branch
                       </label>
-                    ))}
+                      <select
+                        id="custom-order-export-branch-filter"
+                        value={selectedCustomOrderExportBranch}
+                        onChange={(event) => setSelectedCustomOrderExportBranch(event.target.value)}
+                        className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                      >
+                        {customOrderExportBranchOptions.map((branchOption) => (
+                          <option key={branchOption} value={branchOption}>
+                            {branchOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                      <p className="text-xs text-[#6B5D4F] mb-3">Select one or more bespoke statuses.</p>
+                      <div className="space-y-3">
+                        {customOrderExportOptions.map((option) => (
+                          <label
+                            key={option.value}
+                            className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                              selectedCustomOrderExportFilters.includes(option.value)
+                                ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                                : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="checkbox"
+                                name={`custom-order-export-filter-${option.value}`}
+                                value={option.value}
+                                checked={selectedCustomOrderExportFilters.includes(option.value)}
+                                onChange={() => setSelectedCustomOrderExportFilters((current) => (
+                                  current.includes(option.value)
+                                    ? current.filter((value) => value !== option.value)
+                                    : [...current, option.value]
+                                ))}
+                                className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                              />
+                              <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                            </div>
+                            <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-row items-center gap-3">
@@ -5311,8 +6960,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleSaveCustomOrdersAsPdf(customOrderExportFilter)}
-                      disabled={!canExportPdfs || getCustomOrderExportItems(customOrderExportFilter).length === 0}
+                      onClick={() => handleSaveCustomOrdersAsPdf(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch)}
+                      disabled={!canExportPdfs || getCustomOrderExportItems(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch).length === 0}
                       className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Save PDF
@@ -5469,10 +7118,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
-                  onClick={loadUsers}
-                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
+                  type="button"
+                  onClick={handleRefreshUsers}
+                  disabled={dashboardRefreshScope === 'users'}
+                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'users' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setShowArchivedUsersOnly((prev) => !prev)}
@@ -5764,10 +7415,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
-                  onClick={loadAdminHistory}
-                  className={`${adminHistoryActionButtonClass} py-2`}
+                  type="button"
+                  onClick={handleRefreshAdminHistory}
+                  disabled={dashboardRefreshScope === 'history'}
+                  className={`${adminHistoryActionButtonClass} py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'history' ? 'Refreshing...' : 'Refresh'}
                 </button>
               </div>
             </div>
