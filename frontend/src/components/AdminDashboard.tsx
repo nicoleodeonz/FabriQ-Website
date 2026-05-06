@@ -120,6 +120,7 @@ const APPOINTMENT_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'scheduled'] as
 const RENTAL_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'active', 'for-payment', 'for-pickup', 'returns'] as const satisfies RentalExportSelectableFilter[];
 
 const INVENTORY_PAGE_SIZE = 8;
+const OVERVIEW_ACTIVITY_PAGE_SIZE = 8;
 const APPOINTMENT_PAGE_SIZE = 3;
 const RENTAL_PAGE_SIZE = 5;
 const RENTAL_LATE_FEE_PER_DAY = 200;
@@ -259,6 +260,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
   const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
+  const [overviewActivityPage, setOverviewActivityPage] = useState(1);
   const [branchComparisonMetric, setBranchComparisonMetric] = useState<BranchComparisonMetric>('revenue');
 
   const setActiveTabWithHash = (tab: AdminTab, history: 'push' | 'replace' = 'push') => {
@@ -1990,6 +1992,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return left.title.localeCompare(right.title);
   });
   const todaysActivity = allTodaysActivity.filter((activity) => matchesSelectedBranch(activity.branch, selectedBranch));
+  const todaysActivityTotalPages = Math.max(1, Math.ceil(todaysActivity.length / OVERVIEW_ACTIVITY_PAGE_SIZE));
+  const safeOverviewActivityPage = Math.min(overviewActivityPage, todaysActivityTotalPages);
+  const paginatedTodaysActivity = todaysActivity.slice(
+    (safeOverviewActivityPage - 1) * OVERVIEW_ACTIVITY_PAGE_SIZE,
+    safeOverviewActivityPage * OVERVIEW_ACTIVITY_PAGE_SIZE,
+  );
   const overviewExportBranchOptions = Array.from(new Set(allTodaysActivity.map((activity) => activity.branch))).sort((left, right) => left.localeCompare(right));
   const getOverviewExportItems = (branchFilter: string, typeFilter: OverviewExportTypeFilter[]) => (
     allTodaysActivity.filter((activity) => {
@@ -2050,6 +2058,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const storeOverviewBranchFilterLabel = selectedStoreOverviewExportBranches.includes('All Branches')
     ? 'All Branches'
     : selectedStoreOverviewExportBranches.join(', ');
+  useEffect(() => {
+    setOverviewActivityPage(1);
+  }, [selectedBranch]);
   const totalSales = adminRentals
     .filter((rental) => completedRentalStatuses.includes(rental.status))
     .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
@@ -4947,7 +4958,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#E8DCC8] bg-white">
-                        {todaysActivity.map((activity) => {
+                        {paginatedTodaysActivity.map((activity) => {
                           return (
                             <tr key={activity.id} className="hover:bg-[#FAF7F0] transition-colors align-top">
                               <td className="px-6 py-4 text-sm text-[#3D2B1F] whitespace-nowrap">
@@ -4965,6 +4976,29 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         })}
                       </tbody>
                       </table>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 border-t border-[#E8DCC8] px-6 py-4">
+                      <p className="text-sm text-[#6B5D4F]">
+                        Page {safeOverviewActivityPage} of {todaysActivityTotalPages}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setOverviewActivityPage(Math.max(1, safeOverviewActivityPage - 1))}
+                          disabled={safeOverviewActivityPage === 1}
+                          className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOverviewActivityPage(Math.min(todaysActivityTotalPages, safeOverviewActivityPage + 1))}
+                          disabled={safeOverviewActivityPage === todaysActivityTotalPages}
+                          className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Next
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -5317,7 +5351,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             </div>
 
             <div className="text-sm text-[#6B5D4F]">
-              Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'gown' : 'gowns'}
+              Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'item' : 'items'}
             </div>
 
             {inventoryError && (
@@ -7590,7 +7624,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               <div className="space-y-6">
                 <div className="grid md:grid-cols-2 gap-6">
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Gown Name *</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Item Name *</label>
                     <input
                       type="text"
                       required={!editingItem}
