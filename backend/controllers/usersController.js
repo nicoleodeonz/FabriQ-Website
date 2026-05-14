@@ -2,6 +2,7 @@ import AdminAccount from '../models/Admin.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
 import StaffAccount from '../models/Staff.js';
+import { sendAccountCredentialsEmail } from '../services/emailService.js';
 import {
   getElevatedAccountModel,
   isElevatedRole,
@@ -82,6 +83,14 @@ async function logAdminAction(req, payload) {
   }
 }
 
+async function rollbackCreatedUser(Model, userId) {
+  try {
+    await Model.findByIdAndDelete(userId);
+  } catch (error) {
+    console.error('rollbackCreatedUser error:', error);
+  }
+}
+
 export async function createUser(req, res) {
   try {
     if (!isElevatedRole(req.user.role)) {
@@ -159,6 +168,18 @@ export async function createUser(req, res) {
       });
 
       const roleLabel = toManagedRoleLabel(normalizedRole);
+      const credentialsEmailResult = await sendAccountCredentialsEmail({
+        email: elevatedAccount.email,
+        name: buildElevatedDisplayName(elevatedAccount, normalizedRole, elevatedAccount.email),
+        temporaryPassword: resolvedPassword,
+        role: roleLabel,
+        preferredBranch: normalizedPreferredBranch,
+      });
+
+      if (!credentialsEmailResult?.delivered) {
+        await rollbackCreatedUser(Model, elevatedAccount._id);
+        return res.status(502).json({ message: 'Unable to send account credentials email. User was not created.' });
+      }
 
       await logAdminAction(req, {
         action: 'user_created',
@@ -168,13 +189,12 @@ export async function createUser(req, res) {
           createdRole: roleLabel,
           email: elevatedAccount.email,
           ...(normalizedRole === 'staff' ? { preferredBranch: normalizedPreferredBranch } : {}),
-          temporaryPassword: resolvedPassword
+          credentialsSent: true
         }
       });
 
       return res.status(201).json({
         message: `${roleLabel} account created successfully`,
-        temporaryPassword: resolvedPassword,
         user: {
           id: String(elevatedAccount._id),
           firstName: elevatedAccount.firstName,
@@ -213,6 +233,19 @@ export async function createUser(req, res) {
       status: 'active'
     });
 
+    const credentialsEmailResult = await sendAccountCredentialsEmail({
+      email: customer.email,
+      name: `${customer.firstName} ${customer.lastName}`.trim(),
+      temporaryPassword: resolvedPassword,
+      role: 'Customer',
+      preferredBranch: customer.preferredBranch,
+    });
+
+    if (!credentialsEmailResult?.delivered) {
+      await rollbackCreatedUser(CustomerAccount, customer._id);
+      return res.status(502).json({ message: 'Unable to send account credentials email. User was not created.' });
+    }
+
     await logAdminAction(req, {
       action: 'user_created',
       targetUserId: String(customer._id),
@@ -220,13 +253,12 @@ export async function createUser(req, res) {
       details: {
         createdRole: 'Customer',
         email: customer.email,
-        temporaryPassword: resolvedPassword
+        credentialsSent: true
       }
     });
 
     return res.status(201).json({
       message: 'Customer account created successfully',
-      temporaryPassword: resolvedPassword,
       user: {
         id: String(customer._id),
         firstName: customer.firstName,
@@ -445,6 +477,10 @@ export async function getAdminActions(req, res) {
   try {
     if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
+    }
+
+    if (String(req.user.role || '').trim().toLowerCase() !== 'admin') {
+      return res.status(403).json({ message: 'Only admin accounts can access admin history' });
     }
 
     const actions = await AdminAction.find({}, {

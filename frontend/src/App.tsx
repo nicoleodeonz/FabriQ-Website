@@ -89,6 +89,7 @@ type CurrentUser = {
   lastName: string;
   email: string;
   role: string;
+  preferredBranch?: string;
   phoneNumber?: string;
   phoneVerified?: boolean;
   phoneVerifiedAt?: string | null;
@@ -114,6 +115,7 @@ function readStoredAuth() {
       lastName: String(parsedUser.lastName || '').trim(),
       email: String(parsedUser.email || '').trim(),
       role: String(parsedUser.role || '').trim(),
+      preferredBranch: parsedUser.preferredBranch ? String(parsedUser.preferredBranch).trim() : undefined,
       phoneNumber: parsedUser.phoneNumber ? String(parsedUser.phoneNumber).trim() : undefined,
       phoneVerified: Boolean(parsedUser.phoneVerified),
       phoneVerifiedAt: parsedUser.phoneVerifiedAt ? String(parsedUser.phoneVerifiedAt) : null,

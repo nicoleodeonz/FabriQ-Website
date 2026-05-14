@@ -1,6 +1,8 @@
 import express from 'express';
 import {
 	signUp,
+	sendSignUpPhoneVerificationCode,
+	verifySignUpPhoneVerificationCode,
 	verifySignUp,
 	login,
 	logout,
@@ -23,6 +25,8 @@ function methodNotAllowed(res, allowedMethod) {
 
 router.get('/signup', (req, res) => methodNotAllowed(res, 'POST'));
 router.post('/signup', signUp);
+router.post('/signup/phone/send', sendSignUpPhoneVerificationCode);
+router.post('/signup/phone/verify', verifySignUpPhoneVerificationCode);
 router.post('/signup/verify', verifySignUp);
 router.post('/login', login);
 router.post('/logout', authenticate, logout);

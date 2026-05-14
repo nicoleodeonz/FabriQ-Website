@@ -7,10 +7,16 @@ import StaffAccount from '../models/Staff.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
 import { sendVerificationAcrossChannels } from '../services/messageDeliveryService.js';
+import {
+  isSmsConfigError,
+  isSmsPhoneNumberError,
+  sendPhoneVerificationCode,
+} from '../services/smsService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const SIGNUP_CODE_TTL_MS = 24 * 60 * 60 * 1000;
+const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 const RESET_CODE_TTL_MS = 15 * 60 * 1000;
 const IS_PRODUCTION = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
 
@@ -101,6 +107,52 @@ function buildElevatedDisplayName(user, role = 'admin') {
   return `${fallbackFirstName} ${fallbackLastName}`.trim();
 }
 
+function clearPhoneVerificationCode(account) {
+  account.phoneVerificationCodeHash = null;
+  account.phoneVerificationExpiresAt = null;
+  account.phoneVerificationSentAt = null;
+}
+
+function clearPhoneVerificationState(account) {
+  account.phoneVerified = false;
+  account.phoneVerifiedAt = null;
+  clearPhoneVerificationCode(account);
+}
+
+function mapSmsVerificationError(error) {
+  if (isSmsConfigError(error)) {
+    const missingKeys = Array.isArray(error?.missingKeys) ? error.missingKeys.join(', ') : '';
+
+    return {
+      status: 503,
+      message: missingKeys
+        ? `SMS verification is not configured on the server yet. Missing or placeholder values: ${missingKeys}.`
+        : 'SMS verification is not configured on the server yet.',
+    };
+  }
+
+  const status = Number(error?.status || 0);
+  const code = Number(error?.code || 0);
+
+  if (status === 429) {
+    return { status: 429, message: 'Too many verification attempts. Please wait before trying again.' };
+  }
+
+  if (isSmsPhoneNumberError(error)) {
+    return { status: 400, message: 'The mobile number is not valid for SMS delivery.' };
+  }
+
+  if (status >= 400 && status < 500) {
+    return { status, message: 'SMS delivery failed. Please verify the mobile number and try again.' };
+  }
+
+  if (code === 60200 || code === 60202 || code === 20404) {
+    return { status: 400, message: 'Invalid or expired verification code.' };
+  }
+
+  return { status: 500, message: 'Phone verification failed. Please try again.' };
+}
+
 function getElevatedProfile(user, role) {
   const normalizedRole = String(role || '').toLowerCase();
   const fallbackFirstName = buildAdminName(user?.email);
@@ -154,6 +206,225 @@ const normalizePhone = (input) => {
   return '+63' + s;
 };
 
+async function validatePendingCustomerEligibility(normalizedEmail, existingCustomerAccount = null) {
+  const existingElevated = await Promise.all([
+    AdminAccount.findOne({ email: normalizedEmail }).lean(),
+    StaffAccount.findOne({ email: normalizedEmail }).lean(),
+  ]);
+
+  if (existingElevated[0] || existingElevated[1]) {
+    return { status: 409, message: 'Account already exists. Please log in instead.' };
+  }
+
+  if (existingCustomerAccount && existingCustomerAccount.status !== 'pending_verification') {
+    return { status: 409, message: 'Account already exists. Please log in instead.' };
+  }
+
+  return null;
+}
+
+async function ensureUniqueCustomerPhone(normalizedPhone, excludedCustomerId = null) {
+  if (!normalizedPhone) {
+    return null;
+  }
+
+  const existingPhone = await CustomerAccount.findOne({
+    phoneNumber: normalizedPhone,
+    ...(excludedCustomerId ? { _id: { $ne: excludedCustomerId } } : {}),
+  }).lean();
+
+  if (existingPhone) {
+    return { status: 409, message: 'This phone number is already registered.' };
+  }
+
+  return null;
+}
+
+async function buildPendingCustomerFromSignup({ firstName, lastName, email, password, phoneNumber }) {
+  if (!firstName || !lastName || !email || !password || !String(phoneNumber || '').trim()) {
+    return { error: { status: 400, message: 'Missing required fields.' } };
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+  const passwordErrors = buildStrongPasswordErrors(password);
+  if (passwordErrors.length > 0) {
+    return {
+      error: {
+        status: 400,
+        message: 'Password does not meet the required strength rules.',
+        errors: passwordErrors,
+      },
+    };
+  }
+
+  const normalizedPhone = normalizePhone(phoneNumber);
+  if (!normalizedPhone) {
+    return { error: { status: 400, message: 'Invalid phone number format. Must be 10 digits.' } };
+  }
+  if (!normalizedPhone.startsWith('+639')) {
+    return { error: { status: 400, message: 'Phone number must start with 9.' } };
+  }
+
+  const existingCustomerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
+  const eligibilityError = await validatePendingCustomerEligibility(normalizedEmail, existingCustomerAccount);
+  if (eligibilityError) {
+    return { error: eligibilityError };
+  }
+
+  const phoneConflict = await ensureUniqueCustomerPhone(
+    normalizedPhone,
+    existingCustomerAccount ? existingCustomerAccount._id : null,
+  );
+  if (phoneConflict) {
+    return { error: phoneConflict };
+  }
+
+  const customerAccount = existingCustomerAccount || new CustomerAccount({
+    email: normalizedEmail,
+    preferredBranch: 'Taguig Main - Cadena de Amor',
+    address: ''
+  });
+
+  const previousPhoneNumber = String(customerAccount.phoneNumber || '').trim();
+
+  customerAccount.firstName = firstName.trim();
+  customerAccount.lastName = lastName.trim();
+  customerAccount.password = password;
+  customerAccount.status = 'pending_verification';
+  customerAccount.phoneNumber = normalizedPhone || undefined;
+
+  if (!normalizedPhone) {
+    clearPhoneVerificationState(customerAccount);
+  } else if (previousPhoneNumber !== normalizedPhone) {
+    clearPhoneVerificationState(customerAccount);
+  }
+
+  return {
+    customerAccount,
+    existingCustomerAccount,
+    normalizedEmail,
+    normalizedPhone,
+  };
+}
+
+export const sendSignUpPhoneVerificationCode = async (req, res) => {
+  try {
+    const { firstName, lastName, email, password, phoneNumber } = req.body;
+
+    const pendingResult = await buildPendingCustomerFromSignup({
+      firstName,
+      lastName,
+      email,
+      password,
+      phoneNumber,
+    });
+
+    if (pendingResult.error) {
+      const { status, message, errors } = pendingResult.error;
+      return res.status(status).json(errors ? { message, errors } : { message });
+    }
+
+    const { customerAccount, normalizedPhone } = pendingResult;
+
+    if (!normalizedPhone) {
+      return res.status(400).json({ message: 'Enter a valid mobile number before requesting verification.' });
+    }
+
+    if (customerAccount.phoneVerified) {
+      return res.json({
+        message: 'This mobile number is already verified.',
+        phoneNumber: normalizedPhone,
+        verified: true,
+      });
+    }
+
+    const code = generateCode();
+    customerAccount.phoneVerificationCodeHash = hashCode(code);
+    customerAccount.phoneVerificationExpiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
+    customerAccount.phoneVerificationSentAt = new Date();
+    await customerAccount.save();
+
+    try {
+      await sendPhoneVerificationCode(normalizedPhone, code);
+    } catch (error) {
+      clearPhoneVerificationCode(customerAccount);
+      await customerAccount.save();
+      throw error;
+    }
+
+    return res.json({
+      message: 'Verification code sent successfully.',
+      phoneNumber: normalizedPhone,
+      verified: false,
+    });
+  } catch (error) {
+    console.error('sendSignUpPhoneVerificationCode error:', error);
+    const mappedError = mapSmsVerificationError(error);
+    return res.status(mappedError.status).json({ message: mappedError.message });
+  }
+};
+
+export const verifySignUpPhoneVerificationCode = async (req, res) => {
+  try {
+    const normalizedEmail = normalizeEmail(req.body?.email);
+    const code = String(req.body?.code || '').trim();
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    if (!/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: 'Enter a valid 6-digit verification code.' });
+    }
+
+    const customerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
+    if (!customerAccount || customerAccount.status !== 'pending_verification') {
+      return res.status(404).json({ message: 'No pending signup was found for this email.' });
+    }
+
+    if (!customerAccount.phoneNumber) {
+      return res.status(400).json({ message: 'Add a mobile number before verifying it.' });
+    }
+
+    if (customerAccount.phoneVerified) {
+      return res.json({
+        message: 'This mobile number is already verified.',
+        phoneNumber: customerAccount.phoneNumber,
+        verified: true,
+      });
+    }
+
+    if (!customerAccount.phoneVerificationCodeHash || !customerAccount.phoneVerificationExpiresAt) {
+      return res.status(400).json({ message: 'Request a verification code before verifying your mobile number.' });
+    }
+
+    if (new Date(customerAccount.phoneVerificationExpiresAt).getTime() < Date.now()) {
+      clearPhoneVerificationCode(customerAccount);
+      await customerAccount.save();
+      return res.status(400).json({ message: 'Invalid or expired verification code.' });
+    }
+
+    if (hashCode(code) !== customerAccount.phoneVerificationCodeHash) {
+      return res.status(400).json({ message: 'Invalid or expired verification code.' });
+    }
+
+    customerAccount.phoneVerified = true;
+    customerAccount.phoneVerifiedAt = new Date();
+    clearPhoneVerificationCode(customerAccount);
+    await customerAccount.save();
+
+    return res.json({
+      message: 'Mobile number verified successfully.',
+      phoneNumber: customerAccount.phoneNumber,
+      verified: true,
+    });
+  } catch (error) {
+    console.error('verifySignUpPhoneVerificationCode error:', error);
+    const mappedError = mapSmsVerificationError(error);
+    return res.status(mappedError.status).json({ message: mappedError.message });
+  }
+};
+
 const generateToken = (user) => {
   // Accept both Mongoose documents (with _id) and plain objects (with id)
   const id = user._id || user.id;
@@ -173,68 +444,33 @@ export const signUp = async (req, res) => {
   try {
     const { firstName, lastName, email, password, phoneNumber } = req.body;
 
-    if (!firstName || !lastName || !email || !password) {
-      return res.status(400).json({ message: 'Missing required fields.' });
+    const pendingResult = await buildPendingCustomerFromSignup({
+      firstName,
+      lastName,
+      email,
+      password,
+      phoneNumber,
+    });
+
+    if (pendingResult.error) {
+      const { status, message, errors } = pendingResult.error;
+      return res.status(status).json(errors ? { message, errors } : { message });
     }
 
-    const normalizedEmail = normalizeEmail(email);
-    const passwordErrors = buildStrongPasswordErrors(password);
-    if (passwordErrors.length > 0) {
-      return res.status(400).json({
-        message: 'Password does not meet the required strength rules.',
-        errors: passwordErrors,
-      });
-    }
+    const {
+      customerAccount,
+      normalizedEmail,
+      normalizedPhone,
+    } = pendingResult;
 
-    const existingElevated = await Promise.all([
-      AdminAccount.findOne({ email: normalizedEmail }).lean(),
-      StaffAccount.findOne({ email: normalizedEmail }).lean(),
-    ]);
-
-    if (existingElevated[0] || existingElevated[1]) {
-      return res.status(409).json({ message: 'Account already exists. Please log in instead.' });
-    }
-
-    const existingCustomerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
-    if (existingCustomerAccount && existingCustomerAccount.status !== 'pending_verification') {
-      return res.status(409).json({ message: 'Account already exists. Please log in instead.' });
-    }
-
-    // Normalize and validate phone number
-    let normalizedPhone;
-    if (phoneNumber) {
-      normalizedPhone = normalizePhone(phoneNumber);
-      if (!normalizedPhone) {
-        return res.status(400).json({ message: 'Invalid phone number format. Must be 10 digits.' });
-      }
-      if (!normalizedPhone.startsWith('+639')) {
-        return res.status(400).json({ message: 'Phone number must start with 9.' });
-      }
-
-      const existingPhone = await CustomerAccount.findOne({
-        phoneNumber: normalizedPhone,
-        ...(existingCustomerAccount ? { _id: { $ne: existingCustomerAccount._id } } : {}),
-      });
-      if (existingPhone) {
-        return res.status(409).json({ message: 'This phone number is already registered.' });
-      }
+    if (normalizedPhone && !customerAccount.phoneVerified) {
+      return res.status(400).json({ message: 'Verify your mobile number before creating your account.' });
     }
 
     const signupCode = generateCode();
     const signupVerificationCodeHash = hashCode(signupCode);
     const signupVerificationExpiresAt = new Date(Date.now() + SIGNUP_CODE_TTL_MS);
     const signupVerificationSentAt = new Date();
-
-    const customerAccount = existingCustomerAccount || new CustomerAccount({
-      email: normalizedEmail,
-      preferredBranch: 'Taguig Main - Cadena de Amor',
-      address: ''
-    });
-
-    customerAccount.firstName = firstName.trim();
-    customerAccount.lastName = lastName.trim();
-    customerAccount.password = password;
-    customerAccount.phoneNumber = normalizedPhone || undefined;
     customerAccount.status = 'pending_verification';
     customerAccount.signupVerificationCodeHash = signupVerificationCodeHash;
     customerAccount.signupVerificationExpiresAt = signupVerificationExpiresAt;

@@ -285,6 +285,7 @@ interface ProfileState {
   firstName: string;
   lastName: string;
   email: string;
+  createdAt: string | null;
   phoneNumber: string;
   phoneVerified: boolean;
   phoneVerifiedAt: string | null;
@@ -293,6 +294,7 @@ interface ProfileState {
 }
 
 export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, token, favoriteGowns, onRemoveFavorite, navigateWithGown, isAdmin }: CustomerProfileProps) {
+  const normalizedUserRole = String(user.role || '').trim().toLowerCase();
   const [activeTab, setActiveTab] = useState<'profile' | 'measurements' | 'favorites' | 'history'>('profile');
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
@@ -316,6 +318,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
     firstName: customerData.firstName || '',
     lastName: customerData.lastName || '',
     email: customerData.email || '',
+    createdAt: customerData.createdAt || null,
     phoneNumber: customerData.phoneNumber || '',
     phoneVerified: Boolean(customerData.phoneVerified),
     phoneVerifiedAt: customerData.phoneVerifiedAt || null,
@@ -327,6 +330,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
     firstName: user.firstName,
     lastName: user.lastName,
     email: user.email,
+    createdAt: user.createdAt || null,
     phoneNumber: user.phoneNumber || '',
     phoneVerified: Boolean(user.phoneVerified),
     phoneVerifiedAt: user.phoneVerifiedAt || null,
@@ -357,6 +361,14 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
   const [historyStatusFilter, setHistoryStatusFilter] = useState<HistoryStatusFilter>('all');
   const [historyPage, setHistoryPage] = useState(1);
   const [selectedHistoryRental, setSelectedHistoryRental] = useState<RentalDetail | null>(null);
+  const memberSinceLabel = displayedProfile.createdAt
+    ? (() => {
+        const createdAt = new Date(displayedProfile.createdAt);
+        return Number.isNaN(createdAt.getTime())
+          ? 'Unknown'
+          : createdAt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      })()
+    : 'Unknown';
 
   const applyProfileState = useCallback((customerData: Partial<CustomerProfileResponse>) => {
     const nextProfile = mapProfileState(customerData);
@@ -763,6 +775,13 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
           <ProfileInput
             key="email"
             label="Email Address"
+            labelAdornment={
+              displayedProfile.email ? (
+                <span className="shrink-0 cursor-default rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
+                  Verified
+                </span>
+              ) : null
+            }
             value={displayedProfile.email}
             type="email"
             disabled={true}
@@ -792,7 +811,9 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
             isPhone={true}
           />
           <div>
-            <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch</label>
+            <label className="block text-sm text-[#6B5D4F] mb-2">
+              {normalizedUserRole === 'staff' ? 'Assigned Branch' : 'Preferred Branch'}
+            </label>
             <select
               key="preferredBranch"
               defaultValue={displayedProfile.preferredBranch}
@@ -806,15 +827,17 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
             </select>
           </div>
         </div>
-        <div>
-          <label className="block text-sm text-[#6B5D4F] mb-2">Address</label>
-          <textarea
-            key="address"
-            defaultValue={displayedProfile.address}
-            disabled={true}
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed min-h-[100px]"
-          />
-        </div>
+        {normalizedUserRole !== 'staff' && (
+          <div>
+            <label className="block text-sm text-[#6B5D4F] mb-2">Address</label>
+            <textarea
+              key="address"
+              defaultValue={displayedProfile.address}
+              disabled={true}
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed min-h-[100px]"
+            />
+          </div>
+        )}
         <button
           onClick={() => setIsChangePasswordModalOpen(true)}
           className="px-8 py-3 bg-black text-white rounded-full hover:bg-[#D4AF37] transition-colors"
@@ -1321,7 +1344,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
               <div className="flex flex-wrap gap-4 text-sm text-[#6B5D4F]">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">Member since:</span>
-                  <span>January 2025</span>
+                  <span>{memberSinceLabel}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="font-medium">Phone:</span>
@@ -1530,6 +1553,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
         <EditProfileModal
           isOpen={isEditProfileModalOpen}
           onClose={() => setIsEditProfileModalOpen(false)}
+          role={user.role}
           customerData={{
             firstName: displayedProfile.firstName,
             lastName: displayedProfile.lastName,

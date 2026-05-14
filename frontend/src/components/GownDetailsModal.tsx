@@ -333,7 +333,7 @@ export function GownDetailsModal({
                       alt={`${gown.name} 3D view`}
                       loading="eager"
                       camera-controls
-                      camera-orbit="180deg 90deg auto"
+                      camera-orbit="0deg 90deg auto"
                       disable-pan
                       min-camera-orbit="auto 90deg auto"
                       max-camera-orbit="auto 90deg auto"

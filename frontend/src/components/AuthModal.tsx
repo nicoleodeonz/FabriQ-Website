@@ -1,6 +1,7 @@
 import { X, Eye, EyeOff } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
+import { authAPI } from '../services/authAPI';
 
 type AuthErrors = {
   firstName: string[];
@@ -132,8 +133,11 @@ const emptyErrors = (): AuthErrors => ({
 
 export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp, onForgotPassword }: AuthModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const phoneVerificationModalRef = useRef<HTMLDivElement>(null);
+  const phoneVerificationCodeInputRef = useRef<HTMLInputElement>(null);
   const [isSignUp, setIsSignUp] = useState(false);
   const [isVerifyingSignUp, setIsVerifyingSignUp] = useState(false);
+  const [isPhoneVerificationModalOpen, setIsPhoneVerificationModalOpen] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
@@ -152,6 +156,17 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [hasScrolledTermsToBottom, setHasScrolledTermsToBottom] = useState(false);
+  const [phoneVerificationCode, setPhoneVerificationCode] = useState('');
+  const [phoneVerificationMessage, setPhoneVerificationMessage] = useState<string | null>(null);
+  const [phoneVerificationError, setPhoneVerificationError] = useState<string | null>(null);
+  const [isSendingPhoneVerificationCode, setIsSendingPhoneVerificationCode] = useState(false);
+  const [isVerifyingPhoneVerificationCode, setIsVerifyingPhoneVerificationCode] = useState(false);
+  const [phoneVerificationResendSecondsLeft, setPhoneVerificationResendSecondsLeft] = useState(0);
+  const [hasSentPhoneVerificationCode, setHasSentPhoneVerificationCode] = useState(false);
+  const [verifiedPhoneDigits, setVerifiedPhoneDigits] = useState('');
+
+  const isPhoneVerified = phone.length === 10 && verifiedPhoneDigits === phone;
+  const isPhoneAlreadyRegisteredError = phoneVerificationError === 'This phone number is already registered.';
 
   useEffect(() => {
     if (resendSecondsLeft <= 0) return;
@@ -163,12 +178,44 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     return () => window.clearTimeout(timer);
   }, [resendSecondsLeft]);
 
+  useEffect(() => {
+    if (phoneVerificationResendSecondsLeft <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      setPhoneVerificationResendSecondsLeft((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [phoneVerificationResendSecondsLeft]);
+
+  useEffect(() => {
+    if (!isPhoneVerificationModalOpen || isPhoneVerified) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      phoneVerificationCodeInputRef.current?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [hasSentPhoneVerificationCode, isPhoneVerificationModalOpen, isPhoneVerified]);
+
   const normalizePhoneDigits = (value: string) => {
     let digits = value.replace(/\D/g, '').slice(0, 10);
     if (digits.length > 0 && !digits.startsWith('9')) {
       digits = `9${digits.slice(1)}`;
     }
     return digits;
+  };
+
+  const resetPhoneVerificationState = () => {
+    setIsPhoneVerificationModalOpen(false);
+    setPhoneVerificationCode('');
+    setPhoneVerificationMessage(null);
+    setPhoneVerificationError(null);
+    setIsSendingPhoneVerificationCode(false);
+    setIsVerifyingPhoneVerificationCode(false);
+    setPhoneVerificationResendSecondsLeft(0);
+    setHasSentPhoneVerificationCode(false);
+    setVerifiedPhoneDigits('');
   };
 
   const resetAllState = () => {
@@ -191,9 +238,15 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setIsTermsOpen(false);
     setHasAcceptedTerms(false);
     setHasScrolledTermsToBottom(false);
+    resetPhoneVerificationState();
   };
 
   const submitSignUpRequest = async () => {
+    if (!isPhoneVerified) {
+      setServerError('Verify your mobile number before continuing to email verification.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const result = await onSignUp(
@@ -229,7 +282,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
     if (field === 'phoneNumber') {
       const digits = normalizePhoneDigits(value);
-      if (!digits) return [];
+      if (!digits) return ['Phone number is required.'];
       if (!digits.startsWith('9')) return ['Phone number must start with 9.'];
       if (digits.length !== 10) return ['Enter 10 digits (e.g. 9123456789).'];
       return [];
@@ -295,11 +348,29 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const digits = normalizePhoneDigits(e.target.value);
+    if (digits !== verifiedPhoneDigits) {
+      setVerifiedPhoneDigits('');
+      setPhoneVerificationCode('');
+      setPhoneVerificationMessage(null);
+      setPhoneVerificationError(null);
+      setPhoneVerificationResendSecondsLeft(0);
+      setHasSentPhoneVerificationCode(false);
+      setIsPhoneVerificationModalOpen(false);
+    }
     setPhone(digits);
     validateField('phoneNumber', digits);
   };
 
   const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.value.trim().toLowerCase() !== email.trim().toLowerCase()) {
+      setVerifiedPhoneDigits('');
+      setPhoneVerificationCode('');
+      setPhoneVerificationMessage(null);
+      setPhoneVerificationError(null);
+      setPhoneVerificationResendSecondsLeft(0);
+      setHasSentPhoneVerificationCode(false);
+      setIsPhoneVerificationModalOpen(false);
+    }
     setEmail(e.target.value);
     validateField('email', e.target.value);
   };
@@ -328,6 +399,10 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     if (hasErrors) return;
 
     if (isSignUp) {
+      if (phone && !isPhoneVerified) {
+        setServerError('Verify your mobile number before continuing to email verification.');
+        return;
+      }
       setHasAcceptedTerms(false);
       setHasScrolledTermsToBottom(false);
       setIsTermsOpen(true);
@@ -372,6 +447,11 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
     setVerificationError(null);
     setServerError(null);
+    if (!isPhoneVerified) {
+      setVerificationError('Verify your mobile number before requesting an email verification code.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const result = await onSignUp(
@@ -389,6 +469,88 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
       setVerificationError(error?.message || 'Failed to resend the verification code.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenPhoneVerification = () => {
+    setServerError(null);
+    setPhoneVerificationError(null);
+
+    const nextErrors = buildErrors(password);
+    setErrors(nextErrors);
+
+    if (!firstName.trim() || !lastName.trim() || !email.trim() || !password || !confirmPassword) {
+      setServerError('Complete the signup details first before verifying your mobile number.');
+      return;
+    }
+
+    if (Object.values(nextErrors).some((arr) => arr.length > 0)) {
+      setServerError('Fix the signup errors first before verifying your mobile number.');
+      return;
+    }
+
+    if (!phone || phone.length !== 10) {
+      setPhoneVerificationError('Enter a valid 10-digit mobile number first.');
+      return;
+    }
+
+    setIsPhoneVerificationModalOpen(true);
+    setPhoneVerificationMessage(isPhoneVerified ? 'This mobile number is already verified.' : null);
+  };
+
+  const handleSendPhoneVerificationCode = async () => {
+    setPhoneVerificationError(null);
+    setPhoneVerificationMessage(null);
+
+    if (!phone || phone.length !== 10) {
+      setPhoneVerificationError('Enter a valid 10-digit mobile number first.');
+      return;
+    }
+
+    setIsSendingPhoneVerificationCode(true);
+    try {
+      const result = await authAPI.sendSignUpPhoneVerificationCode({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim(),
+        password,
+        phoneNumber: `+63${phone}`,
+      });
+      setHasSentPhoneVerificationCode(true);
+      setPhoneVerificationResendSecondsLeft(result.verified ? 0 : 60);
+      if (result.verified) {
+        setVerifiedPhoneDigits(phone);
+      }
+    } catch (error: any) {
+      setPhoneVerificationError(error?.message || 'Failed to send the mobile verification code.');
+    } finally {
+      setIsSendingPhoneVerificationCode(false);
+    }
+  };
+
+  const handleVerifyPhoneCode = async () => {
+    setPhoneVerificationError(null);
+    setPhoneVerificationMessage(null);
+
+    if (phoneVerificationCode.trim().length !== 6) {
+      setPhoneVerificationError('Enter the 6-digit code sent to your mobile number.');
+      return;
+    }
+
+    setIsVerifyingPhoneVerificationCode(true);
+    try {
+      const result = await authAPI.verifySignUpPhoneVerificationCode({
+        email: email.trim(),
+        code: phoneVerificationCode.trim(),
+      });
+      setVerifiedPhoneDigits(phone);
+      setPhoneVerificationMessage(result.message);
+      setPhoneVerificationCode('');
+      setIsPhoneVerificationModalOpen(false);
+    } catch (error: any) {
+      setPhoneVerificationError(error?.message || 'Failed to verify the mobile number.');
+    } finally {
+      setIsVerifyingPhoneVerificationCode(false);
     }
   };
 
@@ -410,6 +572,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setShowPassword(false);
     setShowConfirmPassword(false);
     setResendSecondsLeft(0);
+    resetPhoneVerificationState();
     setHasAcceptedTerms(false);
     setHasScrolledTermsToBottom(false);
   };
@@ -427,7 +590,8 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     onClose();
   };
 
-  useModalInteractionLock(isOpen, modalRef);
+  useModalInteractionLock(isOpen && !isPhoneVerificationModalOpen, modalRef);
+  useModalInteractionLock(isPhoneVerificationModalOpen, phoneVerificationModalRef);
 
   if (!isOpen) return null;
 
@@ -580,12 +744,27 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                             inputMode="numeric"
                             pattern="[0-9]*"
                             placeholder="9123456789"
-                            className="flex-1 px-4 py-3 bg-transparent focus:outline-none rounded-r-md"
+                            className="flex-1 px-4 py-3 bg-transparent focus:outline-none"
                           />
+                          <button
+                            type="button"
+                            onClick={handleOpenPhoneVerification}
+                            disabled={isPhoneVerified || !phone || phone.length !== 10}
+                            className={`px-4 py-3 border-l border-[#CFC6B8] rounded-r-md text-sm font-medium transition-colors ${
+                              isPhoneVerified
+                                ? 'bg-[#E8F3E3] text-[#2F5A2F]'
+                                : 'bg-[#F5F0E6] text-[#1A1A1A] hover:bg-[#ECE2D2] disabled:cursor-not-allowed disabled:opacity-50'
+                            }`}
+                          >
+                            {isPhoneVerified ? 'Verified' : 'Verify'}
+                          </button>
                         </div>
                         {errors.phoneNumber.map((error, index) => (
                           <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
                         ))}
+                        {isPhoneVerified && errors.phoneNumber.length === 0 && (
+                          <p className="text-[#2F5A2F] text-xs mt-1">Mobile number verified.</p>
+                        )}
                       </div>
                     </>
                   )}
@@ -673,12 +852,18 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                   )}
                   <button
                     type="submit"
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || (isSignUp && !isPhoneVerified)}
                     className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
-                      isSubmitting ? 'opacity-50 cursor-not-allowed' : ''
+                      isSubmitting || (isSignUp && !isPhoneVerified) ? 'opacity-50 cursor-not-allowed' : ''
                     }`}
                   >
-                    {isSubmitting ? 'Processing…' : isSignUp ? 'Send Verification Code' : 'Sign in'}
+                    {isSubmitting
+                      ? 'Processing…'
+                      : isSignUp
+                        ? isPhoneVerified
+                          ? 'Send Verification Code'
+                          : 'Verify Phone Number First'
+                        : 'Sign in'}
                   </button>
                 </>
               )}
@@ -807,16 +992,109 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                   <button
                     type="button"
                     onClick={() => void submitSignUpRequest()}
-                    disabled={isSubmitting || !hasAcceptedTerms}
+                    disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified}
                     className={`w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-colors ${
-                      isSubmitting || !hasAcceptedTerms ? 'cursor-not-allowed opacity-50' : ''
+                      isSubmitting || !hasAcceptedTerms || !isPhoneVerified ? 'cursor-not-allowed opacity-50' : ''
                     }`}
                     style={{ backgroundColor: '#1A1A1A', color: '#FFFFFF' }}
                   >
-                    {isSubmitting ? 'Sending Verification Code…' : 'Continue'}
+                    {isSubmitting ? 'Sending Verification Code…' : isPhoneVerified ? 'Continue' : 'Verify Phone First'}
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPhoneVerificationModalOpen && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => !isSendingPhoneVerificationCode && !isVerifyingPhoneVerificationCode && setIsPhoneVerificationModalOpen(false)} />
+          <div ref={phoneVerificationModalRef} tabIndex={-1} className="relative z-10 w-full max-w-md rounded-lg bg-[#FAF7F0] p-6 shadow-2xl">
+            <button
+              type="button"
+              onClick={() => setIsPhoneVerificationModalOpen(false)}
+              className="absolute right-4 top-4 text-[#6B5D4F] hover:text-black"
+              aria-label="Close phone verification modal"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="pr-8">
+              <h3 className="font-serif text-2xl font-light">Verify Mobile Number</h3>
+              <p className="mt-2 text-sm leading-relaxed text-[#6B5D4F]">
+                Send a 6-digit SMS code to +63 {phone || '__________'} and confirm it before creating your account.
+              </p>
+            </div>
+
+            {phoneVerificationError && !isPhoneAlreadyRegisteredError && (
+              <div className="mt-5 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {phoneVerificationError}
+              </div>
+            )}
+
+            <div className="mt-5 space-y-4">
+              {isPhoneAlreadyRegisteredError ? (
+                <div className="w-full rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {phoneVerificationError}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSendPhoneVerificationCode}
+                  disabled={isSendingPhoneVerificationCode || isPhoneVerified || phoneVerificationResendSecondsLeft > 0}
+                  className={`w-full rounded-md border border-[#CFC6B8] px-4 py-3 text-sm font-medium transition-colors ${
+                    isSendingPhoneVerificationCode || isPhoneVerified || phoneVerificationResendSecondsLeft > 0
+                      ? 'cursor-not-allowed opacity-50'
+                      : 'bg-white hover:border-black'
+                  }`}
+                >
+                  {isPhoneVerified
+                    ? 'Mobile Number Verified'
+                    : isSendingPhoneVerificationCode
+                      ? 'Sending Code…'
+                      : phoneVerificationResendSecondsLeft > 0
+                        ? `Resend Verification Code in ${phoneVerificationResendSecondsLeft}s`
+                        : hasSentPhoneVerificationCode
+                          ? 'Resend Verification Code'
+                          : 'Send Verification Code'}
+                </button>
+              )}
+
+              <div>
+                <label className="block text-xs uppercase tracking-wider mb-2">Verification Code</label>
+                <input
+                  ref={phoneVerificationCodeInputRef}
+                  type="text"
+                  value={phoneVerificationCode}
+                  onChange={(event) => {
+                    setPhoneVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6));
+                    if (phoneVerificationError) setPhoneVerificationError(null);
+                  }}
+                  maxLength={6}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="Enter 6-digit code"
+                  className="w-full px-4 py-3 border border-[#CFC6B8] bg-transparent focus:outline-none focus:border-black rounded-md text-center tracking-[0.35em]"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleVerifyPhoneCode}
+                disabled={isVerifyingPhoneVerificationCode || phoneVerificationCode.length !== 6 || isPhoneVerified}
+                className={`w-full rounded-md bg-[#1a1a1a] px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-[#D4AF37] ${
+                  isVerifyingPhoneVerificationCode || phoneVerificationCode.length !== 6 || isPhoneVerified
+                    ? 'cursor-not-allowed opacity-50'
+                    : ''
+                }`}
+              >
+                {isPhoneVerified
+                  ? 'Verified'
+                  : isVerifyingPhoneVerificationCode
+                    ? 'Verifying…'
+                    : 'Verify Number'}
+              </button>
             </div>
           </div>
         </div>

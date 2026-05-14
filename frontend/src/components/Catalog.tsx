@@ -88,6 +88,7 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [selectedBranch, setSelectedBranch] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedGown, setSelectedGown] = useState<GownItem | null>(null);
   const [showLiveViewModal, setShowLiveViewModal] = useState(false);
@@ -98,6 +99,11 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
 
   const categories = useMemo(
     () => ['All', ...new Set(gowns.map((gown) => gown.category).filter(Boolean))],
+    [gowns]
+  );
+
+  const branches = useMemo(
+    () => ['All', ...new Set(gowns.map((gown) => String(gown.branch || '').trim()).filter(Boolean))],
     [gowns]
   );
 
@@ -143,18 +149,25 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
     const matchesSearch = gown.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          gown.color.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory = selectedCategory === 'All' || gown.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  }), [gowns, searchQuery, selectedCategory]);
+    const matchesBranch = selectedBranch === 'All' || gown.branch === selectedBranch;
+    return matchesSearch && matchesCategory && matchesBranch;
+  }), [gowns, searchQuery, selectedBranch, selectedCategory]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedCategory]);
+  }, [searchQuery, selectedBranch, selectedCategory]);
 
   useEffect(() => {
     if (!catalogLoading && selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
       setSelectedCategory('All');
     }
   }, [catalogLoading, categories, selectedCategory]);
+
+  useEffect(() => {
+    if (!catalogLoading && selectedBranch !== 'All' && !branches.includes(selectedBranch)) {
+      setSelectedBranch('All');
+    }
+  }, [branches, catalogLoading, selectedBranch]);
 
   const totalPages = Math.max(1, Math.ceil(filteredGowns.length / CATALOG_PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -261,21 +274,40 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
             />
           </div>
 
-          {/* Category Filters */}
-          <div className="flex flex-wrap gap-3">
-            {categories.map(category => (
-              <button
-                key={category}
-                onClick={() => setSelectedCategory(category)}
-                className={`px-6 py-2 text-xs uppercase tracking-[0.15em] transition-all ${
-                  selectedCategory === category
-                    ? 'bg-[#1a1a1a] text-white'
-                    : 'bg-white border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#1a1a1a]'
-                }`}
-              >
-                {category}
-              </button>
-            ))}
+          <div className="space-y-4">
+            {/* Category Filters */}
+            <div className="flex flex-wrap gap-3">
+              {categories.map(category => (
+                <button
+                  key={category}
+                  onClick={() => setSelectedCategory(category)}
+                  className={`px-6 py-2 text-xs uppercase tracking-[0.15em] transition-all ${
+                    selectedCategory === category
+                      ? 'bg-[#1a1a1a] text-white'
+                      : 'bg-white border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#1a1a1a]'
+                  }`}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+
+            {/* Branch Filters */}
+            <div className="flex flex-wrap gap-3">
+              {branches.map(branch => (
+                <button
+                  key={branch}
+                  onClick={() => setSelectedBranch(branch)}
+                  className={`px-6 py-2 text-xs uppercase tracking-[0.15em] transition-all ${
+                    selectedBranch === branch
+                      ? 'bg-[#1a1a1a] text-white'
+                      : 'bg-white border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#1a1a1a]'
+                  }`}
+                >
+                  {branch}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -434,6 +466,7 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
               onClick={() => {
                 setSearchQuery('');
                 setSelectedCategory('All');
+                setSelectedBranch('All');
               }}
               className="px-6 py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-colors"
             >

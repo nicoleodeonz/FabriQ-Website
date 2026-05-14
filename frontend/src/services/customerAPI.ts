@@ -8,6 +8,8 @@ export interface CustomerProfileResponse {
   firstName: string;
   lastName: string;
   email: string;
+  createdAt?: string;
+  updatedAt?: string;
   phoneNumber?: string;
   phoneVerified?: boolean;
   phoneVerifiedAt?: string | null;

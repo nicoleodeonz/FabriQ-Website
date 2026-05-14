@@ -36,6 +36,7 @@ interface User {
   email: string;
   phone: string;
   branch: string;
+  preferredBranch?: string;
   role: ManagedUserRole;
   createdAt?: string;
   joinDate: string;
@@ -83,6 +84,7 @@ interface AdminRentalCard {
 interface CurrentAdminUser {
   id?: string;
   role?: string;
+  preferredBranch?: string;
 }
 
 interface AdminDashboardProps {
@@ -236,6 +238,14 @@ function matchesSelectedBranch(branch: string | null | undefined, selectedBranch
 
 const STAFF_BRANCH_OPTIONS = ['Taguig Main', 'BGC Branch', 'Makati Branch', 'Quezon City'];
 
+function normalizePhoneDigits(value: string) {
+  let digits = value.replace(/\D/g, '').slice(0, 10);
+  if (digits.length > 0 && !digits.startsWith('9')) {
+    digits = `9${digits.slice(1)}`;
+  }
+  return digits;
+}
+
 function toLocalDateKey(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -259,13 +269,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
   const currentUserId = String(currentUser?.id || '').trim() || getCurrentUserId(token);
 
+  const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
+  const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
+  const assignedStaffBranch = isCurrentUserStaff
+    ? normalizeBranchName(currentUser?.preferredBranch)
+    : '';
   type InventoryConfirmAction =
     | { type: 'delete'; item: InventoryItem }
     | { type: 'restore'; item: InventoryItem }
     | null;
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
-  const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
+  const [selectedBranch, setSelectedBranch] = useState<string>(() => assignedStaffBranch || 'All Branches');
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
   const [branchComparisonMetric, setBranchComparisonMetric] = useState<BranchComparisonMetric>('revenue');
 
@@ -412,10 +427,34 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     phoneNumber: '',
     preferredBranch: 'Taguig Main'
   });
-  const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
-  const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
   const canExportPdfs = !isCurrentUserStaff;
+  const canViewUsers = !isCurrentUserStaff;
+  const canViewAdminHistory = !isCurrentUserStaff;
   const dashboardTitle = isCurrentUserStaff ? 'Staff Dashboard' : 'Admin Dashboard';
+
+  useEffect(() => {
+    if (!assignedStaffBranch) {
+      return;
+    }
+
+    setSelectedBranch(assignedStaffBranch);
+  }, [assignedStaffBranch]);
+
+  useEffect(() => {
+    if (canViewUsers || activeTab !== 'users') {
+      return;
+    }
+
+    setActiveTabWithHash('overview', 'replace');
+  }, [activeTab, canViewUsers]);
+
+  useEffect(() => {
+    if (canViewAdminHistory || activeTab !== 'history') {
+      return;
+    }
+
+    setActiveTabWithHash('overview', 'replace');
+  }, [activeTab, canViewAdminHistory]);
 
   useEffect(() => {
     const syncActiveTabFromHash = () => {
@@ -610,9 +649,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   }, [selectedBranch, token]);
 
   useEffect(() => {
-    if (activeTab !== 'history') return;
+    if (!canViewAdminHistory || activeTab !== 'history') return;
     loadAdminHistory();
-  }, [activeTab]);
+  }, [activeTab, canViewAdminHistory]);
 
   useEffect(() => {
     if (activeTab !== 'rentals') return;
@@ -627,8 +666,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   useEffect(() => {
     if (activeTab !== 'bespoke') return;
     loadAdminCustomOrders();
-    loadAdminHistory();
-  }, [activeTab]);
+    if (canViewAdminHistory) {
+      loadAdminHistory();
+    }
+  }, [activeTab, canViewAdminHistory]);
 
   useEffect(() => {
     const onInventoryUpdated = () => {
@@ -681,15 +722,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
   const handleRefreshOverview = () => {
     void runRefreshForScope('overview', async () => {
-      await Promise.all([
+      const refreshTasks = [
         loadInventory(),
         loadUsers(),
         loadAdminRentals(),
         loadAdminAppointments(),
         loadAdminCustomOrders(),
         loadBranchPerformance(selectedBranch),
-        loadAdminHistory(),
-      ]);
+      ];
+
+      if (canViewAdminHistory) {
+        refreshTasks.push(loadAdminHistory());
+      }
+
+      await Promise.all(refreshTasks);
     });
   };
 
@@ -718,6 +764,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   };
 
   const handleRefreshAdminHistory = () => {
+    if (!canViewAdminHistory) return;
     void runRefreshForScope('history', async () => {
       await loadAdminHistory();
     });
@@ -809,7 +856,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         const orderId = String(order.id || order._id || '');
         return orderId === id ? updated : order;
       }));
-      await Promise.all([loadAdminCustomOrders(), loadAdminHistory()]);
+      const refreshTasks = [loadAdminCustomOrders()];
+      if (canViewAdminHistory) {
+        refreshTasks.push(loadAdminHistory());
+      }
+      await Promise.all(refreshTasks);
       return updated;
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to update custom order status');
@@ -892,7 +943,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       setIsArchiveCompletedCustomOrderConfirmOpen(false);
       setSelectedCustomOrder(null);
       setCustomOrderManagementView('archive');
-      await loadAdminHistory();
+      if (canViewAdminHistory) {
+        await loadAdminHistory();
+      }
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to archive custom order');
     } finally {
@@ -906,7 +959,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     try {
       const updated = await appointmentAPI.updateAppointmentStatus(token, id, status, reason);
       setAdminAppointments((prev) => prev.map((item) => (item.id === id ? updated : item)));
-      await loadAdminHistory();
+      if (canViewAdminHistory) {
+        await loadAdminHistory();
+      }
     } catch (err) {
       setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to update appointment');
     } finally {
@@ -947,13 +1002,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   }
 
   function mapManagedUserToDashboardUser(user: ManagedUser): User {
+    const normalizedPreferredBranch = normalizeBranchName(user.preferredBranch);
+
     return {
       id: user.id,
       firstName: user.firstName || '',
       lastName: user.lastName || '',
       email: user.email || '',
       phone: user.phoneNumber || 'N/A',
-      branch: user.preferredBranch || '',
+      branch: normalizedPreferredBranch,
+      preferredBranch: String(user.preferredBranch || '').trim(),
       role: user.role,
       createdAt: user.createdAt,
       joinDate: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A',
@@ -1821,6 +1879,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
+    if (newUserForm.phoneNumber && newUserForm.phoneNumber.length !== 10) {
+      setNewUserError('Phone number must use the format 9123456789.');
+      return;
+    }
+
     if (newUserForm.role === 'Staff' && !newUserForm.preferredBranch.trim()) {
       setNewUserError('Branch assignment is required for staff accounts.');
       return;
@@ -1833,27 +1896,23 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       lastName: newUserForm.lastName.trim(),
       ...(newUserForm.role === 'Staff'
         ? {
-            phoneNumber: newUserForm.phoneNumber.trim(),
+            phoneNumber: newUserForm.phoneNumber ? `+63${newUserForm.phoneNumber}` : '',
             preferredBranch: newUserForm.preferredBranch.trim(),
           }
         : {}),
       ...(newUserForm.role === 'Customer'
         ? {
-            phoneNumber: newUserForm.phoneNumber.trim()
+            phoneNumber: `+63${newUserForm.phoneNumber}`
           }
         : {})
     };
 
     setCreatingUser(true);
     try {
-      const result = await usersAPI.createUser(token, payload);
+      await usersAPI.createUser(token, payload);
       await loadUsers();
       setShowAddUserModal(false);
-      setUsersMessage(
-        result.temporaryPassword
-          ? `User created successfully. Temporary password: ${result.temporaryPassword}`
-          : 'User created successfully.'
-      );
+      setUsersMessage('User created successfully. Login credentials were sent to their email.');
       setTimeout(() => setUsersMessage(null), 8000);
       setNewUserForm({
         role: 'Customer',
@@ -4208,7 +4267,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const matchesArchiveView = showArchivedUsersOnly
       ? normalizedStatus === 'archived'
       : normalizedStatus !== 'archived';
-    const matchesBranch = matchesSelectedBranch(user.branch, selectedBranch);
+    const matchesBranch = matchesSelectedBranch(user.preferredBranch || user.branch, selectedBranch);
     return matchesSearch && matchesRole && matchesArchiveView && matchesBranch;
   });
   const userTotalPages = Math.max(1, Math.ceil(filteredUsers.length / USER_PAGE_SIZE));
@@ -5618,7 +5677,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
-          <p className="text-[#6B5D4F]">Manage your boutique operations across all branches</p>
+          <p className="text-[#6B5D4F]">
+            {assignedStaffBranch
+              ? `Manage your boutique operations for ${assignedStaffBranch}`
+              : 'Manage your boutique operations across all branches'}
+          </p>
         </div>
 
         {/* Branch Selector */}
@@ -5626,9 +5689,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           <select
             value={selectedBranch}
             onChange={(e) => setSelectedBranch(e.target.value)}
-            className="px-6 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors bg-white"
+            disabled={Boolean(assignedStaffBranch)}
+            className="px-6 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors bg-white disabled:bg-[#F4EEE4] disabled:text-[#6B5D4F] disabled:cursor-not-allowed"
           >
-            <option value="All Branches">All Branches</option>
+            {!assignedStaffBranch && <option value="All Branches">All Branches</option>}
             <option value="Taguig Main">Taguig Main - Cadena de Amor</option>
             <option value="BGC Branch">BGC Branch</option>
             <option value="Makati Branch">Makati Branch</option>
@@ -5688,26 +5752,30 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           >
             Bespoke
           </button>
-          <button
-            onClick={() => setActiveTabWithHash('users')}
-            className={`px-6 py-3 border-b-2 transition-colors ${
-              activeTab === 'users'
-                ? 'border-[#D4AF37] font-medium'
-                : 'border-transparent text-[#6B5D4F] hover:text-black'
-            }`}
-          >
-            Users
-          </button>
-          <button
-            onClick={() => setActiveTabWithHash('history')}
-            className={`px-6 py-3 border-b-2 transition-colors ${
-              activeTab === 'history'
-                ? 'border-[#D4AF37] font-medium'
-                : 'border-transparent text-[#6B5D4F] hover:text-black'
-            }`}
-          >
-            Admin History
-          </button>
+          {canViewUsers && (
+            <button
+              onClick={() => setActiveTabWithHash('users')}
+              className={`px-6 py-3 border-b-2 transition-colors ${
+                activeTab === 'users'
+                  ? 'border-[#D4AF37] font-medium'
+                  : 'border-transparent text-[#6B5D4F] hover:text-black'
+              }`}
+            >
+              Users
+            </button>
+          )}
+          {canViewAdminHistory && (
+            <button
+              onClick={() => setActiveTabWithHash('history')}
+              className={`px-6 py-3 border-b-2 transition-colors ${
+                activeTab === 'history'
+                  ? 'border-[#D4AF37] font-medium'
+                  : 'border-transparent text-[#6B5D4F] hover:text-black'
+              }`}
+            >
+              Admin History
+            </button>
+          )}
         </div>
 
         {/* Content */}
@@ -8015,7 +8083,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           </div>
         )}
 
-        {activeTab === 'users' && (
+        {canViewUsers && activeTab === 'users' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">User Management</h2>
@@ -8324,7 +8392,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           </div>
         )}
 
-        {activeTab === 'history' && (
+        {canViewAdminHistory && activeTab === 'history' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-light">Admin History</h2>
@@ -9442,13 +9510,21 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   {newUserForm.role === 'Customer' && (
                     <div className="md:col-span-2">
                       <label className="block text-sm text-[#6B5D4F] mb-2">Phone Number</label>
-                      <input
-                        type="text"
-                        value={newUserForm.phoneNumber}
-                        onChange={(e) => setNewUserForm((prev) => ({ ...prev, phoneNumber: e.target.value }))}
-                        className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                        placeholder="09XXXXXXXXX or +639XXXXXXXXX"
-                      />
+                      <div className="flex w-full rounded-lg border border-[#E8DCC8] bg-white transition-colors focus-within:border-[#D4AF37]">
+                        <span className="flex items-center px-4 py-3 text-sm text-[#6B5D4F] border-r border-[#E8DCC8] bg-[#F5F0E6] rounded-l-lg">
+                          +63
+                        </span>
+                        <input
+                          type="tel"
+                          value={newUserForm.phoneNumber}
+                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, phoneNumber: normalizePhoneDigits(e.target.value) }))}
+                          maxLength={10}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          className="flex-1 px-4 py-3 bg-transparent focus:outline-none rounded-r-lg"
+                          placeholder="9123456789"
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -9456,13 +9532,21 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     <>
                       <div>
                         <label className="block text-sm text-[#6B5D4F] mb-2">Phone Number</label>
-                        <input
-                          type="text"
-                          value={newUserForm.phoneNumber}
-                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, phoneNumber: e.target.value }))}
-                          className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                          placeholder="09XXXXXXXXX or +639XXXXXXXXX"
-                        />
+                        <div className="flex w-full rounded-lg border border-[#E8DCC8] bg-white transition-colors focus-within:border-[#D4AF37]">
+                          <span className="flex items-center px-4 py-3 text-sm text-[#6B5D4F] border-r border-[#E8DCC8] bg-[#F5F0E6] rounded-l-lg">
+                            +63
+                          </span>
+                          <input
+                            type="tel"
+                            value={newUserForm.phoneNumber}
+                            onChange={(e) => setNewUserForm((prev) => ({ ...prev, phoneNumber: normalizePhoneDigits(e.target.value) }))}
+                            maxLength={10}
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            className="flex-1 px-4 py-3 bg-transparent focus:outline-none rounded-r-lg"
+                            placeholder="9123456789"
+                          />
+                        </div>
                       </div>
 
                       <div>

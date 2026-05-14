@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, MapPin, ChevronRight, X, Star } from 'lucide-react';
+import { Calendar, MapPin, ChevronRight, X, Star, CheckCircle2 } from 'lucide-react';
 import { customerAPI } from '../services/customerAPI';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
@@ -246,6 +246,92 @@ function getRentalStatusLabel(rental: Pick<Rental, 'status' | 'pickupScheduleDat
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+const RENTAL_PROGRESS_STEPS: Array<{ key: Rental['status']; label: string }> = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'for_payment', label: 'Payment' },
+  { key: 'paid_for_confirmation', label: 'Confirmation' },
+  { key: 'for_pickup', label: 'Pickup' },
+  { key: 'active', label: 'Active' },
+  { key: 'completed', label: 'Completed' },
+];
+
+function getRentalProgressIndex(status?: string | null) {
+  const normalizedStatus = normalizeRentalStatusKey(status);
+
+  if (normalizedStatus === 'cancelled') {
+    return -1;
+  }
+
+  return RENTAL_PROGRESS_STEPS.findIndex((step) => step.key === normalizedStatus);
+}
+
+function getRentalProgressColors(status?: string | null) {
+  const normalizedStatus = normalizeRentalStatusKey(status);
+
+  if (normalizedStatus === 'cancelled') {
+    return {
+      activeDot: '#B91C1C',
+      activeLine: '#FECACA',
+      activeLabel: '#991B1B',
+    };
+  }
+
+  return {
+    activeDot: '#D4AF37',
+    activeLine: '#D4AF37',
+    activeLabel: '#1A1A1A',
+  };
+}
+
+function renderRentalProgressTimeline(status?: string | null) {
+  const progressIndex = getRentalProgressIndex(status);
+  const progressColors = getRentalProgressColors(status);
+
+  return (
+    <div className="relative" aria-label={`Rental progress: ${normalizeRentalStatusKey(status) || 'pending'}`}>
+      <div className="flex justify-between gap-2 overflow-x-auto pb-1">
+        {RENTAL_PROGRESS_STEPS.map((step, index) => {
+          const isComplete = progressIndex >= index;
+          const isCurrent = progressIndex === index;
+
+          return (
+            <div key={step.key} className="relative min-w-[88px] flex-1">
+              <div className="flex flex-col items-center text-center">
+                <div
+                  className="mb-2 flex h-8 w-8 items-center justify-center rounded-full text-xs transition-colors"
+                  style={{
+                    backgroundColor: isComplete ? progressColors.activeDot : '#E8DCC8',
+                    color: isComplete ? '#FFFFFF' : '#6B5D4F',
+                  }}
+                >
+                  {index < progressIndex ? <CheckCircle2 className="h-5 w-5" /> : <span>{index + 1}</span>}
+                </div>
+                <span
+                  className="text-xs text-center"
+                  style={{
+                    color: isCurrent || isComplete ? progressColors.activeLabel : '#6B5D4F',
+                    fontWeight: isCurrent || isComplete ? 500 : 400,
+                  }}
+                >
+                  {step.label}
+                </span>
+              </div>
+              {index < RENTAL_PROGRESS_STEPS.length - 1 && (
+                <div
+                  className="absolute left-1/2 top-4 hidden h-0.5 w-full -z-10 md:block"
+                  style={{
+                    backgroundColor: progressIndex > index ? progressColors.activeLine : '#E8DCC8',
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function Rentals({ user, token, selectedGownId, selectedRentalId, selectedRentalNotification, selectedRentalTab, onSelectedRentalHandled, onSelectedRentalNotificationHandled, onSelectedRentalTabHandled }: RentalsProps) {
@@ -1570,6 +1656,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                         </div>
                       )}
                     </div>
+
+                    <div className="mt-4">{renderRentalProgressTimeline(rental.status)}</div>
                   </div>
 
                   <div className="flex flex-col items-end gap-2">
@@ -1761,6 +1849,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                     </div>
 
                     <div className="grid md:grid-cols-3 gap-4 text-sm">
+                      <div className="md:col-span-3 mb-1">{renderRentalProgressTimeline(rental.status)}</div>
                       <div className="flex items-center gap-2 text-[#6B5D4F]">
                         <Calendar className="w-4 h-4" />
                         <span>{rental.startDate} - {rental.endDate}</span>

@@ -20,6 +20,12 @@ interface PendingAuthResponse {
   expiresInMinutes: number;
 }
 
+interface PhoneVerificationResponse {
+  message: string;
+  phoneNumber: string;
+  verified: boolean;
+}
+
 const parseError = async (response: Response) => {
   let message = 'An unexpected error occurred.';
   try {
@@ -50,6 +56,36 @@ export const authAPI = {
 
       throw error;
     }
+  },
+
+  sendSignUpPhoneVerificationCode: async (payload: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    password: string;
+    phoneNumber: string;
+  }) => {
+    const response = await fetch(`${API_BASE_URL}/auth/signup/phone/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await parseError(response));
+    }
+    return (await response.json()) as PhoneVerificationResponse;
+  },
+
+  verifySignUpPhoneVerificationCode: async (payload: { email: string; code: string }) => {
+    const response = await fetch(`${API_BASE_URL}/auth/signup/phone/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await parseError(response));
+    }
+    return (await response.json()) as PhoneVerificationResponse;
   },
 
   verifySignUp: async (payload: { email: string; code: string }) => {

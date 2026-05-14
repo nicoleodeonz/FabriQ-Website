@@ -408,6 +408,59 @@ export async function sendVerificationCodeEmail({
   });
 }
 
+export async function sendAccountCredentialsEmail({
+  email,
+  name = '',
+  temporaryPassword,
+  role = '',
+  preferredBranch = '',
+}) {
+  const configStatus = ensureEmailConfig('notification');
+
+  if (!EMAILJS_ENABLED) {
+    return { delivered: false, skipped: true, reason: 'disabled' };
+  }
+
+  if (!configStatus.ok) {
+    return {
+      delivered: false,
+      skipped: true,
+      reason: configStatus.mode,
+      missing: configStatus.missing || [],
+    };
+  }
+
+  const roleLabel = String(role || '').trim() || 'user';
+  const branchLine = String(preferredBranch || '').trim()
+    ? ` Assigned branch: ${String(preferredBranch).trim()}.`
+    : '';
+  const templateParams = {
+    to_email: email,
+    email,
+    type: 'account',
+    status: 'temporary-password',
+    name: String(name || '').trim() || 'Customer',
+    business_name: EMAILJS_CONFIG.appName,
+    from_name: EMAILJS_CONFIG.fromName,
+    subject: 'Your One-Time Temporary Password for FabriQ Login',
+    message_body: `This email contains your one-time-use temporary password for logging in to your FabriQ ${roleLabel} account. Use it to sign in, then change your password immediately after your first login.${branchLine}`,
+    details: `Temporary Password: ${temporaryPassword}\nRole: ${roleLabel}${String(preferredBranch || '').trim() ? `\nAssigned Branch: ${String(preferredBranch).trim()}` : ''}`,
+    date: new Date().toISOString().slice(0, 10),
+    date_type: 'Time Sent',
+    dateType: 'Time Sent',
+    date_label: 'Time Sent',
+    time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+    location: 'FabriQ Account Access',
+    app_name: EMAILJS_CONFIG.appName,
+  };
+
+  return sendEmailJsTemplate({
+    templateId: EMAILJS_CONFIG.notificationTemplateId,
+    templateParams,
+    logLabel: 'account credentials email',
+  });
+}
+
 export async function sendNotificationEmail({
   email,
   type,

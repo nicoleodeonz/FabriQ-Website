@@ -11,6 +11,7 @@ import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 interface EditProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
+  role?: string;
   customerData: {
     firstName: string;
     lastName: string;
@@ -68,6 +69,7 @@ type AddressValidationState = {
 export function EditProfileModal({
   isOpen,
   onClose,
+  role = 'customer',
   customerData,
   onSave,
   isLoading = false,
@@ -79,6 +81,8 @@ export function EditProfileModal({
   const customerPhoneNumber = customerData.phoneNumber || '';
   const customerAddress = customerData.address || '';
   const customerPreferredBranch = customerData.preferredBranch || '';
+  const isStaffAccount = String(role || '').trim().toLowerCase() === 'staff';
+  const shouldHideBranchField = isStaffAccount;
 
   const [formData, setFormData] = useState(customerData);
   const [error, setError] = useState('');
@@ -141,6 +145,17 @@ export function EditProfileModal({
       }
 
       setFormData(normalized);
+
+      if (isStaffAccount) {
+        setStreetAddress('');
+        setSelectedRegionCode('');
+        setSelectedCityCode('');
+        setSelectedBarangayCode('');
+        setRegions([]);
+        setCities([]);
+        setBarangays([]);
+        return;
+      }
 
       const parsedAddress = parseAddress(customerAddress);
       setStreetAddress(parsedAddress.street);
@@ -208,15 +223,20 @@ export function EditProfileModal({
     customerLastName,
     customerPhoneNumber,
     customerPreferredBranch,
+    isStaffAccount,
     isOpen,
   ]);
 
   useEffect(() => {
+    if (isStaffAccount) {
+      return;
+    }
+
     setFormData((prev) => ({
       ...prev,
       address: composeAddress(streetAddress, selectedBarangayName, selectedCityName, selectedRegionName),
     }));
-  }, [selectedBarangayName, selectedCityName, selectedRegionName, streetAddress]);
+  }, [isStaffAccount, selectedBarangayName, selectedCityName, selectedRegionName, streetAddress]);
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const phoneDigitsRegex = /^\d{10}$/;
@@ -256,10 +276,18 @@ export function EditProfileModal({
     }
 
     if (name === 'preferredBranch') {
+      if (shouldHideBranchField) {
+        setFieldErrors((prev) => ({ ...prev, [name]: '' }));
+        return true;
+      }
       if (!value) message = 'Preferred branch is required';
     }
 
     if (name === 'address') {
+      if (isStaffAccount) {
+        setFieldErrors((prev) => ({ ...prev, [name]: '' }));
+        return true;
+      }
       if (!hasStreetAddress(overrides)) {
         message = 'Street / House / Subdivision is required.';
       } else if (!hasCompleteAddressSelection(overrides)) {
@@ -349,8 +377,8 @@ export function EditProfileModal({
       validateField('firstName', formData.firstName),
       validateField('lastName', formData.lastName),
       validateField('email', formData.email),
-      validateField('preferredBranch', formData.preferredBranch),
-      validateField('address', formData.address || ''),
+      ...(shouldHideBranchField ? [] : [validateField('preferredBranch', formData.preferredBranch)]),
+      ...(isStaffAccount ? [] : [validateField('address', formData.address || '')]),
     ];
 
     if (validations.some((isValid) => isValid === false)) {
@@ -379,11 +407,13 @@ export function EditProfileModal({
       !formData.firstName ||
       !formData.lastName ||
       !formData.email ||
-      !formData.preferredBranch ||
-      !streetAddress.trim() ||
-      !selectedRegionCode ||
-      !selectedCityCode ||
-      !selectedBarangayCode
+      (!shouldHideBranchField && !formData.preferredBranch) ||
+      (!isStaffAccount && (
+        !streetAddress.trim() ||
+        !selectedRegionCode ||
+        !selectedCityCode ||
+        !selectedBarangayCode
+      ))
     ) {
       return false;
     }
@@ -392,13 +422,17 @@ export function EditProfileModal({
   };
 
   useEffect(() => {
+    if (isStaffAccount) {
+      return;
+    }
+
     validateField('address', streetAddress, {
       regionCode: selectedRegionCode,
       cityCode: selectedCityCode,
       barangayCode: selectedBarangayCode,
       street: streetAddress,
     });
-  }, [selectedRegionCode, selectedCityCode, selectedBarangayCode, streetAddress]);
+  }, [isStaffAccount, selectedRegionCode, selectedCityCode, selectedBarangayCode, streetAddress]);
 
   useEffect(() => {
     if (!isConfirmOpen) return;
@@ -499,66 +533,69 @@ export function EditProfileModal({
               {fieldErrors.phoneNumber && <div className="text-sm text-red-600 mt-1">{fieldErrors.phoneNumber}</div>}
             </div>
 
-            <div className="md:col-span-2">
-              <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch</label>
-              <select
-                name="preferredBranch"
-                value={formData.preferredBranch}
-                onChange={handleChange}
-                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-              >
-                <option value="Taguig Main">Taguig Main - Cadena de Amor</option>
-                <option value="BGC Branch">BGC Branch</option>
-                <option value="Makati Branch">Makati Branch</option>
-                <option value="Quezon City">Quezon City</option>
-              </select>
-              {fieldErrors.preferredBranch && (
-                <div className="text-sm text-red-600 mt-1">{fieldErrors.preferredBranch}</div>
-              )}
-            </div>
+            {!shouldHideBranchField && (
+              <div className="md:col-span-2">
+                <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch</label>
+                <select
+                  name="preferredBranch"
+                  value={formData.preferredBranch}
+                  onChange={handleChange}
+                  className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                >
+                  <option value="Taguig Main">Taguig Main - Cadena de Amor</option>
+                  <option value="BGC Branch">BGC Branch</option>
+                  <option value="Makati Branch">Makati Branch</option>
+                  <option value="Quezon City">Quezon City</option>
+                </select>
+                {fieldErrors.preferredBranch && (
+                  <div className="text-sm text-red-600 mt-1">{fieldErrors.preferredBranch}</div>
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="streetAddress" className="block text-sm text-[#6B5D4F] mb-2">
-                Street / House / Subdivision <span className="text-red-500">*</span>
-              </label>
-              <input
-                id="streetAddress"
-                type="text"
-                value={streetAddress}
-                onChange={(e) => {
-                  const nextStreet = e.target.value;
-                  setStreetAddress(nextStreet);
-                  validateField('address', nextStreet, {
-                    regionCode: selectedRegionCode,
-                    cityCode: selectedCityCode,
-                    barangayCode: selectedBarangayCode,
-                    street: nextStreet,
-                  });
-                }}
-                className={`w-full px-4 py-3 rounded-lg border transition-colors focus:outline-none ${
-                  fieldErrors.address ? 'border-red-500 focus:border-red-500' : 'border-[#E8DCC8] focus:border-[#D4AF37]'
-                }`}
-                placeholder="e.g. 213 Apple Street, Sub Village"
-                required
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {!isStaffAccount && (
+            <div className="space-y-4">
               <div>
-                <label htmlFor="region" className="block text-sm text-[#6B5D4F] mb-2">
-                  Region <span className="text-red-500">*</span>
+                <label htmlFor="streetAddress" className="block text-sm text-[#6B5D4F] mb-2">
+                  Street / House / Subdivision <span className="text-red-500">*</span>
                 </label>
-                <select
-                  id="region"
-                  value={selectedRegionCode}
+                <input
+                  id="streetAddress"
+                  type="text"
+                  value={streetAddress}
                   onChange={(e) => {
-                    void handleRegionChange(e.target.value);
+                    const nextStreet = e.target.value;
+                    setStreetAddress(nextStreet);
+                    validateField('address', nextStreet, {
+                      regionCode: selectedRegionCode,
+                      cityCode: selectedCityCode,
+                      barangayCode: selectedBarangayCode,
+                      street: nextStreet,
+                    });
                   }}
-                  className={`w-full px-4 py-3 rounded-lg border transition-colors focus:outline-none bg-white ${
+                  className={`w-full px-4 py-3 rounded-lg border transition-colors focus:outline-none ${
                     fieldErrors.address ? 'border-red-500 focus:border-red-500' : 'border-[#E8DCC8] focus:border-[#D4AF37]'
                   }`}
+                  placeholder="e.g. 213 Apple Street, Sub Village"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="region" className="block text-sm text-[#6B5D4F] mb-2">
+                    Region <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="region"
+                    value={selectedRegionCode}
+                    onChange={(e) => {
+                      void handleRegionChange(e.target.value);
+                    }}
+                    className={`w-full px-4 py-3 rounded-lg border transition-colors focus:outline-none bg-white ${
+                      fieldErrors.address ? 'border-red-500 focus:border-red-500' : 'border-[#E8DCC8] focus:border-[#D4AF37]'
+                    }`}
                   aria-label="Select region"
                   required
                 >
@@ -645,6 +682,7 @@ export function EditProfileModal({
 
             {fieldErrors.address && <p className="text-red-500 text-xs mt-1">{fieldErrors.address}</p>}
           </div>
+          )}
 
           <div className="flex gap-4 justify-end">
             <button

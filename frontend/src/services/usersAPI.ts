@@ -40,12 +40,10 @@ export interface CreateManagedUserPayload {
 interface CreateUserResponse {
   message: string;
   user: ManagedUser;
-  temporaryPassword?: string;
 }
 
 export interface CreateManagedUserResult {
   user: ManagedUser;
-  temporaryPassword?: string;
 }
 
 export interface AdminActionEntry {
@@ -120,7 +118,6 @@ export async function createUser(token: string, payload: CreateManagedUserPayloa
   });
   return {
     user: data.user,
-    temporaryPassword: data.temporaryPassword,
   };
 }
 
