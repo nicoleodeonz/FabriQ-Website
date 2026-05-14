@@ -7933,24 +7933,26 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-[#6B5D4F] mb-2">Stock Quantity</label>
-                  <input
-                    type="number"
-                    required={!editingItem}
-                    min={1}
-                    aria-invalid={!editingItem && Boolean(addItemErrors.stock)}
-                    aria-describedby={!editingItem && addItemErrors.stock ? 'add-item-stock-error' : undefined}
-                    value={editingItem?.stock ?? newItem.stock ?? 1}
-                    onChange={(e) => editingItem
-                      ? setEditingItem({ ...editingItem, stock: Number(e.target.value) })
-                      : (setNewItem({ ...newItem, stock: Number(e.target.value) }), setAddItemErrors(prev => ({ ...prev, stock: '' })))
-                    }
-                    className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.stock ? 'border-red-400' : 'border-[#E8DCC8]'}`}
-                    placeholder="1"
-                  />
-                  {!editingItem && addItemErrors.stock && <p id="add-item-stock-error" className="text-sm text-red-600 mt-1">{addItemErrors.stock}</p>}
-                </div>
+                {!editingItem && (
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Stock Quantity</label>
+                    <input
+                      type="number"
+                      required={!editingItem}
+                      min={1}
+                      aria-invalid={!editingItem && Boolean(addItemErrors.stock)}
+                      aria-describedby={!editingItem && addItemErrors.stock ? 'add-item-stock-error' : undefined}
+                      value={editingItem?.stock ?? newItem.stock ?? 1}
+                      onChange={(e) => editingItem
+                        ? setEditingItem({ ...editingItem, stock: Number(e.target.value) })
+                        : (setNewItem({ ...newItem, stock: Number(e.target.value) }), setAddItemErrors(prev => ({ ...prev, stock: '' })))
+                      }
+                      className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.stock ? 'border-red-400' : 'border-[#E8DCC8]'}`}
+                      placeholder="1"
+                    />
+                    {!editingItem && addItemErrors.stock && <p id="add-item-stock-error" className="text-sm text-red-600 mt-1">{addItemErrors.stock}</p>}
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm text-[#6B5D4F] mb-2">Product Images</label>
