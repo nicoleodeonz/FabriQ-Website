@@ -18,6 +18,8 @@ import { appointmentAPI } from '../services/appointmentAPI';
 import type { AdminAppointmentDetail } from '../services/appointmentAPI';
 import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
 import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
+import { generateAnalyticsReportNarrative } from '../services/analyticsNarrativeAPI';
+import type { AnalyticsNarrative, AnalyticsNarrativePayload } from '../services/analyticsNarrativeAPI';
 import { notificationAPI } from '../services/notificationAPI';
 import { createAdminDashboardEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
@@ -445,9 +447,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [adminAppointmentsError, setAdminAppointmentsError] = useState<string | null>(null);
   const [showOverviewExportModal, setShowOverviewExportModal] = useState(false);
   const [showStoreOverviewExportModal, setShowStoreOverviewExportModal] = useState(false);
+  const [showInventoryExportModal, setShowInventoryExportModal] = useState(false);
+  const [isGeneratingAnalyticsPdf, setIsGeneratingAnalyticsPdf] = useState(false);
   const [overviewExportBranchFilter, setOverviewExportBranchFilter] = useState<string>('All Branches');
   const [overviewExportTypeFilter, setOverviewExportTypeFilter] = useState<OverviewExportTypeFilter[]>([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
   const [selectedStoreOverviewExportBranches, setSelectedStoreOverviewExportBranches] = useState<string[]>(['All Branches']);
+  const [selectedInventoryExportBranches, setSelectedInventoryExportBranches] = useState<string[]>(['All Branches']);
   const [appointmentStatusUpdatingId, setAppointmentStatusUpdatingId] = useState<string | null>(null);
   const [selectedPendingAppointment, setSelectedPendingAppointment] = useState<AdminAppointmentDetail | null>(null);
   const [isApproveAppointmentConfirmOpen, setIsApproveAppointmentConfirmOpen] = useState(false);
@@ -1297,7 +1302,224 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     safeAdminHistoryPage * ADMIN_HISTORY_PAGE_SIZE,
   );
 
-  const handleSaveAdminHistoryAsPdf = () => {
+  const createNarrativeTable = (title: string, columns: string[], rows: Array<Array<string | number>>) => ({
+    title,
+    columns,
+    rowCount: rows.length,
+    sampleRows: rows.slice(0, 5).map((row) => row.map((cell) => String(cell ?? ''))),
+  });
+
+  const createNarrativeChart = (title: string, dataPoints: Array<{ label: string; value: string | number }>) => ({
+    title,
+    dataPoints: dataPoints.slice(0, 8),
+  });
+
+  const getLastAutoTableFinalY = (pdfDocument: jsPDF, fallbackY = 48) => {
+    const lastTable = (pdfDocument as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    return lastTable?.finalY ?? fallbackY;
+  };
+
+  const writePdfNarrativeBlock = (
+    pdfDocument: jsPDF,
+    narrative: AnalyticsNarrative | null,
+    options?: {
+      title?: string;
+      startY?: number;
+      addPage?: boolean;
+      summaryOnly?: boolean;
+    },
+  ) => {
+    if (!narrative) {
+      return options?.startY ?? 48;
+    }
+
+    const sectionMaxWidth = 515;
+    const lineHeight = 16;
+    const pageHeight = pdfDocument.internal.pageSize.getHeight();
+    let currentY = options?.startY ?? 48;
+
+    if (options?.addPage) {
+      pdfDocument.addPage();
+      currentY = 48;
+    }
+
+    const ensurePageSpace = (requiredHeight: number) => {
+      if (currentY + requiredHeight <= pageHeight - 40) {
+        return;
+      }
+
+      pdfDocument.addPage();
+      currentY = 48;
+    };
+
+    const writeParagraph = (text: string, fontSize: number, color: [number, number, number], extraGap = 12) => {
+      const lines = pdfDocument.splitTextToSize(text, sectionMaxWidth);
+      ensurePageSpace(lines.length * lineHeight + extraGap);
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(fontSize);
+      pdfDocument.setTextColor(...color);
+      pdfDocument.text(lines, 40, currentY);
+      currentY += (lines.length * lineHeight) + extraGap;
+    };
+
+    const writeBulletSection = (title: string, items: string[]) => {
+      const normalizedItems = items.filter(Boolean);
+      if (normalizedItems.length === 0) {
+        return;
+      }
+
+      ensurePageSpace(32);
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(13);
+      pdfDocument.setTextColor(26, 26, 26);
+      pdfDocument.text(title, 40, currentY);
+      currentY += 18;
+
+      normalizedItems.forEach((item) => {
+        const lines = pdfDocument.splitTextToSize(`• ${item}`, sectionMaxWidth - 8);
+        ensurePageSpace(lines.length * lineHeight + 8);
+        pdfDocument.setFontSize(11);
+        pdfDocument.setTextColor(60, 50, 40);
+        pdfDocument.text(lines, 48, currentY);
+        currentY += (lines.length * lineHeight) + 8;
+      });
+    };
+
+    if (options?.title) {
+      ensurePageSpace(24);
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(16);
+      pdfDocument.setTextColor(26, 26, 26);
+      pdfDocument.text(options.title, 40, currentY);
+      currentY += 20;
+    }
+
+    if (options?.summaryOnly) {
+      writeParagraph(narrative.summary, 11, [60, 50, 40], 12);
+      return currentY;
+    }
+
+    writeParagraph(narrative.headline, 14, [26, 26, 26], 14);
+    writeParagraph(narrative.summary, 11, [60, 50, 40], 18);
+    writeBulletSection('Highlights', narrative.highlights);
+    writeBulletSection('Risks', narrative.risks);
+    writeBulletSection('Recommended Actions', narrative.recommendedActions);
+
+    return currentY;
+  };
+
+  const appendPdfSectionNarrative = (
+    pdfDocument: jsPDF,
+    narrative: AnalyticsNarrative | null,
+    title: string,
+    startY: number,
+  ) => writePdfNarrativeBlock(pdfDocument, narrative, {
+    title,
+    startY,
+    summaryOnly: true,
+  });
+
+  const appendPdfFinalSummaryPage = (pdfDocument: jsPDF, narrative: AnalyticsNarrative | null, startY?: number) => {
+    writePdfNarrativeBlock(pdfDocument, narrative, {
+      title: 'Final Summary',
+      startY,
+      addPage: startY === undefined,
+    });
+  };
+
+  const formatNarrativeLabel = (value: string) => value
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+
+  const isCurrencyNarrativeKey = (key: string) => /sales|revenue|price|amount|budget|value/i.test(key);
+
+  const formatNarrativeValue = (key: string, value: string | number) => {
+    if (typeof value === 'number' && isCurrencyNarrativeKey(key)) {
+      return `Php ${value.toLocaleString()}`;
+    }
+
+    const numericValue = Number(value);
+    if (!Number.isNaN(numericValue) && String(value).trim() !== '' && isCurrencyNarrativeKey(key)) {
+      return `Php ${numericValue.toLocaleString()}`;
+    }
+
+    return String(value);
+  };
+
+  const buildFallbackNarrative = (payload: AnalyticsNarrativePayload): AnalyticsNarrative => {
+    const totals = Object.entries(payload.totals ?? {}).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
+    const filterEntries = Object.entries(payload.filters ?? {}).filter(([, value]) => String(value || '').trim() !== '');
+    const tables = payload.tables ?? [];
+    const charts = payload.charts ?? [];
+    const limitedTotals = totals.slice(0, 3).map(([key, value]) => `${formatNarrativeLabel(key)}: ${formatNarrativeValue(key, value)}`);
+    const nonEmptyTables = tables.filter((table) => table.rowCount > 0);
+    const nonEmptyCharts = charts.filter((chart) => chart.dataPoints.length > 0);
+    const summaryParts: string[] = [];
+
+    if (limitedTotals.length > 0) {
+      summaryParts.push(`${payload.reportTitle} includes ${limitedTotals.join(', ')}.`);
+    } else if (tables.length > 0 || charts.length > 0) {
+      summaryParts.push(`${payload.reportTitle} includes ${tables.length} table${tables.length === 1 ? '' : 's'} and ${charts.length} chart${charts.length === 1 ? '' : 's'}.`);
+    } else {
+      summaryParts.push(`${payload.reportTitle} data was prepared for export.`);
+    }
+
+    if (filterEntries.length > 0) {
+      summaryParts.push(`Applied filters: ${filterEntries.map(([key, value]) => `${formatNarrativeLabel(key)} ${value}`).join(', ')}.`);
+    }
+
+    if (nonEmptyTables.length > 0 || nonEmptyCharts.length > 0) {
+      summaryParts.push(`Visible sections with data: ${[
+        ...nonEmptyTables.map((table) => table.title),
+        ...nonEmptyCharts.map((chart) => chart.title),
+      ].slice(0, 3).join(', ')}${nonEmptyTables.length + nonEmptyCharts.length > 3 ? ', and more' : ''}.`);
+    }
+
+    const highlights = [
+      ...limitedTotals,
+      ...nonEmptyTables.slice(0, 2).map((table) => `${table.title} contains ${table.rowCount} row${table.rowCount === 1 ? '' : 's'}.`),
+      ...nonEmptyCharts.slice(0, 2).map((chart) => `${chart.title} contains ${chart.dataPoints.length} data point${chart.dataPoints.length === 1 ? '' : 's'}.`),
+    ].slice(0, 4);
+
+    const risks = [
+      ...tables.filter((table) => table.rowCount === 0).map((table) => `${table.title} has no rows in this export.`),
+      ...charts.filter((chart) => chart.dataPoints.length === 0).map((chart) => `${chart.title} has no chart data in this export.`),
+    ].slice(0, 3);
+
+    const recommendedActions = [
+      filterEntries.length > 0 ? `Review the export using the selected filters: ${filterEntries.map(([, value]) => value).join(', ')}.` : '',
+      nonEmptyTables[0] ? `Check ${nonEmptyTables[0].title} for the detailed records behind this summary.` : '',
+      nonEmptyCharts[0] ? `Use ${nonEmptyCharts[0].title} to compare values across the included data points.` : '',
+    ].filter(Boolean).slice(0, 3);
+
+    return {
+      headline: `${payload.reportTitle} Summary`,
+      summary: summaryParts.join(' '),
+      highlights,
+      risks,
+      recommendedActions,
+    };
+  };
+
+  const requestSectionNarrative = async (payload: AnalyticsNarrativePayload, sectionTitle: string, sectionKind: 'table' | 'chart') => {
+    return requestAnalyticsNarrative({
+      ...payload,
+      reportTitle: `${payload.reportTitle} - ${sectionTitle}`,
+      notes: [`Write a concise 2 to 3 sentence summary for the ${sectionKind} titled "${sectionTitle}" only.`],
+    });
+  };
+
+  const requestAnalyticsNarrative = async (payload: AnalyticsNarrativePayload) => {
+    try {
+      return await generateAnalyticsReportNarrative(token, payload);
+    } catch (error) {
+      console.error('Analytics narrative generation failed:', error);
+      return buildFallbackNarrative(payload);
+    }
+  };
+
+  const handleSaveAdminHistoryAsPdf = async () => {
     if (!canExportPdfs) return;
 
     const generatedAt = new Date().toLocaleString();
@@ -1309,6 +1531,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'N/A',
       formatHistoryDetails(entry),
     ]);
+    const narrative = await requestAnalyticsNarrative({
+      reportType: 'admin-history',
+      reportTitle: 'Admin History Report',
+      generatedAt,
+      totals: {
+        totalRecords: filteredAdminHistory.length,
+      },
+      tables: [createNarrativeTable('Admin History', ['Admin', 'Email', 'Action', 'Date / Time', 'Details'], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -1342,6 +1573,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         4: { cellWidth: 280 },
       },
     });
+
+    appendPdfSectionNarrative(document, narrative, 'Admin History Summary', getLastAutoTableFinalY(document, 96) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`admin-history-report-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
@@ -2189,6 +2423,45 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const storeOverviewBranchFilterLabel = selectedStoreOverviewExportBranches.includes('All Branches')
     ? 'All Branches'
     : selectedStoreOverviewExportBranches.join(', ');
+  const inventoryExportBranchOptions = Array.from(new Set(
+    [...inventory, ...archivedItems]
+      .map((item) => normalizeBranchName(item.branch))
+      .filter(Boolean)
+  )).sort((left, right) => left.localeCompare(right));
+  const toggleInventoryExportBranch = (branchOption: string) => {
+    setSelectedInventoryExportBranches((current) => {
+      if (branchOption === 'All Branches') {
+        return ['All Branches'];
+      }
+
+      const withoutAll = current.filter((branch) => branch !== 'All Branches');
+      if (withoutAll.includes(branchOption)) {
+        const nextBranches = withoutAll.filter((branch) => branch !== branchOption);
+        return nextBranches.length > 0 ? nextBranches : ['All Branches'];
+      }
+
+      return [...withoutAll, branchOption];
+    });
+  };
+  const matchesInventoryExportBranch = (branch: string | null | undefined) => (
+    selectedInventoryExportBranches.includes('All Branches')
+      || selectedInventoryExportBranches.some((selectedExportBranch) => (
+        normalizeBranchName(selectedExportBranch) === normalizeBranchName(branch)
+      ))
+  );
+  const inventoryExportBranchLabel = selectedInventoryExportBranches.includes('All Branches')
+    ? 'All Branches'
+    : selectedInventoryExportBranches.join(', ');
+  const openInventoryExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setSelectedInventoryExportBranches(
+      selectedBranch === 'All Branches'
+        ? ['All Branches']
+        : [selectedBranch]
+    );
+    setShowInventoryExportModal(true);
+  };
   useEffect(() => {
     setOverviewActivityPage(1);
   }, [selectedBranch]);
@@ -2760,7 +3033,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     },
   }), [branchComparisonMetricLabel, branchComparisonMetric]);
 
-  const handleSaveOverviewKpisAsPdf = () => {
+  const handleSaveOverviewKpisAsPdf = async () => {
     if (!canExportPdfs) return;
 
     const generatedAt = new Date().toLocaleString();
@@ -2774,6 +3047,19 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       activity.detail,
       activity.branch,
     ]);
+    const narrative = await requestAnalyticsNarrative({
+      reportType: 'todays-activities',
+      reportTitle: "Today's Activity Report",
+      generatedAt,
+      filters: {
+        branchFilter: overviewExportBranchFilter,
+        typeFilter: overviewExportTypeLabel,
+      },
+      totals: {
+        scheduledActivities: exportItems.length,
+      },
+      tables: [createNarrativeTable('Scheduled Activities', ['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch'], activityRows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -2809,11 +3095,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
+    appendPdfSectionNarrative(document, narrative, 'Scheduled Activities Summary', getLastAutoTableFinalY(document, 128) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
+
     setShowOverviewExportModal(false);
     document.save(`todays-activities-${new Date().toISOString().slice(0, 10)}.pdf`);
   };
-  const handleSaveStoreOverviewAsPdf = () => {
-    if (!canExportPdfs) return;
+  const handleSaveStoreOverviewAsPdf = async () => {
+    if (!canExportPdfs || isGeneratingAnalyticsPdf) return;
+
+    setIsGeneratingAnalyticsPdf(true);
+
+    try {
 
     const renderStoreOverviewChartImage = (metric: BranchComparisonMetric) => {
       const metricData = buildStoreOverviewComparisonMetricData(metric);
@@ -2918,6 +3211,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return {
         metric,
         metricLabel,
+        narrativeTitle: `${metricLabel} by Branch`,
         image,
       };
     };
@@ -3027,6 +3321,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return {
         metric: 'rents' as BranchComparisonMetric,
         metricLabel: options?.metricLabel || 'Most Rented Items',
+        narrativeTitle: options?.metricLabel || 'Most Rented Items',
         image,
       };
     };
@@ -3131,6 +3426,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return {
         metric: 'rents' as BranchComparisonMetric,
         metricLabel: 'Items per Category',
+        narrativeTitle: 'Items per Category',
         image,
       };
     };
@@ -3314,6 +3610,57 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       entry.appointments.toLocaleString(),
       entry.bespoke.toLocaleString(),
     ]);
+    const reportPayload: AnalyticsNarrativePayload = {
+      reportType: 'store-overview',
+      reportTitle: 'Store Overview Report',
+      generatedAt,
+      filters: {
+        branchFilter: storeOverviewBranchFilterLabel,
+        comparisonMetric: branchComparisonMetricLabel,
+      },
+      totals: {
+        totalSales: totalSalesForExport,
+        numberOfOrders: numberOfOrdersForExport,
+        newCustomers: newCustomersForExport,
+        topSellingItem: topSellingNameForExport,
+        topSellingCount: topSellingCountForExport,
+      },
+      tables: [
+        createNarrativeTable('Summary Metrics', ['Metric', 'Value'], summaryRows),
+        createNarrativeTable('Branch Comparison', ['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke'], comparisonRows),
+      ],
+      charts: [
+        createNarrativeChart('Revenue by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.revenue }))),
+        createNarrativeChart('Rents by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.rents }))),
+        createNarrativeChart('Appointments by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.appointments }))),
+        createNarrativeChart('Bespoke by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.bespoke }))),
+        createNarrativeChart('Items per Category', itemsPerCategoryChartItemsForExport.map((entry) => ({ label: entry.category, value: entry.count }))),
+        createNarrativeChart('Most Rented Items', mostRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
+        createNarrativeChart('Least Rented Items', leastRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
+      ],
+    };
+    const narrative = await requestAnalyticsNarrative(reportPayload);
+    const summaryMetricsNarrative = await requestSectionNarrative({
+      ...reportPayload,
+      charts: undefined,
+      tables: reportPayload.tables?.[0] ? [reportPayload.tables[0]] : undefined,
+    }, 'Summary Metrics', 'table');
+    const branchComparisonNarrative = await requestSectionNarrative({
+      ...reportPayload,
+      charts: undefined,
+      tables: reportPayload.tables?.[1] ? [reportPayload.tables[1]] : undefined,
+    }, 'Branch Comparison', 'table');
+    const chartNarratives: Array<AnalyticsNarrative | null> = [];
+    for (const chart of reportPayload.charts ?? []) {
+      const chartNarrative = await requestSectionNarrative({
+        ...reportPayload,
+        tables: undefined,
+        charts: [chart],
+      }, chart.title, 'chart');
+      chartNarratives.push(chartNarrative);
+    }
+    const chartNarrativeMap = new Map((reportPayload.charts ?? []).map((chart, index) => [chart.title, chartNarratives[index] ?? null]));
+
     const chartImages = branchComparisonMetricOptions
       .map((option) => renderStoreOverviewChartImage(option.value))
       .filter((chart): chart is NonNullable<typeof chart> => Boolean(chart));
@@ -3380,9 +3727,14 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
     });
 
-    const summaryTable = (pdfDocument as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    const summaryNarrativeEndY = appendPdfSectionNarrative(
+      pdfDocument,
+      summaryMetricsNarrative,
+      'Summary Metrics Summary',
+      getLastAutoTableFinalY(pdfDocument, 120) + 20,
+    );
     autoTable(pdfDocument, {
-      startY: (summaryTable?.finalY ?? 120) + 24,
+      startY: summaryNarrativeEndY + 12,
       head: [['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke']],
       body: comparisonRows.length > 0
         ? comparisonRows
@@ -3419,13 +3771,24 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
     });
 
+    appendPdfSectionNarrative(
+      pdfDocument,
+      branchComparisonNarrative,
+      'Branch Comparison Summary',
+      getLastAutoTableFinalY(pdfDocument, summaryNarrativeEndY + 12) + 20,
+    );
+
+    const chartSectionTops = [40, 360];
+    const chartImageWidth = 515;
+    const chartImageHeight = 138;
+
+    let lastChartNarrativeEndY: number | undefined;
     chartImages.forEach((chart, index) => {
       if (index % 2 === 0) {
         pdfDocument.addPage();
       }
 
-      const isTopChart = index % 2 === 0;
-      const sectionTop = isTopChart ? 48 : 414;
+      const sectionTop = chartSectionTops[index % 2];
 
       pdfDocument.setFont('times', 'normal');
       pdfDocument.setFontSize(16);
@@ -3434,11 +3797,22 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       pdfDocument.setFontSize(10);
       pdfDocument.setTextColor(107, 93, 79);
       pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, sectionTop + 18);
-      pdfDocument.addImage(chart.image, 'PNG', 40, sectionTop + 32, 515, 190);
+      pdfDocument.addImage(chart.image, 'PNG', 40, sectionTop + 26, chartImageWidth, chartImageHeight);
+      lastChartNarrativeEndY = appendPdfSectionNarrative(
+        pdfDocument,
+        chartNarrativeMap.get(chart.narrativeTitle) ?? null,
+        `${chart.metricLabel} Summary`,
+        sectionTop + 182,
+      );
     });
+
+    appendPdfFinalSummaryPage(pdfDocument, narrative, lastChartNarrativeEndY ? lastChartNarrativeEndY + 24 : undefined);
 
     setShowStoreOverviewExportModal(false);
     pdfDocument.save(`store-overview-${new Date().toISOString().slice(0, 10)}.pdf`);
+    } finally {
+      setIsGeneratingAnalyticsPdf(false);
+    }
   };
 
   // Inventory CRUD Functions
@@ -3752,7 +4126,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setShowUserExportModal(true);
   };
 
-  const handleSaveUsersAsPdf = (filter: UserExportFilter) => {
+  const handleSaveUsersAsPdf = async (filter: UserExportFilter) => {
     if (!canExportPdfs) return;
 
     const exportItems = getUserExportItems(filter);
@@ -3769,6 +4143,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       user.joinDate || 'Unknown',
       user.status === 'active' ? 'Active' : 'Archived',
     ]);
+    const narrative = await requestAnalyticsNarrative({
+      reportType: 'users',
+      reportTitle: exportTitle,
+      generatedAt,
+      filters: {
+        accountType: filterLabel,
+      },
+      totals: {
+        totalUsers: exportItems.length,
+      },
+      tables: [createNarrativeTable('Users', ['Name', 'Email', 'Phone', 'Branch', 'Role', 'Joined', 'Status'], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -3800,6 +4186,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
+
+    appendPdfSectionNarrative(document, narrative, 'Users Summary', getLastAutoTableFinalY(document, 112) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
 
     const filename = `${showArchivedUsersOnly ? 'archived-users' : `users-${filter}`}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
@@ -3841,9 +4230,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   }, [inventorySearchQuery, inventoryView, selectedBranch]);
 
   const inventoryItemsForCurrentView = inventoryView === 'archive' ? filteredArchivedItems : filteredInventory;
-  const inventoryExportItems = inventoryView === 'archive'
+  const inventoryExportSourceItems = inventoryView === 'archive'
     ? (filteredArchivedItems.length > 0 ? filteredArchivedItems : archivedItems)
     : inventoryItemsForCurrentView;
+  const inventoryExportItems = inventoryExportSourceItems.filter((item) => matchesInventoryExportBranch(item.branch));
   const inventoryTotalPages = Math.max(1, Math.ceil(inventoryItemsForCurrentView.length / INVENTORY_PAGE_SIZE));
   const safeInventoryPage = Math.min(inventoryPage, inventoryTotalPages);
   const paginatedInventoryItems = inventoryItemsForCurrentView.slice(
@@ -3852,7 +4242,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   );
   const inventoryCurrentPageCount = paginatedInventoryItems.length;
 
-  const handleSaveInventoryAsPdf = () => {
+  const handleSaveInventoryAsPdf = async () => {
     if (!canExportPdfs) return;
 
     const exportTitle = inventoryView === 'archive' ? 'Archived Inventory Report' : 'Inventory Report';
@@ -3874,6 +4264,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         statusValue,
       ];
     });
+    const narrative = await requestAnalyticsNarrative({
+      reportType: inventoryView === 'archive' ? 'inventory-archive' : 'inventory',
+      reportTitle: exportTitle,
+      generatedAt,
+      filters: {
+        branchFilter: inventoryExportBranchLabel,
+      },
+      totals: {
+        totalGowns: inventoryExportItems.length,
+      },
+      tables: [createNarrativeTable('Inventory', ['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -3881,10 +4283,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     document.setFontSize(10);
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
-    document.text(`Total gowns: ${inventoryExportItems.length}`, 40, 80);
+    document.text(`Branch Filter: ${inventoryExportBranchLabel}`, 40, 80);
+    document.text(`Total gowns: ${inventoryExportItems.length}`, 40, 96);
 
     autoTable(document, {
-      startY: 96,
+      startY: 112,
       head: [['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader]],
       body: rows.length > 0 ? rows : [['-', 'No gowns available for export.', '', '', '', '', '']],
       theme: 'grid',
@@ -3905,8 +4308,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
+    appendPdfSectionNarrative(document, narrative, 'Inventory Summary', getLastAutoTableFinalY(document, 112) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
+
     const filename = `${inventoryView === 'archive' ? 'archived' : 'inventory'}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
+    setShowInventoryExportModal(false);
   };
 
   const changeInventoryPage = (nextPage: number) => {
@@ -4187,7 +4594,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
-  const handleSaveRentalsAsPdf = (filters: RentalExportSelectableFilter[], branchFilter: string) => {
+  const handleSaveRentalsAsPdf = async (filters: RentalExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
     const exportItems = getRentalExportItems(filters, branchFilter);
@@ -4238,6 +4645,19 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         `PHP ${Number(rental.totalPrice || 0).toLocaleString()}`,
       ];
     });
+    const narrative = await requestAnalyticsNarrative({
+      reportType: filters.length === 1 && filters[0] === 'archive' ? 'rentals-archive' : 'rentals',
+      reportTitle: exportTitle,
+      generatedAt,
+      filters: {
+        view: filterLabel,
+        branch: branchFilter,
+      },
+      totals: {
+        totalRecords: exportItems.length,
+      },
+      tables: [createNarrativeTable('Rentals', ['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount'], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -4270,6 +4690,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
+
+    appendPdfSectionNarrative(document, narrative, 'Rentals Summary', getLastAutoTableFinalY(document, 128) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
 
     const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-rentals' : 'rentals-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
@@ -4442,7 +4865,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setShowAppointmentExportModal(true);
   };
 
-  const handleSaveAppointmentsAsPdf = (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
+  const handleSaveAppointmentsAsPdf = async (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
     const exportItems = getAppointmentExportItems(filters, branchFilter);
@@ -4462,6 +4885,19 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1),
       appointment.selectedGownName || 'Not specified',
     ]);
+    const narrative = await requestAnalyticsNarrative({
+      reportType: filters.length === 1 && filters[0] === 'archive' ? 'appointments-archive' : 'appointments',
+      reportTitle: exportTitle,
+      generatedAt,
+      filters: {
+        view: filterLabel,
+        branch: branchFilter,
+      },
+      totals: {
+        totalRecords: exportItems.length,
+      },
+      tables: [createNarrativeTable('Appointments', ['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown'], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -4494,6 +4930,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
+
+    appendPdfSectionNarrative(document, narrative, 'Appointments Summary', getLastAutoTableFinalY(document, 128) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
 
     const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-appointments' : 'appointments-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
@@ -4716,7 +5155,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setShowCustomOrderExportModal(true);
   };
 
-  const handleSaveCustomOrdersAsPdf = (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
+  const handleSaveCustomOrdersAsPdf = async (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
     if (!canExportPdfs) return;
 
     const exportItems = getCustomOrderExportItems(filters, branchFilter);
@@ -4735,6 +5174,19 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       order.eventDate || 'Not set',
       formatCustomOrderBudget(order.budget),
     ]);
+    const narrative = await requestAnalyticsNarrative({
+      reportType: filters.length === 1 && filters[0] === 'archive' ? 'custom-orders-archive' : 'custom-orders',
+      reportTitle: exportTitle,
+      generatedAt,
+      filters: {
+        view: filterLabel,
+        branch: branchFilter,
+      },
+      totals: {
+        totalRecords: exportItems.length,
+      },
+      tables: [createNarrativeTable('Custom Orders', ['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget'], rows)],
+    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -4767,6 +5219,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
+
+    appendPdfSectionNarrative(document, narrative, 'Custom Orders Summary', getLastAutoTableFinalY(document, 128) + 20);
+    appendPdfFinalSummaryPage(document, narrative);
 
     const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-custom-orders' : 'custom-orders-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
@@ -5493,8 +5948,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 {canExportPdfs && (
                   <button
                     type="button"
-                    onClick={handleSaveInventoryAsPdf}
-                    disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
+                    onClick={openInventoryExportModal}
+                    disabled={inventoryLoading || archiveLoading || inventoryExportSourceItems.length === 0}
                     className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     aria-label="Save inventory as PDF"
                   >
@@ -6543,7 +6998,68 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 <button
                   type="button"
                   onClick={handleSaveStoreOverviewAsPdf}
-                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0}
+                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0 || isGeneratingAnalyticsPdf}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isGeneratingAnalyticsPdf ? 'Generating...' : 'Save PDF'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showInventoryExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose inventory branches for PDF export"
+            onClick={() => setShowInventoryExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Inventory as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose one or more branches to include in the exported PDF.
+              </p>
+
+              <div className="space-y-3 mb-6">
+                {['All Branches', ...inventoryExportBranchOptions].map((branchOption) => (
+                  <label
+                    key={branchOption}
+                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                      selectedInventoryExportBranches.includes(branchOption)
+                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      name={`inventory-export-branch-${branchOption}`}
+                      value={branchOption}
+                      checked={selectedInventoryExportBranches.includes(branchOption)}
+                      onChange={() => toggleInventoryExportBranch(branchOption)}
+                      className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                    />
+                    <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowInventoryExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveInventoryAsPdf}
+                  disabled={!canExportPdfs || inventoryExportItems.length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
