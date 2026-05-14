@@ -46,7 +46,6 @@ interface User {
 interface NewUserForm {
   role: ManagedUserRole;
   email: string;
-  password: string;
   firstName: string;
   lastName: string;
   phoneNumber: string;
@@ -405,7 +404,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [newUserForm, setNewUserForm] = useState<NewUserForm>({
     role: 'Customer',
     email: '',
-    password: '',
     firstName: '',
     lastName: '',
     phoneNumber: ''
@@ -1656,18 +1654,13 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   async function handleCreateUser() {
     setNewUserError(null);
 
-    if (!newUserForm.email.trim() || !newUserForm.password.trim()) {
-      setNewUserError('Email and password are required.');
+    if (!newUserForm.email.trim()) {
+      setNewUserError('Email is required.');
       return;
     }
 
     if (!newUserForm.firstName.trim() || !newUserForm.lastName.trim()) {
       setNewUserError('First name and last name are required.');
-      return;
-    }
-
-    if (newUserForm.password.trim().length < 8) {
-      setNewUserError('Password must be at least 8 characters long.');
       return;
     }
 
@@ -1682,7 +1675,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const payload: CreateManagedUserPayload = {
       role: newUserForm.role,
       email: newUserForm.email.trim(),
-      password: newUserForm.password,
       firstName: newUserForm.firstName.trim(),
       lastName: newUserForm.lastName.trim(),
       ...(newUserForm.role === 'Customer'
@@ -1694,13 +1686,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
     setCreatingUser(true);
     try {
-      await usersAPI.createUser(token, payload);
+      const result = await usersAPI.createUser(token, payload);
       await loadUsers();
       setShowAddUserModal(false);
+      setUsersMessage(
+        result.temporaryPassword
+          ? `User created successfully. Temporary password: ${result.temporaryPassword}`
+          : 'User created successfully.'
+      );
+      setTimeout(() => setUsersMessage(null), 8000);
       setNewUserForm({
         role: 'Customer',
         email: '',
-        password: '',
         firstName: '',
         lastName: '',
         phoneNumber: ''
@@ -9280,15 +9277,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     </div>
                   )}
 
-                  <div className="md:col-span-2">
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Password</label>
-                    <input
-                      type="password"
-                      value={newUserForm.password}
-                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, password: e.target.value }))}
-                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                      placeholder="Minimum 8 characters"
-                    />
+                  <div className="md:col-span-2 rounded-lg border border-[#E8DCC8] bg-[#FAF7F0] px-4 py-3 text-sm text-[#6B5D4F]">
+                    A temporary password will be generated automatically for this user.
                   </div>
                 </div>
 

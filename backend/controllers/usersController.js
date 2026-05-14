@@ -47,6 +47,25 @@ function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+function generateTemporaryPassword() {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const symbols = '!@#$%^&*';
+  const combined = `${upper}${lower}${digits}${symbols}`;
+  const randomFrom = (value) => value.charAt(Math.floor(Math.random() * value.length));
+
+  return [
+    randomFrom(upper),
+    randomFrom(lower),
+    randomFrom(digits),
+    randomFrom(symbols),
+    ...Array.from({ length: 8 }, () => randomFrom(combined)),
+  ]
+    .sort(() => Math.random() - 0.5)
+    .join('');
+}
+
 async function logAdminAction(req, payload) {
   try {
     await AdminAction.create({
@@ -88,11 +107,13 @@ export async function createUser(req, res) {
     }
 
     const normalizedEmail = normalizeEmail(email);
-    if (!normalizedEmail || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required' });
     }
 
-    if (String(password).length < 8) {
+    const resolvedPassword = String(password || generateTemporaryPassword());
+
+    if (resolvedPassword.length < 8) {
       return res.status(400).json({ message: 'Password must be at least 8 characters long' });
     }
 
@@ -119,7 +140,7 @@ export async function createUser(req, res) {
         firstName: normalizedFirstName,
         lastName: normalizedLastName,
         email: normalizedEmail,
-        password,
+        password: resolvedPassword,
         status: 'active'
       });
 
@@ -131,12 +152,14 @@ export async function createUser(req, res) {
         targetRole: roleLabel,
         details: {
           createdRole: roleLabel,
-          email: elevatedAccount.email
+          email: elevatedAccount.email,
+          temporaryPassword: resolvedPassword
         }
       });
 
       return res.status(201).json({
         message: `${roleLabel} account created successfully`,
+        temporaryPassword: resolvedPassword,
         user: {
           id: String(elevatedAccount._id),
           firstName: elevatedAccount.firstName,
@@ -169,7 +192,7 @@ export async function createUser(req, res) {
       firstName: normalizedFirstName,
       lastName: normalizedLastName,
       email: normalizedEmail,
-      password,
+      password: resolvedPassword,
       phoneNumber: normalizedPhone,
       status: 'active'
     });
@@ -180,12 +203,14 @@ export async function createUser(req, res) {
       targetRole: 'Customer',
       details: {
         createdRole: 'Customer',
-        email: customer.email
+        email: customer.email,
+        temporaryPassword: resolvedPassword
       }
     });
 
     return res.status(201).json({
       message: 'Customer account created successfully',
+      temporaryPassword: resolvedPassword,
       user: {
         id: String(customer._id),
         firstName: customer.firstName,

@@ -30,7 +30,7 @@ interface ArchiveUserResponse {
 export interface CreateManagedUserPayload {
   role: ManagedUserRole;
   email: string;
-  password: string;
+  password?: string;
   firstName?: string;
   lastName?: string;
   phoneNumber?: string;
@@ -39,6 +39,12 @@ export interface CreateManagedUserPayload {
 interface CreateUserResponse {
   message: string;
   user: ManagedUser;
+  temporaryPassword?: string;
+}
+
+export interface CreateManagedUserResult {
+  user: ManagedUser;
+  temporaryPassword?: string;
 }
 
 export interface AdminActionEntry {
@@ -103,7 +109,7 @@ export async function restoreUser(token: string, role: ManagedUserRole, id: stri
   });
 }
 
-export async function createUser(token: string, payload: CreateManagedUserPayload): Promise<ManagedUser> {
+export async function createUser(token: string, payload: CreateManagedUserPayload): Promise<CreateManagedUserResult> {
   const data = await request<CreateUserResponse>(API_BASE, token, {
     method: 'POST',
     body: JSON.stringify({
@@ -111,7 +117,10 @@ export async function createUser(token: string, payload: CreateManagedUserPayloa
       role: payload.role.toLowerCase()
     })
   });
-  return data.user;
+  return {
+    user: data.user,
+    temporaryPassword: data.temporaryPassword,
+  };
 }
 
 export async function getAdminActions(token: string): Promise<AdminActionEntry[]> {
