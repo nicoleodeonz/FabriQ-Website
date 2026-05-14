@@ -1445,7 +1445,146 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     return String(value);
   };
 
+  const parseNarrativeNumber = (value: string | number) => {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+
+    const normalized = String(value)
+      .replace(/Php\s*/gi, '')
+      .replace(/₱/g, '')
+      .replace(/,/g, '')
+      .trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const formatNarrativeMetric = (label: string, value: string | number) => {
+    const numericValue = parseNarrativeNumber(value);
+    if (numericValue !== null && isCurrencyNarrativeKey(label)) {
+      return `Php ${numericValue.toLocaleString()}`;
+    }
+    if (numericValue !== null && Number.isInteger(numericValue)) {
+      return numericValue.toLocaleString();
+    }
+    return String(value);
+  };
+
+  const buildChartFallbackSummary = (payload: AnalyticsNarrativePayload) => {
+    const chart = payload.charts?.[0];
+    if (!chart || chart.dataPoints.length === 0) {
+      return null;
+    }
+
+    const numericPoints = chart.dataPoints
+      .map((point) => ({
+        label: String(point.label || '').trim(),
+        value: parseNarrativeNumber(point.value),
+      }))
+      .filter((point): point is { label: string; value: number } => Boolean(point.label) && point.value !== null);
+
+    if (numericPoints.length === 0) {
+      return null;
+    }
+
+    const sortedPoints = [...numericPoints].sort((left, right) => right.value - left.value);
+    const highestPoint = sortedPoints[0];
+    const lowestPoint = sortedPoints[sortedPoints.length - 1];
+    const metricLabel = chart.title.replace(/\s+by\s+branch$/i, '').replace(/\s+comparison$/i, '').trim();
+    const formattedHighest = formatNarrativeMetric(metricLabel, highestPoint.value);
+    const formattedLowest = formatNarrativeMetric(metricLabel, lowestPoint.value);
+    const branchFilter = payload.filters?.branchFilter ? ` for ${payload.filters.branchFilter}` : '';
+
+    const firstParagraph = `${chart.title} compares ${numericPoints.length} data point${numericPoints.length === 1 ? '' : 's'}${branchFilter}. ${highestPoint.label} records the highest ${metricLabel.toLowerCase()} at ${formattedHighest}${numericPoints.length > 1 ? `, making it the strongest value in this section.` : '.'}`;
+    const secondParagraph = numericPoints.length > 1
+      ? `${lowestPoint.label} records the lowest ${metricLabel.toLowerCase()} at ${formattedLowest}. Overall, the chart shows how performance is distributed across the included labels, with ${highestPoint.label} leading this view and ${lowestPoint.label} trailing the rest.`
+      : `Overall, the chart provides a focused view of the current ${metricLabel.toLowerCase()} result for ${highestPoint.label}.`;
+
+    return `${firstParagraph}\n\n${secondParagraph}`;
+  };
+
+  const buildSummaryMetricsFallback = (table: NonNullable<AnalyticsNarrativePayload['tables']>[number]) => {
+    const metrics = Object.fromEntries(
+      table.sampleRows
+        .filter((row) => row.length >= 2)
+        .map((row) => [String(row[0] || '').trim(), String(row[1] || '').trim()])
+    );
+
+    const totalSales = metrics['Total Sales'];
+    const numberOfOrders = metrics['Number of Orders'];
+    const newCustomers = metrics['New Customers'];
+    const topSellingItem = metrics['Top Selling Item'];
+
+    const firstParagraph = `The Summary Metrics section brings together the main performance figures for this report. Total sales reached ${formatNarrativeMetric('totalSales', totalSales || '0')}${numberOfOrders ? ` from ${formatNarrativeMetric('numberOfOrders', numberOfOrders)} orders` : ''}${newCustomers ? `, while ${formatNarrativeMetric('newCustomers', newCustomers)} new customers were recorded during the selected period` : ''}.`;
+    const secondParagraph = topSellingItem
+      ? `${topSellingItem} stands out as the top-selling item in this view. Overall, this section provides a quick snapshot of sales activity, order volume, and customer movement for the current filters.`
+      : 'Overall, this section provides a quick snapshot of sales activity and customer movement for the current filters.';
+
+    return `${firstParagraph}\n\n${secondParagraph}`;
+  };
+
+  const buildBranchComparisonFallback = (table: NonNullable<AnalyticsNarrativePayload['tables']>[number]) => {
+    const rows = table.sampleRows
+      .filter((row) => row.length >= 5)
+      .map((row) => ({
+        branch: String(row[0] || '').trim(),
+        revenue: parseNarrativeNumber(row[1]) ?? 0,
+        rents: parseNarrativeNumber(row[2]) ?? 0,
+        appointments: parseNarrativeNumber(row[3]) ?? 0,
+        bespoke: parseNarrativeNumber(row[4]) ?? 0,
+      }))
+      .filter((row) => row.branch);
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const highestRevenue = [...rows].sort((left, right) => right.revenue - left.revenue)[0];
+    const highestAppointments = [...rows].sort((left, right) => right.appointments - left.appointments)[0];
+    const highestBespoke = [...rows].sort((left, right) => right.bespoke - left.bespoke)[0];
+    const lowestRevenue = [...rows].sort((left, right) => left.revenue - right.revenue)[0];
+
+    const firstParagraph = `The Branch Comparison section shows how each branch performed across revenue, rents, appointments, and bespoke orders. ${highestRevenue.branch} posted the highest revenue at ${formatNarrativeMetric('revenue', highestRevenue.revenue)}, while ${highestAppointments.branch} led appointments with ${formatNarrativeMetric('appointments', highestAppointments.appointments)} and ${highestBespoke.branch} led bespoke orders with ${formatNarrativeMetric('bespoke', highestBespoke.bespoke)}.`;
+    const secondParagraph = `${lowestRevenue.branch} recorded the lowest revenue at ${formatNarrativeMetric('revenue', lowestRevenue.revenue)}. Overall, the table shows that branch performance is mixed across the tracked metrics rather than being led by a single branch in every category.`;
+
+    return `${firstParagraph}\n\n${secondParagraph}`;
+  };
+
+  const buildTableFallbackSummary = (payload: AnalyticsNarrativePayload) => {
+    const table = payload.tables?.[0];
+    if (!table || table.rowCount === 0) {
+      return null;
+    }
+
+    if (table.title === 'Summary Metrics') {
+      return buildSummaryMetricsFallback(table);
+    }
+
+    if (table.title === 'Branch Comparison') {
+      return buildBranchComparisonFallback(table);
+    }
+
+    const firstRow = table.sampleRows[0] ?? [];
+    const previewText = firstRow.length > 0
+      ? `The first visible row begins with ${firstRow.map((cell) => String(cell || '').trim()).filter(Boolean).slice(0, 2).join(' and ')}.`
+      : '';
+    const firstParagraph = `The ${table.title} section contains ${table.rowCount} row${table.rowCount === 1 ? '' : 's'} for the current export. It summarizes the detailed records included in this part of the report.`;
+    const secondParagraph = `${previewText} Overall, this table is intended to support a closer review of the underlying records for the selected filters.`.trim();
+
+    return `${firstParagraph}\n\n${secondParagraph}`;
+  };
+
   const buildFallbackNarrative = (payload: AnalyticsNarrativePayload): AnalyticsNarrative => {
+    const chartSummary = payload.charts?.length === 1 && (!payload.tables || payload.tables.length === 0)
+      ? buildChartFallbackSummary(payload)
+      : null;
+    const tableSummary = payload.tables?.length === 1 && (!payload.charts || payload.charts.length === 0)
+      ? buildTableFallbackSummary(payload)
+      : null;
     const totals = Object.entries(payload.totals ?? {}).filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '');
     const filterEntries = Object.entries(payload.filters ?? {}).filter(([, value]) => String(value || '').trim() !== '');
     const tables = payload.tables ?? [];
@@ -1493,7 +1632,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
     return {
       headline: `${payload.reportTitle} Summary`,
-      summary: summaryParts.join(' '),
+      summary: chartSummary || tableSummary || summaryParts.join(' '),
       highlights,
       risks,
       recommendedActions,
@@ -1504,7 +1643,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     return requestAnalyticsNarrative({
       ...payload,
       reportTitle: `${payload.reportTitle} - ${sectionTitle}`,
-      notes: [`Write a concise 2 to 3 sentence summary for the ${sectionKind} titled "${sectionTitle}" only.`],
+      notes: [
+        `Write exactly 2 short paragraphs for the ${sectionKind} titled "${sectionTitle}" only, with 2 to 3 grammatically correct sentences per paragraph.`,
+        'In the first paragraph, explain what the section is summarizing and identify the strongest values when the data supports that comparison.',
+        'In the second paragraph, mention weaker or lower values when supported and end with a brief overall takeaway.',
+        'Do not copy labels mechanically or list values without explanation.',
+      ],
     });
   };
 
@@ -1556,7 +1700,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 8,
         cellPadding: 7,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -3079,7 +3224,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 10,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -3695,7 +3841,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 10,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -3741,7 +3888,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 10,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -4171,7 +4319,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 9,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -4292,7 +4441,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 9,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -4675,7 +4825,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 9,
         cellPadding: 8,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -4915,7 +5066,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 8,
         cellPadding: 7,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
@@ -5204,7 +5356,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         fontSize: 8,
         cellPadding: 7,
         textColor: [26, 26, 26],
-        lineColor: [232, 220, 200],
+        lineColor: [214, 198, 176],
+        lineWidth: 0.45,
       },
       headStyles: {
         fillColor: [250, 247, 240],
