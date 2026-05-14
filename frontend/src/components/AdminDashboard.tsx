@@ -49,6 +49,7 @@ interface NewUserForm {
   firstName: string;
   lastName: string;
   phoneNumber: string;
+  preferredBranch: string;
 }
 
 interface PendingReturn {
@@ -233,6 +234,8 @@ function matchesSelectedBranch(branch: string | null | undefined, selectedBranch
   return normalizeBranchName(branch) === normalizeBranchName(selectedBranch);
 }
 
+const STAFF_BRANCH_OPTIONS = ['Taguig Main', 'BGC Branch', 'Makati Branch', 'Quezon City'];
+
 function toLocalDateKey(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -406,7 +409,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     email: '',
     firstName: '',
     lastName: '',
-    phoneNumber: ''
+    phoneNumber: '',
+    preferredBranch: 'Taguig Main'
   });
   const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
   const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
@@ -1817,11 +1821,22 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
+    if (newUserForm.role === 'Staff' && !newUserForm.preferredBranch.trim()) {
+      setNewUserError('Branch assignment is required for staff accounts.');
+      return;
+    }
+
     const payload: CreateManagedUserPayload = {
       role: newUserForm.role,
       email: newUserForm.email.trim(),
       firstName: newUserForm.firstName.trim(),
       lastName: newUserForm.lastName.trim(),
+      ...(newUserForm.role === 'Staff'
+        ? {
+            phoneNumber: newUserForm.phoneNumber.trim(),
+            preferredBranch: newUserForm.preferredBranch.trim(),
+          }
+        : {}),
       ...(newUserForm.role === 'Customer'
         ? {
             phoneNumber: newUserForm.phoneNumber.trim()
@@ -1845,7 +1860,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         email: '',
         firstName: '',
         lastName: '',
-        phoneNumber: ''
+        phoneNumber: '',
+        preferredBranch: 'Taguig Main'
       });
     } catch (err) {
       setNewUserError(err instanceof Error ? err.message : 'Failed to create user');
@@ -9376,7 +9392,13 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     <label className="block text-sm text-[#6B5D4F] mb-2">Account Type</label>
                     <select
                       value={newUserForm.role}
-                      onChange={(e) => setNewUserForm((prev) => ({ ...prev, role: e.target.value as ManagedUserRole }))}
+                      onChange={(e) =>
+                        setNewUserForm((prev) => ({
+                          ...prev,
+                          role: e.target.value as ManagedUserRole,
+                          preferredBranch: prev.preferredBranch || 'Taguig Main',
+                        }))
+                      }
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
                     >
                       <option value="Customer">Customer</option>
@@ -9428,6 +9450,36 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                         placeholder="09XXXXXXXXX or +639XXXXXXXXX"
                       />
                     </div>
+                  )}
+
+                  {newUserForm.role === 'Staff' && (
+                    <>
+                      <div>
+                        <label className="block text-sm text-[#6B5D4F] mb-2">Phone Number</label>
+                        <input
+                          type="text"
+                          value={newUserForm.phoneNumber}
+                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, phoneNumber: e.target.value }))}
+                          className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
+                          placeholder="09XXXXXXXXX or +639XXXXXXXXX"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm text-[#6B5D4F] mb-2">Assigned Branch</label>
+                        <select
+                          value={newUserForm.preferredBranch}
+                          onChange={(e) => setNewUserForm((prev) => ({ ...prev, preferredBranch: e.target.value }))}
+                          className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors bg-white"
+                        >
+                          {STAFF_BRANCH_OPTIONS.map((branchOption) => (
+                            <option key={branchOption} value={branchOption}>
+                              {branchOption}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
                   )}
 
                   <div className="md:col-span-2 rounded-lg border border-[#E8DCC8] bg-[#FAF7F0] px-4 py-3 text-sm text-[#6B5D4F]">

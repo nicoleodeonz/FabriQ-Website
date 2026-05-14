@@ -98,7 +98,8 @@ export async function createUser(req, res) {
       password,
       firstName,
       lastName,
-      phoneNumber
+      phoneNumber,
+      preferredBranch
     } = req.body;
 
     const normalizedRole = normalizeManagedRole(role);
@@ -136,11 +137,24 @@ export async function createUser(req, res) {
 
     if (isElevatedRole(normalizedRole)) {
       const Model = getElevatedAccountModel(normalizedRole);
+      const normalizedElevatedPhone = String(phoneNumber || '').trim();
+      const normalizedPreferredBranch = String(preferredBranch || '').trim();
+
+      if (normalizedRole === 'staff' && !normalizedPreferredBranch) {
+        return res.status(400).json({ message: 'Branch assignment is required for staff accounts' });
+      }
+
       const elevatedAccount = await Model.create({
         firstName: normalizedFirstName,
         lastName: normalizedLastName,
         email: normalizedEmail,
         password: resolvedPassword,
+        ...(normalizedRole === 'staff'
+          ? {
+              phoneNumber: normalizedElevatedPhone,
+              preferredBranch: normalizedPreferredBranch,
+            }
+          : {}),
         status: 'active'
       });
 
@@ -153,6 +167,7 @@ export async function createUser(req, res) {
         details: {
           createdRole: roleLabel,
           email: elevatedAccount.email,
+          ...(normalizedRole === 'staff' ? { preferredBranch: normalizedPreferredBranch } : {}),
           temporaryPassword: resolvedPassword
         }
       });
@@ -165,7 +180,8 @@ export async function createUser(req, res) {
           firstName: elevatedAccount.firstName,
           lastName: elevatedAccount.lastName,
           email: elevatedAccount.email,
-          phoneNumber: '',
+          phoneNumber: String(elevatedAccount.phoneNumber || '').trim(),
+          preferredBranch: String(elevatedAccount.preferredBranch || '').trim(),
           role: roleLabel,
           status: elevatedAccount.status || 'active',
           createdAt: elevatedAccount.createdAt,

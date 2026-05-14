@@ -34,6 +34,7 @@ export interface CreateManagedUserPayload {
   firstName?: string;
   lastName?: string;
   phoneNumber?: string;
+  preferredBranch?: string;
 }
 
 interface CreateUserResponse {

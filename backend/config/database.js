@@ -45,7 +45,8 @@ export const connectDB = async () => {
     }
 
     await mongoose.connect(mongoUri, {
-      dbName: process.env.MONGODB_DB_NAME || 'FabriQ'
+      dbName: process.env.MONGODB_DB_NAME || 'FabriQ',
+      tlsAllowInvalidCertificates: true
     });
     await ensureCustomerPhoneNumberIndex();
     console.log(`MongoDB connected successfully (${mongoose.connection.name})`);
