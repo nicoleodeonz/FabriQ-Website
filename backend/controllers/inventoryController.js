@@ -4,7 +4,7 @@ import AdminAction from '../models/AdminAction.js';
 import RentalDetail from '../models/RentalDetail.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
-import { storeUploadedImage } from '../services/mediaStorageService.js';
+import { storeUploadedAsset, storeUploadedImage } from '../services/mediaStorageService.js';
 
 const LOW_STOCK_THRESHOLD = 2;
 
@@ -45,6 +45,19 @@ function buildAdminName(email) {
     .join(' ') || 'Admin';
 }
 
+function normalizeImagesInput(images, image) {
+  const normalizedImages = Array.isArray(images)
+    ? images.map((entry) => String(entry || '').trim()).filter(Boolean)
+    : [];
+  const normalizedPrimaryImage = String(image || '').trim();
+
+  if (normalizedPrimaryImage) {
+    return [normalizedPrimaryImage, ...normalizedImages.filter((entry) => entry !== normalizedPrimaryImage)].slice(0, 6);
+  }
+
+  return normalizedImages.slice(0, 6);
+}
+
 async function logAdminAction(req, payload) {
   try {
     await AdminAction.create({
@@ -76,6 +89,10 @@ function normalizeProductResponse(req, product) {
   delete plainProduct.__v;
 
   plainProduct.image = toPublicUrl(req, plainProduct.image);
+  plainProduct.images = Array.isArray(plainProduct.images)
+    ? plainProduct.images.map((entry) => toPublicUrl(req, entry)).filter(Boolean)
+    : (plainProduct.image ? [plainProduct.image] : []);
+  plainProduct.model3dUrl = toPublicUrl(req, plainProduct.model3dUrl);
 
   return plainProduct;
 }
@@ -266,6 +283,27 @@ export async function uploadImage(req, res) {
   }
 }
 
+export async function upload3DModel(req, res) {
+  try {
+    if (!isElevatedRole(req.user.role)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    const storedModel = await storeUploadedAsset(req.file, {
+      folder: 'products/models',
+      resourceType: 'image',
+      allowLocalFallback: true,
+    });
+    res.json({ url: toPublicUrl(req, storedModel.url) });
+  } catch (err) {
+    console.error('upload3DModel error:', err);
+    res.status(500).json({ message: 'Failed to upload 3D model' });
+  }
+}
+
 export async function getInventory(req, res) {
   try {
     if (!isElevatedRole(req.user.role)) {
@@ -402,7 +440,7 @@ export async function createProduct(req, res) {
       return res.status(403).json({ message: 'Access denied' });
     }
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, featuredHome, rating, ratings, stock } = req.body;
+          description, image, images, model3dUrl, featuredHome, rating, ratings, stock } = req.body;
 
     if (!name || !category || !color || price === undefined || !branch) {
       return res.status(400).json({ message: 'Missing required fields: name, category, color, price, branch' });
@@ -412,6 +450,7 @@ export async function createProduct(req, res) {
     }
 
     const normalizedRatings = normalizeRatingsInput(ratings);
+    const normalizedImages = normalizeImagesInput(images, image);
 
     const sku = await generateSKU();
     const product = new ProductDetail({
@@ -425,7 +464,9 @@ export async function createProduct(req, res) {
       status: status || 'available',
       lastRented: lastRented || null,
       description: description ? description.trim() : '',
-      image: image ? image.trim() : '',
+      image: normalizedImages[0] || '',
+      images: normalizedImages,
+      model3dUrl: String(model3dUrl || '').trim(),
       featuredHome: Boolean(featuredHome),
       rating: computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0),
       ratings: normalizedRatings,
@@ -467,13 +508,16 @@ export async function updateProduct(req, res) {
     }
     const { id } = req.params;
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, featuredHome, rating, ratings, stock } = req.body;
+          description, image, images, model3dUrl, featuredHome, rating, ratings, stock } = req.body;
 
     if (price !== undefined && (typeof price !== 'number' || price < 0)) {
       return res.status(400).json({ message: 'Price must be a non-negative number' });
     }
 
     const normalizedRatings = ratings !== undefined ? normalizeRatingsInput(ratings) : null;
+    const normalizedImages = images !== undefined || image !== undefined
+      ? normalizeImagesInput(images, image)
+      : null;
 
     const updates = {};
     if (name !== undefined) updates.name = name.trim();
@@ -485,7 +529,11 @@ export async function updateProduct(req, res) {
     if (status !== undefined) updates.status = status;
     if (lastRented !== undefined) updates.lastRented = lastRented || null;
     if (description !== undefined) updates.description = description.trim();
-    if (image !== undefined) updates.image = image.trim();
+    if (normalizedImages !== null) {
+      updates.images = normalizedImages;
+      updates.image = normalizedImages[0] || '';
+    }
+    if (model3dUrl !== undefined) updates.model3dUrl = String(model3dUrl || '').trim();
     if (featuredHome !== undefined) updates.featuredHome = Boolean(featuredHome);
     if (normalizedRatings !== null) {
       updates.ratings = normalizedRatings;

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, MapPin, ChevronRight, X, Star } from 'lucide-react';
 import { customerAPI } from '../services/customerAPI';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
 import { rentalAPI } from '../services/rentalAPI';
+import { createCustomerActivityEventSource } from '../services/adminRealtime';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { Calendar as DateCalendar } from './ui/calendar';
@@ -34,6 +35,8 @@ interface Rental {
   pickupScheduleTime?: string | null;
   hasReview?: boolean;
   reviewSubmittedAt?: string | null;
+  reviewScore?: number | null;
+  reviewComment?: string | null;
 }
 
 interface RentalsProps {
@@ -153,6 +156,59 @@ function normalizeNotificationText(value?: string | null) {
   return String(value || '').trim().toLowerCase();
 }
 
+function normalizeRentalStatusKey(status?: string | null) {
+  return normalizeNotificationText(status)
+    .replace(/\s*-\s*/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+}
+
+function hasRentalStatus(status: string | null | undefined, expected: Rental['status']) {
+  return normalizeRentalStatusKey(status) === expected;
+}
+
+function getRentalStatusBadgeClasses(status?: string | null) {
+  switch (normalizeRentalStatusKey(status)) {
+    case 'active':
+      return 'bg-green-100 text-green-800';
+    case 'pending':
+      return 'bg-amber-100 text-amber-800';
+    case 'for_payment':
+      return 'bg-rose-100 text-rose-800';
+    case 'paid_for_confirmation':
+      return 'bg-violet-100 text-violet-800';
+    case 'for_pickup':
+      return 'bg-cyan-100 text-cyan-800';
+    case 'cancelled':
+      return 'bg-red-100 text-red-800';
+    case 'completed':
+      return 'bg-emerald-100 text-emerald-800';
+    default:
+      return 'bg-[#F5EFE6] text-[#6B5D4F]';
+  }
+}
+
+function getRentalStatusBadgeStyle(status?: string | null) {
+  switch (normalizeRentalStatusKey(status)) {
+    case 'active':
+      return { backgroundColor: '#DCFCE7', color: '#166534' };
+    case 'pending':
+      return { backgroundColor: '#FEF3C7', color: '#92400E' };
+    case 'for_payment':
+      return { backgroundColor: '#FFE4E6', color: '#9F1239' };
+    case 'paid_for_confirmation':
+      return { backgroundColor: '#EDE9FE', color: '#6D28D9' };
+    case 'for_pickup':
+      return { backgroundColor: '#CFFAFE', color: '#155E75' };
+    case 'cancelled':
+      return { backgroundColor: '#FEE2E2', color: '#991B1B' };
+    case 'completed':
+      return { backgroundColor: '#D1FAE5', color: '#065F46' };
+    default:
+      return { backgroundColor: '#F5EFE6', color: '#6B5D4F' };
+  }
+}
+
 function getRentalNotificationComparableStatus(status?: string | null) {
   const normalizedStatus = normalizeNotificationText(status);
   return normalizedStatus === 'overdue' ? 'active' : normalizedStatus;
@@ -169,6 +225,27 @@ function labelsMatch(left?: string | null, right?: string | null) {
   return normalizedLeft === normalizedRight
     || normalizedLeft.includes(normalizedRight)
     || normalizedRight.includes(normalizedLeft);
+}
+
+function hasScheduledPickup(rental: Pick<Rental, 'pickupScheduleDate' | 'pickupScheduleTime'>) {
+  return Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);
+}
+
+function getRentalStatusLabel(rental: Pick<Rental, 'status' | 'pickupScheduleDate' | 'pickupScheduleTime'>) {
+  const normalizedStatus = normalizeRentalStatusKey(rental.status);
+
+  if (normalizedStatus === 'paid_for_confirmation') {
+    return 'Paid - For Confirmation';
+  }
+
+  if (normalizedStatus === 'for_pickup') {
+    return hasScheduledPickup(rental) ? 'For Pickup' : 'Schedule Pickup';
+  }
+
+  return normalizedStatus
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 export function Rentals({ user, token, selectedGownId, selectedRentalId, selectedRentalNotification, selectedRentalTab, onSelectedRentalHandled, onSelectedRentalNotificationHandled, onSelectedRentalTabHandled }: RentalsProps) {
@@ -316,58 +393,76 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     };
   }, [token, user.email, user.firstName, user.lastName, user.phoneNumber]);
 
+  const loadMyRentals = useCallback(async () => {
+    setRentalsLoading(true);
+    setRentalsError('');
+
+    try {
+      const myRentals = await rentalAPI.getMyRentals(token);
+      setRentals(
+        myRentals.map((rental) => ({
+          id: rental.id,
+          referenceId: rental.referenceId ?? rental.id,
+          gownName: rental.gownName,
+          gownImage: rental.gownImage,
+          sku: rental.sku,
+          startDate: rental.startDate,
+          endDate: rental.endDate,
+          status: rental.status,
+          totalPrice: rental.totalPrice,
+          downpayment: rental.downpayment,
+          branch: rental.branch,
+          eventType: rental.eventType,
+          paymentSubmittedAt: rental.paymentSubmittedAt,
+          paymentAmountPaid: rental.paymentAmountPaid,
+          paymentReferenceNumber: rental.paymentReferenceNumber,
+          paymentReceiptUrl: rental.paymentReceiptUrl,
+          paymentReceiptFilename: rental.paymentReceiptFilename,
+          rejectionReason: rental.rejectionReason,
+          rejectedAt: rental.rejectedAt,
+          pickupScheduleDate: rental.pickupScheduleDate,
+          pickupScheduleTime: rental.pickupScheduleTime,
+          hasReview: rental.hasReview,
+          reviewSubmittedAt: rental.reviewSubmittedAt,
+          reviewScore: rental.reviewScore,
+          reviewComment: rental.reviewComment,
+        }))
+      );
+    } catch (error) {
+      setRentalsError(error instanceof Error ? error.message : 'Failed to load your rentals.');
+    } finally {
+      setRentalsLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
     let isMounted = true;
 
-    const loadMyRentals = async () => {
-      setRentalsLoading(true);
-      setRentalsError('');
-
-      try {
-        const myRentals = await rentalAPI.getMyRentals(token);
-        if (!isMounted) return;
-
-        setRentals(
-          myRentals.map((rental) => ({
-            id: rental.id,
-            referenceId: rental.referenceId ?? rental.id,
-            gownName: rental.gownName,
-            gownImage: rental.gownImage,
-            sku: rental.sku,
-            startDate: rental.startDate,
-            endDate: rental.endDate,
-            status: rental.status,
-            totalPrice: rental.totalPrice,
-            downpayment: rental.downpayment,
-            branch: rental.branch,
-            eventType: rental.eventType,
-            paymentSubmittedAt: rental.paymentSubmittedAt,
-            paymentAmountPaid: rental.paymentAmountPaid,
-            paymentReferenceNumber: rental.paymentReferenceNumber,
-            paymentReceiptUrl: rental.paymentReceiptUrl,
-            paymentReceiptFilename: rental.paymentReceiptFilename,
-            rejectionReason: rental.rejectionReason,
-            rejectedAt: rental.rejectedAt,
-            pickupScheduleDate: rental.pickupScheduleDate,
-            pickupScheduleTime: rental.pickupScheduleTime,
-          }))
-        );
-      } catch (error) {
-        if (!isMounted) return;
-        setRentalsError(error instanceof Error ? error.message : 'Failed to load your rentals.');
-      } finally {
-        if (isMounted) {
-          setRentalsLoading(false);
-        }
+    void loadMyRentals().catch(() => {
+      if (isMounted) {
+        setRentalsError('Failed to load your rentals.');
       }
-    };
-
-    void loadMyRentals();
+    });
 
     return () => {
       isMounted = false;
     };
-  }, [token]);
+  }, [loadMyRentals]);
+
+  useEffect(() => {
+    const eventSource = createCustomerActivityEventSource(token);
+
+    const handleCustomerActivityUpdate = () => {
+      void loadMyRentals();
+    };
+
+    eventSource.addEventListener('customer-activity-update', handleCustomerActivityUpdate);
+
+    return () => {
+      eventSource.removeEventListener('customer-activity-update', handleCustomerActivityUpdate);
+      eventSource.close();
+    };
+  }, [loadMyRentals, token]);
 
   useEffect(() => {
     if (!selectedRentalTab) {
@@ -1436,29 +1531,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-3">
                       <h3 className="text-xl font-medium text-black">{rental.gownName}</h3>
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        rental.status === 'active'
-                          ? 'bg-green-100 text-green-800'
-                          : rental.status === 'pending'
-                          ? 'bg-amber-100 text-amber-800'
-                          : rental.status === 'for_payment'
-                          ? 'bg-rose-100 text-rose-800'
-                          : rental.status === 'paid_for_confirmation'
-                          ? 'bg-violet-100 text-violet-800'
-                          : rental.status === 'for_pickup'
-                          ? 'bg-cyan-100 text-cyan-800'
-                          : rental.status === 'cancelled'
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-[#F5EFE6] text-[#6B5D4F]'
-                      }`}>
-                        {rental.status === 'paid_for_confirmation'
-                          ? 'Paid - For Confirmation'
-                          : rental.status === 'for_pickup'
-                            ? 'Schedule Pickup'
-                          : rental.status
-                            .split('_')
-                            .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                            .join(' ')}
+                      <span
+                        className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                        style={getRentalStatusBadgeStyle(rental.status)}
+                      >
+                        {getRentalStatusLabel(rental)}
                       </span>
                     </div>
                     
@@ -1475,18 +1552,18 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                         <span className="font-medium">Reference ID:</span>
                         <span>{rental.referenceId || rental.id}</span>
                       </div>
-                      {rental.status === 'for_pickup' && !rental.pickupScheduleDate && !rental.pickupScheduleTime && (
+                      {hasRentalStatus(rental.status, 'for_pickup') && !rental.pickupScheduleDate && !rental.pickupScheduleTime && (
                         <div className="text-sm font-medium text-[#B86A6A]">
                           Please schedule your pickup.
                         </div>
                       )}
-                      {rental.status === 'for_pickup' && rental.pickupScheduleDate && (
+                      {hasRentalStatus(rental.status, 'for_pickup') && rental.pickupScheduleDate && (
                         <div className="flex items-center gap-2">
                           <span className="font-medium">Date:</span>
                           <span>{rental.pickupScheduleDate}</span>
                         </div>
                       )}
-                      {rental.status === 'for_pickup' && rental.pickupScheduleTime && (
+                      {hasRentalStatus(rental.status, 'for_pickup') && rental.pickupScheduleTime && (
                         <div className="flex items-center gap-2">
                           <span className="font-medium">Time:</span>
                           <span>{pickupTimeOptions.find((option) => option.value === rental.pickupScheduleTime)?.label || rental.pickupScheduleTime}</span>
@@ -1610,12 +1687,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                       onClick={(event) => {
                         event.stopPropagation();
                         setSelectedReviewRental(rental);
-                        setReviewScore(0);
-                        setReviewComment('');
+                        setReviewScore(Number(rental.reviewScore || 0));
+                        setReviewComment(String(rental.reviewComment || ''));
                         setReviewSubmitError('');
                         setIsReviewModalOpen(true);
                       }}
-                      disabled={Boolean(rental.hasReview)}
                       className="inline-flex items-center gap-3 rounded-full border border-[#E8DCC8] bg-[#FAF7F0] px-4 py-2 text-sm font-medium text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-black"
                     >
                       <Star className="h-4 w-4 fill-[#D4AF37] text-[#D4AF37]" />
@@ -1676,15 +1752,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-3">
                       <h3 className="text-xl font-medium text-black">{rental.gownName}</h3>
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        rental.status === 'completed'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {rental.status
-                          .split('_')
-                          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                          .join(' ')}
+                      <span
+                        className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                        style={getRentalStatusBadgeStyle(rental.status)}
+                      >
+                        {getRentalStatusLabel(rental)}
                       </span>
                     </div>
 
@@ -1767,7 +1839,9 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between mb-6">
-                <h3 className="text-2xl font-light text-black">Schedule Pickup</h3>
+                <h3 className="text-2xl font-light text-black">
+                  {selectedSchedulePickupRental.pickupScheduleDate && selectedSchedulePickupRental.pickupScheduleTime ? 'Reschedule Pickup' : 'Schedule Pickup'}
+                </h3>
                 <button
                   type="button"
                   disabled={isSubmittingPickupSchedule}
@@ -1781,6 +1855,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
 
               <p className="text-sm text-[#6B5D4F] mb-4">
                 Pickup date is fixed to the rental start date. Choose your preferred pickup time for {selectedSchedulePickupRental.gownName}.
+                {selectedSchedulePickupRental.pickupScheduleTime ? ' You can update your currently scheduled pickup time here.' : ''}
               </p>
 
               <div className="space-y-4">
@@ -1848,9 +1923,13 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
               className="bg-white rounded-2xl p-8 max-w-md w-full h-[90vh] overflow-y-auto"
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-2xl font-light text-black mb-2">Confirm Pickup Schedule</h3>
+              <h3 className="text-2xl font-light text-black mb-2">
+                {selectedSchedulePickupRental.pickupScheduleDate && selectedSchedulePickupRental.pickupScheduleTime ? 'Confirm Pickup Reschedule' : 'Confirm Pickup Schedule'}
+              </h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Are you sure you want to schedule pickup for this date and time?
+                {selectedSchedulePickupRental.pickupScheduleDate && selectedSchedulePickupRental.pickupScheduleTime
+                  ? 'Are you sure you want to update your pickup time for this rental?'
+                  : 'Are you sure you want to schedule pickup for this date and time?'}
               </p>
 
               <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6 space-y-2 text-sm">
@@ -1904,7 +1983,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                   }}
                   className="flex-1 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmittingPickupSchedule ? 'Saving...' : 'Yes, Confirm'}
+                  {isSubmittingPickupSchedule
+                    ? 'Saving...'
+                    : selectedSchedulePickupRental.pickupScheduleDate && selectedSchedulePickupRental.pickupScheduleTime
+                    ? 'Yes, Update Pickup Time'
+                    : 'Yes, Confirm'}
                 </button>
               </div>
             </div>
@@ -1958,14 +2041,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                 <div className="flex justify-between gap-4">
                   <span className="text-[#6B5D4F]">Status</span>
                   <span className="text-right font-medium text-black">
-                    {selectedRentalDetails.status === 'paid_for_confirmation'
-                      ? 'Paid - For Confirmation'
-                      : selectedRentalDetails.status === 'for_pickup'
-                        ? 'Schedule Pickup'
-                      : selectedRentalDetails.status
-                        .split('_')
-                        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                        .join(' ')}
+                    {getRentalStatusLabel(selectedRentalDetails)}
                   </span>
                 </div>
                 <div className="flex justify-between gap-4">
@@ -1996,7 +2072,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                   <span className="text-[#6B5D4F]">Reference ID</span>
                   <span className="text-right font-medium text-black">{selectedRentalDetails.referenceId || selectedRentalDetails.id}</span>
                 </div>
-                {selectedRentalDetails.status === 'for_pickup' && !selectedRentalDetails.pickupScheduleDate && !selectedRentalDetails.pickupScheduleTime && (
+                {hasRentalStatus(selectedRentalDetails.status, 'for_pickup') && !selectedRentalDetails.pickupScheduleDate && !selectedRentalDetails.pickupScheduleTime && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                     Please schedule your pickup.
                   </div>
@@ -2051,7 +2127,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedRentalDetails.status === 'for_payment') {
+                    if (hasRentalStatus(selectedRentalDetails.status, 'for_payment')) {
                       setSelectedPaymentRental(selectedRentalDetails);
                       setIsRentalDetailsOpen(false);
                       setIsPayNowConfirmOpen(true);
@@ -2061,13 +2137,12 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                   }}
                   className="flex-1 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
                 >
-                  {selectedRentalDetails.status === 'for_payment' ? 'Pay now' : 'Close'}
+                  {hasRentalStatus(selectedRentalDetails.status, 'for_payment') ? 'Pay now' : 'Close'}
                 </button>
 
-                {selectedRentalDetails.status === 'for_pickup' && (
+                {hasRentalStatus(selectedRentalDetails.status, 'for_pickup') && (
                   <button
                     type="button"
-                    disabled={Boolean(selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime)}
                     onClick={() => {
                       setPickupScheduleError('');
                       setSelectedSchedulePickupRental(selectedRentalDetails);
@@ -2075,9 +2150,9 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                       setIsRentalDetailsOpen(false);
                       setIsSchedulePickupModalOpen(true);
                     }}
-                    className="flex-1 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:text-black disabled:cursor-not-allowed disabled:bg-[#F1E7D8] disabled:text-[#8A7763]"
+                    className="flex-1 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:text-black"
                   >
-                    <span>{selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Pickup Scheduled' : 'Schedule Pickup'}</span>
+                    <span>{selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Reschedule Pickup' : 'Schedule Pickup'}</span>
                   </button>
                 )}
               </div>
@@ -2103,9 +2178,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
             >
               <div className="flex items-start justify-between gap-4 mb-6">
                 <div>
-                  <h3 className="text-2xl font-light text-black">Leave a Review</h3>
+                  <h3 className="text-2xl font-light text-black">{selectedReviewRental.hasReview ? 'Edit Review' : 'Leave a Review'}</h3>
                   <p className="mt-2 text-sm text-[#6B5D4F]">
-                    Share your experience for {selectedReviewRental.gownName}.
+                    {selectedReviewRental.hasReview
+                      ? `Update your review for ${selectedReviewRental.gownName}.`
+                      : `Share your experience for ${selectedReviewRental.gownName}.`}
                   </p>
                 </div>
                 <button
@@ -2170,9 +2247,11 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                     value={reviewComment}
                     onChange={(event) => setReviewComment(event.target.value)}
                     placeholder="Tell us what you loved about the gown, fit, or rental experience."
+                    maxLength={250}
                     required
                     className="w-full min-h-[150px] rounded-xl border border-[#E8DCC8] bg-white px-4 py-3 text-sm text-black placeholder:text-[#8A7A68] focus:outline-none focus:border-[#D4AF37]"
                   />
+                  <p className="mt-3 text-xs text-[#8A7A68] text-right">{reviewComment.length}/250 characters</p>
                   {reviewComment.trim().length === 0 && (
                     <p className="mt-3 text-xs text-[#8A7A68]">Please enter your review before submitting.</p>
                   )}
@@ -2280,6 +2359,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                               ...item,
                               hasReview: true,
                               reviewSubmittedAt: submittedReview.createdAt || new Date().toISOString(),
+                              reviewScore: submittedReview.score,
+                              reviewComment: submittedReview.comment,
                             }
                           : item
                       )));
@@ -2289,6 +2370,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                               ...prev,
                               hasReview: true,
                               reviewSubmittedAt: submittedReview.createdAt || new Date().toISOString(),
+                              reviewScore: submittedReview.score,
+                              reviewComment: submittedReview.comment,
                             }
                           : prev
                       ));

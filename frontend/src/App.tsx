@@ -5,7 +5,7 @@ import { Rentals } from './components/Rentals';
 import { CustomOrders } from './components/CustomOrders';
 import { Appointments } from './components/Appointments';
 import { CustomerProfile } from './components/CustomerProfile';
-import { AdminDashboard } from './components/AdminDashboard';
+import AdminDashboard from './components/AdminDashboard';
 import { Navigation } from './components/Navigation';
 import { Footer } from './components/Footer';
 import { LandingPage } from './components/LandingPage';
@@ -638,9 +638,14 @@ export default function App() {
 
   const handleNotificationSelect = (notification: CustomerNotificationEntry) => {
     const recordId = String(notification.metadata?.recordId || '').trim();
+    const notificationTitle = String(notification.title || '').trim().toLowerCase();
+    const notificationItemLabel = String(notification.itemLabel || '').trim().toLowerCase();
     const isHistoricalRentalNotification = notification.status === 'completed' || notification.status === 'cancelled';
     const isHistoricalAppointmentNotification = notification.status === 'completed' || notification.status === 'cancelled';
     const isHistoricalBespokeNotification = notification.status === 'completed' || notification.status === 'rejected';
+    const isPhoneVerifiedNotification =
+      notification.type === 'bespoke' &&
+      (notificationTitle === 'phone number verified' || notificationItemLabel === 'verified phone number');
 
     setSelectedNotificationRentalId(null);
     setSelectedNotificationAppointmentId(null);
@@ -651,6 +656,10 @@ export default function App() {
     setSelectedNotificationRentalTab(null);
     setSelectedNotificationAppointmentTab(null);
     setSelectedNotificationCustomOrderTab(null);
+
+    if (isPhoneVerifiedNotification) {
+      return;
+    }
 
     if (notification.type === 'rental') {
       setSelectedRentalNotification(notification);

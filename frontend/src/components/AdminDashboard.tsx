@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Package, Users, TrendingUp, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
+import { Package, Users, TrendingUp, TrendingDown, Minus, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
+import { BarElement, CategoryScale, Chart as ChartJS, Legend, LinearScale, Tooltip as ChartTooltip } from 'chart.js';
+import type { ChartOptions, TooltipItem } from 'chart.js';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { Bar } from 'react-chartjs-2';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
@@ -16,8 +19,11 @@ import type { AdminAppointmentDetail } from '../services/appointmentAPI';
 import { adminCustomOrderAPI } from '../services/adminCustomOrderAPI';
 import type { AdminCustomOrderRecord, AdminCustomOrderStatus } from '../services/adminCustomOrderAPI';
 import { notificationAPI } from '../services/notificationAPI';
+import { createAdminDashboardEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip, Legend);
 
 export type { InventoryItem };
 
@@ -29,6 +35,7 @@ interface User {
   phone: string;
   branch: string;
   role: ManagedUserRole;
+  createdAt?: string;
   joinDate: string;
   status: 'active' | 'archived';
   lastActivity: string;
@@ -83,6 +90,7 @@ interface AdminDashboardProps {
 }
 
 type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
+type DashboardRefreshScope = 'overview' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history' | null;
 
 type AddItemField =
   | 'name'
@@ -96,26 +104,48 @@ type AddItemField =
   | 'description';
 
 type RentalExportFilter = 'archive' | 'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns';
+type OverviewExportTypeFilter = OverviewActivityRow['source'];
+type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
+type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
+type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
+type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
+type AppointmentExportSelectableFilter = Exclude<AppointmentExportFilter, 'all'>;
+type RentalExportSelectableFilter = Exclude<RentalExportFilter, 'all'>;
+type CustomOrderExportSelectableFilter = Exclude<CustomOrderExportFilter, 'all'>;
+type BranchComparisonMetric = 'revenue' | 'rents' | 'appointments' | 'bespoke';
+type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
+
+const OVERVIEW_EXPORT_TYPE_OPTIONS = ['Rental', 'Appointment', 'Custom Order'] as const satisfies OverviewExportTypeFilter[];
+const APPOINTMENT_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'scheduled'] as const satisfies AppointmentExportSelectableFilter[];
+const RENTAL_EXPORT_FILTER_OPTIONS = ['archive', 'pending', 'active', 'for-payment', 'for-pickup', 'returns'] as const satisfies RentalExportSelectableFilter[];
 
 const INVENTORY_PAGE_SIZE = 8;
+const OVERVIEW_ACTIVITY_PAGE_SIZE = 8;
 const APPOINTMENT_PAGE_SIZE = 3;
 const RENTAL_PAGE_SIZE = 5;
 const RENTAL_LATE_FEE_PER_DAY = 200;
 const CUSTOM_ORDER_PAGE_SIZE = 4;
 const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
+const ADMIN_DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
 const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
+const CUSTOM_ORDER_EXPORT_FILTER_OPTIONS = ['archive', ...CUSTOM_ORDER_FILTER_TABS] as const satisfies readonly CustomOrderExportSelectableFilter[];
 const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
 const DEFAULT_INVENTORY_CATEGORIES = ['Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress'];
 const DEFAULT_INVENTORY_CATEGORY = DEFAULT_INVENTORY_CATEGORIES[0];
 const NEW_CATEGORY_OPTION = '__new_category__';
 
-type AppointmentStatusFilter = 'all' | 'pending' | 'scheduled';
-type AppointmentExportFilter = 'archive' | 'all' | 'pending' | 'scheduled';
-type CustomOrderStatusFilter = 'all' | AdminCustomOrderStatus;
-type CustomOrderExportFilter = 'archive' | 'all' | AdminCustomOrderStatus;
-type UserExportFilter = 'all' | 'admin' | 'staff' | 'customer';
+type OverviewActivityRow = {
+  id: string;
+  source: 'Rental' | 'Appointment' | 'Custom Order';
+  title: string;
+  customerName: string;
+  detail: string;
+  branch: string;
+  timeLabel: string;
+  sortValue: number;
+};
 
 function parseAdminTabFromHash(hash: string): AdminTab {
   const normalizedHash = hash.replace(/^#\/?/, '');
@@ -151,7 +181,16 @@ function compareInventoryItemsAscending(left: InventoryItem, right: InventoryIte
   return leftKey.localeCompare(rightKey, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+function normalizeInventoryManagementStatus(status: InventoryItem['status'] | string | null | undefined): 'available' | 'maintenance' {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+
+  if (normalizedStatus === 'maintenance') return 'maintenance';
+  return 'available';
+}
+
 function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
+  const normalizedStatus = normalizeInventoryManagementStatus(item.status);
+
   return {
     id: item.id,
     name: item.name,
@@ -159,11 +198,11 @@ function toInventoryPreviewDetails(item: InventoryItem): GownDetails {
     color: item.color,
     size: Array.isArray(item.size) ? item.size : [],
     price: item.price,
-    status: item.status === 'available' || item.status === 'rented' || item.status === 'reserved'
-      ? item.status
-      : 'maintenance',
+    status: normalizedStatus,
     branch: item.branch,
     image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
+    images: Array.isArray(item.images) ? item.images.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
+    model3dUrl: String(item.model3dUrl || '').trim(),
     rating: typeof item.rating === 'number' ? item.rating : 0,
     ratings: Array.isArray(item.ratings) ? item.ratings : [],
   };
@@ -179,12 +218,28 @@ function normalizeBranchName(value: string | null | undefined): string {
   return String(value || '').trim();
 }
 
+function getShortBranchLabel(value: string | null | undefined): string {
+  const normalizedBranch = normalizeBranchName(value);
+  if (!normalizedBranch) return 'No branch';
+  if (normalizedBranch === 'Taguig Main') return 'Taguig';
+  if (normalizedBranch === 'BGC Branch') return 'BGC';
+  if (normalizedBranch === 'Makati Branch') return 'Makati';
+  return normalizedBranch;
+}
+
 function matchesSelectedBranch(branch: string | null | undefined, selectedBranch: string): boolean {
   if (selectedBranch === 'All Branches') return true;
   return normalizeBranchName(branch) === normalizeBranchName(selectedBranch);
 }
 
-export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
+function toLocalDateKey(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export default function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
   const getCurrentUserId = (jwtToken: string) => {
     try {
       const payloadPart = jwtToken.split('.')[1];
@@ -207,6 +262,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
   const [selectedBranch, setSelectedBranch] = useState<string>('All Branches');
+  const [overviewActivityPage, setOverviewActivityPage] = useState(1);
+  const [branchComparisonMetric, setBranchComparisonMetric] = useState<BranchComparisonMetric>('revenue');
 
   const setActiveTabWithHash = (tab: AdminTab, history: 'push' | 'replace' = 'push') => {
     setActiveTab(tab);
@@ -277,6 +334,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     status: 'available',
     description: '',
     image: '',
+    images: [],
+    model3dUrl: '',
     stock: 1
   });
   const inventoryCategoryOptions = useMemo(() => {
@@ -348,6 +407,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   });
   const normalizedCurrentUserRole = String(currentUser?.role || currentUserRole || '').trim().toLowerCase();
   const isCurrentUserStaff = normalizedCurrentUserRole === 'staff';
+  const canExportPdfs = !isCurrentUserStaff;
+  const dashboardTitle = isCurrentUserStaff ? 'Staff Dashboard' : 'Admin Dashboard';
 
   useEffect(() => {
     const syncActiveTabFromHash = () => {
@@ -373,11 +434,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [appointmentPage, setAppointmentPage] = useState(1);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<AppointmentStatusFilter>('all');
   const [showAppointmentExportModal, setShowAppointmentExportModal] = useState(false);
-  const [appointmentExportFilter, setAppointmentExportFilter] = useState<AppointmentExportFilter>('all');
+  const [selectedAppointmentExportFilters, setSelectedAppointmentExportFilters] = useState<AppointmentExportSelectableFilter[]>(['pending', 'scheduled']);
+  const [selectedAppointmentExportBranch, setSelectedAppointmentExportBranch] = useState<string>('All Branches');
   const [appointmentSearchQuery, setAppointmentSearchQuery] = useState('');
   const [adminAppointments, setAdminAppointments] = useState<AdminAppointmentDetail[]>([]);
   const [adminAppointmentsLoading, setAdminAppointmentsLoading] = useState(false);
   const [adminAppointmentsError, setAdminAppointmentsError] = useState<string | null>(null);
+  const [showOverviewExportModal, setShowOverviewExportModal] = useState(false);
+  const [showStoreOverviewExportModal, setShowStoreOverviewExportModal] = useState(false);
+  const [overviewExportBranchFilter, setOverviewExportBranchFilter] = useState<string>('All Branches');
+  const [overviewExportTypeFilter, setOverviewExportTypeFilter] = useState<OverviewExportTypeFilter[]>([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+  const [selectedStoreOverviewExportBranches, setSelectedStoreOverviewExportBranches] = useState<string[]>(['All Branches']);
   const [appointmentStatusUpdatingId, setAppointmentStatusUpdatingId] = useState<string | null>(null);
   const [selectedPendingAppointment, setSelectedPendingAppointment] = useState<AdminAppointmentDetail | null>(null);
   const [isApproveAppointmentConfirmOpen, setIsApproveAppointmentConfirmOpen] = useState(false);
@@ -390,12 +457,14 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [adminCustomOrders, setAdminCustomOrders] = useState<AdminCustomOrderRecord[]>([]);
   const [adminCustomOrdersLoading, setAdminCustomOrdersLoading] = useState(false);
   const [adminCustomOrdersError, setAdminCustomOrdersError] = useState<string | null>(null);
+  const [dashboardRefreshScope, setDashboardRefreshScope] = useState<DashboardRefreshScope>(null);
   const [customOrderManagementView, setCustomOrderManagementView] = useState<'active' | 'archive'>('active');
   const [customOrderSearchQuery, setCustomOrderSearchQuery] = useState('');
   const [customOrderPage, setCustomOrderPage] = useState(1);
   const [customOrderStatusFilter, setCustomOrderStatusFilter] = useState<CustomOrderStatusFilter>('all');
   const [showCustomOrderExportModal, setShowCustomOrderExportModal] = useState(false);
-  const [customOrderExportFilter, setCustomOrderExportFilter] = useState<CustomOrderExportFilter>('all');
+  const [selectedCustomOrderExportFilters, setSelectedCustomOrderExportFilters] = useState<CustomOrderExportSelectableFilter[]>([...CUSTOM_ORDER_FILTER_TABS]);
+  const [selectedCustomOrderExportBranch, setSelectedCustomOrderExportBranch] = useState<string>('All Branches');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
@@ -409,7 +478,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
   const [rentalViewFilter, setRentalViewFilter] = useState<'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('all');
   const [showRentalExportModal, setShowRentalExportModal] = useState(false);
-  const [rentalExportFilter, setRentalExportFilter] = useState<RentalExportFilter>('all');
+  const [selectedRentalExportFilters, setSelectedRentalExportFilters] = useState<RentalExportSelectableFilter[]>(['pending', 'active', 'for-payment', 'for-pickup', 'returns']);
+  const [selectedRentalExportBranch, setSelectedRentalExportBranch] = useState<string>('All Branches');
   const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
   const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
   const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
@@ -444,6 +514,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     showUserExportModal ||
     showAddUserModal ||
     showPendingRentalModal ||
+    showOverviewExportModal ||
+    showStoreOverviewExportModal ||
     showRentalExportModal ||
     showAppointmentExportModal ||
     showCustomOrderExportModal ||
@@ -471,16 +543,60 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading3DModel, setIsUploading3DModel] = useState(false);
+  const [modelUploadError, setModelUploadError] = useState<string | null>(null);
+  const modelFileInputRef = useRef<HTMLInputElement>(null);
 
   // Load inventory from DB on mount
   useEffect(() => {
     loadInventory();
     loadUsers();
+    loadAdminRentals();
+    loadAdminAppointments();
+    loadAdminCustomOrders();
   }, []);
 
   useEffect(() => {
     loadBranchPerformance(selectedBranch);
   }, [selectedBranch]);
+
+  const refreshAdminDashboardData = async (showLoading = false) => {
+    await Promise.all([
+      loadAdminRentals(showLoading),
+      loadAdminAppointments(showLoading),
+      loadAdminCustomOrders(showLoading),
+      loadBranchPerformance(selectedBranch, showLoading),
+    ]);
+  };
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return;
+      }
+
+      void refreshAdminDashboardData(false);
+    }, ADMIN_DASHBOARD_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [selectedBranch, token]);
+
+  useEffect(() => {
+    const eventSource = createAdminDashboardEventSource(token);
+
+    const handleAdminDashboardUpdate = () => {
+      void refreshAdminDashboardData(false);
+    };
+
+    eventSource.addEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+
+    return () => {
+      eventSource.removeEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+      eventSource.close();
+    };
+  }, [selectedBranch, token]);
 
   useEffect(() => {
     if (activeTab !== 'history') return;
@@ -543,6 +659,59 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return () => window.removeEventListener('keydown', onEsc);
   }, [confirmAction, isConfirmingAction]);
 
+  const runRefreshForScope = async (scope: Exclude<DashboardRefreshScope, null>, refreshAction: () => Promise<void>) => {
+    setDashboardRefreshScope(scope);
+    try {
+      await refreshAction();
+    } finally {
+      setDashboardRefreshScope((current) => (current === scope ? null : current));
+    }
+  };
+
+  const handleRefreshOverview = () => {
+    void runRefreshForScope('overview', async () => {
+      await Promise.all([
+        loadInventory(),
+        loadUsers(),
+        loadAdminRentals(),
+        loadAdminAppointments(),
+        loadAdminCustomOrders(),
+        loadBranchPerformance(selectedBranch),
+        loadAdminHistory(),
+      ]);
+    });
+  };
+
+  const handleRefreshAdminRentals = () => {
+    void runRefreshForScope('rentals', async () => {
+      await loadAdminRentals();
+    });
+  };
+
+  const handleRefreshAdminAppointments = () => {
+    void runRefreshForScope('appointments', async () => {
+      await loadAdminAppointments();
+    });
+  };
+
+  const handleRefreshAdminCustomOrders = () => {
+    void runRefreshForScope('bespoke', async () => {
+      await loadAdminCustomOrders();
+    });
+  };
+
+  const handleRefreshUsers = () => {
+    void runRefreshForScope('users', async () => {
+      await loadUsers();
+    });
+  };
+
+  const handleRefreshAdminHistory = () => {
+    void runRefreshForScope('history', async () => {
+      await loadAdminHistory();
+    });
+  };
+
   async function loadInventory() {
     setInventoryLoading(true);
     setInventoryError(null);
@@ -569,8 +738,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   }
 
-  async function loadAdminRentals() {
-    setAdminRentalsLoading(true);
+  async function loadAdminRentals(showLoading = true) {
+    if (showLoading) {
+      setAdminRentalsLoading(true);
+    }
     setAdminRentalsError(null);
     try {
       const rentals = await rentalAPI.rentalAPI.getAdminRentals(token);
@@ -578,12 +749,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminRentalsError(err instanceof Error ? err.message : 'Failed to load rentals');
     } finally {
-      setAdminRentalsLoading(false);
+      if (showLoading) {
+        setAdminRentalsLoading(false);
+      }
     }
   }
 
-  async function loadAdminAppointments() {
-    setAdminAppointmentsLoading(true);
+  async function loadAdminAppointments(showLoading = true) {
+    if (showLoading) {
+      setAdminAppointmentsLoading(true);
+    }
     setAdminAppointmentsError(null);
     try {
       const appointments = await appointmentAPI.getAdminAppointments(token);
@@ -591,12 +766,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminAppointmentsError(err instanceof Error ? err.message : 'Failed to load appointments');
     } finally {
-      setAdminAppointmentsLoading(false);
+      if (showLoading) {
+        setAdminAppointmentsLoading(false);
+      }
     }
   }
 
-  async function loadAdminCustomOrders() {
-    setAdminCustomOrdersLoading(true);
+  async function loadAdminCustomOrders(showLoading = true) {
+    if (showLoading) {
+      setAdminCustomOrdersLoading(true);
+    }
     setAdminCustomOrdersError(null);
     try {
       const orders = await adminCustomOrderAPI.getAllCustomOrders(token);
@@ -604,7 +783,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to load custom orders');
     } finally {
-      setAdminCustomOrdersLoading(false);
+      if (showLoading) {
+        setAdminCustomOrdersLoading(false);
+      }
     }
   }
 
@@ -763,6 +944,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       phone: user.phoneNumber || 'N/A',
       branch: user.preferredBranch || '',
       role: user.role,
+      createdAt: user.createdAt,
       joinDate: user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A',
       status: normalizeManagedUserStatus(user.status),
       lastActivity: user.updatedAt ? new Date(user.updatedAt).toLocaleDateString() : 'N/A'
@@ -1112,6 +1294,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   );
 
   const handleSaveAdminHistoryAsPdf = () => {
+    if (!canExportPdfs) return;
+
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = filteredAdminHistory.map((entry) => [
@@ -1182,6 +1366,13 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
 
   async function handleConfirmArchiveUser() {
     if (!confirmUserArchive) return;
+
+    const isElevatedTarget = confirmUserArchive.role === 'Admin' || confirmUserArchive.role === 'Staff';
+    if (isCurrentUserStaff && isElevatedTarget) {
+      setUsersError('Staff accounts cannot archive admin or staff accounts.');
+      setConfirmUserArchive(null);
+      return;
+    }
 
     const trimmedReason = userArchiveReason.trim();
     if (!trimmedReason) {
@@ -1326,8 +1517,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   }
 
-  async function loadBranchPerformance(branchFilter: string) {
-    setBranchPerformanceLoading(true);
+  async function loadBranchPerformance(branchFilter: string, showLoading = true) {
+    if (showLoading) {
+      setBranchPerformanceLoading(true);
+    }
     setBranchPerformanceError(null);
 
     try {
@@ -1354,7 +1547,9 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     } catch (err) {
       setBranchPerformanceError(err instanceof Error ? err.message : 'Failed to load branch performance');
     } finally {
-      setBranchPerformanceLoading(false);
+      if (showLoading) {
+        setBranchPerformanceLoading(false);
+      }
     }
   }
 
@@ -1401,29 +1596,105 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   }
 
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
+  const MAX_ITEM_IMAGES = 6;
   const ALLOWED_MIME = ['image/jpeg', 'image/png'];
+  const MAX_3D_MODEL_SIZE = 75 * 1024 * 1024;
+  const ALLOWED_3D_MODEL_EXTENSIONS = ['.glb', '.gltf', '.usdz', '.zip'];
+
+  const getModel3DUrl = (item: Partial<InventoryItem> | null | undefined): string => String(item?.model3dUrl || '').trim();
+
+  const getDisplayFileName = (value: string): string => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return '';
+
+    try {
+      const parsed = new URL(trimmed);
+      const pathname = parsed.pathname.split('/').filter(Boolean);
+      return pathname[pathname.length - 1] || trimmed;
+    } catch {
+      const parts = trimmed.split('/').filter(Boolean);
+      return parts[parts.length - 1] || trimmed;
+    }
+  };
+
+  const getItemImageList = (item?: Partial<InventoryItem> | null) => {
+    const primaryImage = String(item?.image || '').trim();
+    const additionalImages = Array.isArray(item?.images)
+      ? item.images.map((entry) => String(entry || '').trim()).filter(Boolean)
+      : [];
+
+    return (primaryImage
+      ? [primaryImage, ...additionalImages.filter((entry) => entry !== primaryImage)]
+      : additionalImages
+    ).slice(0, MAX_ITEM_IMAGES);
+  };
+
+  const syncItemImages = (item: Partial<InventoryItem>, images: string[]): Partial<InventoryItem> => ({
+    ...item,
+    image: images[0] || '',
+    images,
+  });
+
+  const updatePrimaryImage = (item: Partial<InventoryItem>, value: string): Partial<InventoryItem> => {
+    const normalizedValue = value.trim();
+    const remainingImages = getItemImageList(item).filter((_, index) => index !== 0);
+    const nextImages = normalizedValue ? [normalizedValue, ...remainingImages] : remainingImages;
+    return syncItemImages(item, nextImages.slice(0, MAX_ITEM_IMAGES));
+  };
+
+  const removeItemImageAtIndex = (indexToRemove: number) => {
+    if (editingItem) {
+      setEditingItem((prev) => {
+        if (!prev) return prev;
+        const nextImages = getItemImageList(prev).filter((_, index) => index !== indexToRemove);
+        return syncItemImages(prev, nextImages);
+      });
+      return;
+    }
+
+    setNewItem((prev) => {
+      const nextImages = getItemImageList(prev).filter((_, index) => index !== indexToRemove);
+      return syncItemImages(prev, nextImages);
+    });
+    setAddItemErrors((prev) => ({ ...prev, image: '' }));
+  };
 
   const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!ALLOWED_MIME.includes(file.type)) {
-      setImageUploadError('Invalid file type. Please use JPG or PNG.');
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const currentImages = getItemImageList(editingItem ?? newItem);
+    const remainingSlots = MAX_ITEM_IMAGES - currentImages.length;
+
+    if (files.length > remainingSlots) {
+      setImageUploadError(`You can upload up to ${MAX_ITEM_IMAGES} images per item.`);
       e.target.value = '';
       return;
     }
-    if (file.size > MAX_FILE_SIZE) {
-      setImageUploadError('File exceeds 5 MB limit.');
-      e.target.value = '';
-      return;
+
+    for (const file of files) {
+      if (!ALLOWED_MIME.includes(file.type)) {
+        setImageUploadError('Invalid file type. Please use JPG or PNG.');
+        e.target.value = '';
+        return;
+      }
+
+      if (file.size > MAX_FILE_SIZE) {
+        setImageUploadError('File exceeds 5 MB limit.');
+        e.target.value = '';
+        return;
+      }
     }
+
     setImageUploadError(null);
     setIsUploadingImage(true);
     try {
-      const url = await inventoryAPI.uploadImage(token, file);
+      const uploadedUrls = await Promise.all(files.map((file) => inventoryAPI.uploadImage(token, file)));
+      const nextImages = [...currentImages, ...uploadedUrls].slice(0, MAX_ITEM_IMAGES);
       if (editingItem) {
-        setEditingItem(prev => prev ? { ...prev, image: url } : prev);
+        setEditingItem(prev => prev ? syncItemImages(prev, nextImages) : prev);
       } else {
-        setNewItem(prev => ({ ...prev, image: url }));
+        setNewItem(prev => syncItemImages(prev, nextImages));
         setAddItemErrors(prev => ({ ...prev, image: '' }));
       }
     } catch (err) {
@@ -1434,11 +1705,48 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     }
   };
 
+  const handle3DModelFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const extension = `.${String(file.name || '').split('.').pop() || ''}`.toLowerCase();
+    if (!ALLOWED_3D_MODEL_EXTENSIONS.includes(extension)) {
+      setModelUploadError('Invalid file type. Please use GLB, GLTF, USDZ, or ZIP.');
+      e.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_3D_MODEL_SIZE) {
+      setModelUploadError('File exceeds 75 MB limit.');
+      e.target.value = '';
+      return;
+    }
+
+    setModelUploadError(null);
+    setIsUploading3DModel(true);
+    try {
+      const uploadedUrl = await inventoryAPI.upload3DModel(token, file);
+      if (editingItem) {
+        setEditingItem((prev) => prev ? { ...prev, model3dUrl: uploadedUrl } : prev);
+      } else {
+        setNewItem((prev) => ({ ...prev, model3dUrl: uploadedUrl }));
+      }
+    } catch (err) {
+      setModelUploadError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
+    } finally {
+      setIsUploading3DModel(false);
+      e.target.value = '';
+    }
+  };
+
   const resetImageModal = () => {
     setImageInputMode('url');
     setImageUploadError(null);
     setIsUploadingImage(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    setModelUploadError(null);
+    setIsUploading3DModel(false);
+    if (modelFileInputRef.current) modelFileInputRef.current.value = '';
   };
 
   useEffect(() => {
@@ -1604,21 +1912,1531 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     if (newItem.stock === undefined || Number.isNaN(Number(newItem.stock)) || Number(newItem.stock) <= 0) {
       errors.stock = 'This field is required';
     }
-    if (!newItem.image?.trim()) errors.image = 'This field is required';
+    if (getItemImageList(newItem).length === 0) errors.image = 'At least one image is required';
     if (!newItem.description?.trim()) errors.description = 'This field is required';
 
     setAddItemErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
-  const totalInventoryValue = branchSummary.inventoryValue;
-  const totalProducts = branchSummary.totalProducts;
-  const totalLowStock = branchSummary.lowStockItems;
-  const totalOutOfStock = branchSummary.outOfStockItems;
   const isArchiveView = inventoryView === 'archive';
+  const completedRentalStatuses = ['paid_for_confirmation', 'for_pickup', 'active', 'completed'];
+  const now = new Date();
+  const currentWeekStart = new Date(now);
+  currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+  const previousWeekStart = new Date(now);
+  previousWeekStart.setDate(previousWeekStart.getDate() - 14);
+  const isWithinRange = (value: string | null | undefined, start: Date, end: Date) => {
+    const parsed = value ? new Date(value) : null;
+    return Boolean(parsed && !Number.isNaN(parsed.getTime()) && parsed >= start && parsed < end);
+  };
+  const buildTrendSummary = (current: number, previous: number) => {
+    if (current === previous) {
+      return {
+        direction: 'flat' as const,
+        label: '0% from last week',
+        textClassName: 'text-[#9E8E80]',
+        iconClassName: 'text-[#9E8E80]'
+      };
+    }
+
+    if (previous <= 0) {
+      return {
+        direction: 'up' as const,
+        label: current > 0 ? 'New this week' : '0% from last week',
+        textClassName: current > 0 ? 'text-green-600' : 'text-[#9E8E80]',
+        iconClassName: current > 0 ? 'text-green-600' : 'text-[#9E8E80]'
+      };
+    }
+
+    const change = ((current - previous) / previous) * 100;
+    const roundedChange = Math.round(Math.abs(change));
+
+    if (change > 0) {
+      return {
+        direction: 'up' as const,
+        label: `+${roundedChange}% from last week`,
+        textClassName: 'text-green-600',
+        iconClassName: 'text-green-600'
+      };
+    }
+
+    return {
+      direction: 'down' as const,
+      label: `-${roundedChange}% from last week`,
+      textClassName: 'text-red-600',
+      iconClassName: 'text-red-600'
+    };
+  };
+  const overviewTodayKey = toLocalDateKey(now);
+  const formatOverviewScheduleTime = (value: string | null | undefined) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return 'Time not set';
+
+    const hoursMinutesMatch = rawValue.match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+    if (!hoursMinutesMatch) {
+      return rawValue;
+    }
+
+    let hours = Number(hoursMinutesMatch[1]);
+    const minutes = hoursMinutesMatch[2];
+    const explicitMeridiem = hoursMinutesMatch[3]?.toUpperCase();
+
+    if (explicitMeridiem) {
+      if (explicitMeridiem === 'PM' && hours < 12) {
+        hours += 12;
+      }
+      if (explicitMeridiem === 'AM' && hours === 12) {
+        hours = 0;
+      }
+    }
+
+    if (!Number.isInteger(hours) || hours < 0 || hours > 23) {
+      return rawValue;
+    }
+
+    const meridiem = hours >= 12 ? 'PM' : 'AM';
+    const hours12 = hours % 12 || 12;
+    return `${hours12}:${minutes} ${meridiem}`;
+  };
+  const getOverviewTimeSortValue = (value: string | null | undefined) => {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) return Number.MAX_SAFE_INTEGER;
+
+    const hoursMinutesMatch = rawValue.match(/^(\d{1,2}):(\d{2})(?:\s*([AP]M))?$/i);
+    if (!hoursMinutesMatch) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    let hours = Number(hoursMinutesMatch[1]);
+    const minutes = Number(hoursMinutesMatch[2]);
+    const explicitMeridiem = hoursMinutesMatch[3]?.toUpperCase();
+
+    if (explicitMeridiem) {
+      if (explicitMeridiem === 'PM' && hours < 12) {
+        hours += 12;
+      }
+      if (explicitMeridiem === 'AM' && hours === 12) {
+        hours = 0;
+      }
+    }
+
+    if (!Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    return hours * 60 + minutes;
+  };
+  const allTodaysActivity: OverviewActivityRow[] = [
+    ...adminRentals
+      .filter((rental) => (
+        String(rental.pickupScheduleDate || '').trim() === overviewTodayKey
+        || (rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey)
+      ))
+      .map((rental) => {
+        const isReturnActivity = rental.status === 'active' && String(rental.endDate || '').trim() === overviewTodayKey;
+
+        return {
+          id: `rental-${rental.id}`,
+          source: 'Rental' as const,
+          title: isReturnActivity ? 'Return' : 'Pick Up',
+          customerName: rental.customerName || 'Unknown customer',
+          detail: rental.referenceId || rental.id || 'N/A',
+          branch: getShortBranchLabel(rental.branch),
+          timeLabel: formatOverviewScheduleTime(rental.pickupScheduleTime),
+          sortValue: getOverviewTimeSortValue(rental.pickupScheduleTime),
+        };
+      }),
+    ...adminAppointments
+      .filter((appointment) => (
+        appointment.status === 'scheduled'
+        && String(appointment.date || '').trim() === overviewTodayKey
+      ))
+      .map((appointment) => ({
+        id: `appointment-${appointment.id}`,
+        source: 'Appointment' as const,
+        title: appointment.type === 'consultation'
+          ? 'Design Consultation'
+          : appointment.type === 'measurement'
+            ? 'Measurement Session'
+            : appointment.type === 'fitting'
+              ? 'Fitting Appointment'
+              : 'Pickup / Return',
+        customerName: appointment.customerName || 'Unknown customer',
+        detail: appointment.referenceId || appointment.id || 'N/A',
+        branch: getShortBranchLabel(appointment.branch),
+        timeLabel: formatOverviewScheduleTime(appointment.time),
+        sortValue: getOverviewTimeSortValue(appointment.time),
+      })),
+    ...adminCustomOrders
+      .filter((order) => !order.isArchived)
+      .flatMap((order) => {
+        const entries: OverviewActivityRow[] = [];
+        const orderId = String(order.id || order._id || order.referenceId || Math.random()).trim();
+        const consultationDate = String(order.consultationDate || '').trim();
+        const fittingDate = String(order.fittingDate || '').trim();
+
+        if (consultationDate === overviewTodayKey) {
+          entries.push({
+            id: `custom-order-consultation-${orderId}`,
+            source: 'Custom Order' as const,
+            title: 'Design Consultation',
+            customerName: order.customerName || 'Unknown customer',
+            detail: order.referenceId || orderId || 'N/A',
+            branch: getShortBranchLabel(order.branch),
+            timeLabel: formatOverviewScheduleTime(order.consultationTime),
+            sortValue: getOverviewTimeSortValue(order.consultationTime),
+          });
+        }
+
+        if (fittingDate === overviewTodayKey) {
+          entries.push({
+            id: `custom-order-fitting-${orderId}`,
+            source: 'Custom Order' as const,
+            title: 'Fitting Appointment',
+            customerName: order.customerName || 'Unknown customer',
+            detail: order.referenceId || orderId || 'N/A',
+            branch: getShortBranchLabel(order.branch),
+            timeLabel: formatOverviewScheduleTime(order.fittingTime),
+            sortValue: getOverviewTimeSortValue(order.fittingTime),
+          });
+        }
+
+        return entries;
+      }),
+  ].sort((left, right) => {
+    if (left.sortValue !== right.sortValue) {
+      return left.sortValue - right.sortValue;
+    }
+
+    return left.title.localeCompare(right.title);
+  });
+  const todaysActivity = allTodaysActivity.filter((activity) => matchesSelectedBranch(activity.branch, selectedBranch));
+  const todaysActivityTotalPages = Math.max(1, Math.ceil(todaysActivity.length / OVERVIEW_ACTIVITY_PAGE_SIZE));
+  const safeOverviewActivityPage = Math.min(overviewActivityPage, todaysActivityTotalPages);
+  const paginatedTodaysActivity = todaysActivity.slice(
+    (safeOverviewActivityPage - 1) * OVERVIEW_ACTIVITY_PAGE_SIZE,
+    safeOverviewActivityPage * OVERVIEW_ACTIVITY_PAGE_SIZE,
+  );
+  const overviewExportBranchOptions = Array.from(new Set(allTodaysActivity.map((activity) => activity.branch))).sort((left, right) => left.localeCompare(right));
+  const getOverviewExportItems = (branchFilter: string, typeFilter: OverviewExportTypeFilter[]) => (
+    allTodaysActivity.filter((activity) => {
+      const matchesBranch = branchFilter === 'All Branches' || activity.branch === branchFilter;
+      const matchesType = typeFilter.length === 0 || typeFilter.includes(activity.source);
+      return matchesBranch && matchesType;
+    })
+  );
+  const overviewExportItems = getOverviewExportItems(overviewExportBranchFilter, overviewExportTypeFilter);
+  const overviewExportTypeOptions: Array<{ value: OverviewExportTypeFilter; label: string; count: number }> = [
+    { value: 'Rental', label: 'Rentals', count: getOverviewExportItems(overviewExportBranchFilter, ['Rental']).length },
+    { value: 'Appointment', label: 'Appointments', count: getOverviewExportItems(overviewExportBranchFilter, ['Appointment']).length },
+    { value: 'Custom Order', label: 'Custom Orders', count: getOverviewExportItems(overviewExportBranchFilter, ['Custom Order']).length },
+  ];
+  const overviewExportTypeLabel = overviewExportTypeFilter.length === 0
+    ? 'All Types'
+    : overviewExportTypeFilter.length === overviewExportTypeOptions.length
+      ? 'All Types'
+      : overviewExportTypeFilter.join(', ');
+  const openOverviewExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setOverviewExportBranchFilter(selectedBranch === 'All Branches' ? 'All Branches' : getShortBranchLabel(selectedBranch));
+    setOverviewExportTypeFilter([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+    setShowOverviewExportModal(true);
+  };
+  const openStoreOverviewExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setSelectedStoreOverviewExportBranches(
+      selectedBranch === 'All Branches'
+        ? ['All Branches']
+        : [selectedBranch]
+    );
+    setShowStoreOverviewExportModal(true);
+  };
+  const toggleStoreOverviewExportBranch = (branchOption: string) => {
+    setSelectedStoreOverviewExportBranches((current) => {
+      if (branchOption === 'All Branches') {
+        return ['All Branches'];
+      }
+
+      const withoutAll = current.filter((branch) => branch !== 'All Branches');
+      if (withoutAll.includes(branchOption)) {
+        const nextBranches = withoutAll.filter((branch) => branch !== branchOption);
+        return nextBranches.length > 0 ? nextBranches : ['All Branches'];
+      }
+
+      return [...withoutAll, branchOption];
+    });
+  };
+  const matchesStoreOverviewExportBranch = (branch: string | null | undefined) => (
+    selectedStoreOverviewExportBranches.includes('All Branches')
+      || selectedStoreOverviewExportBranches.some((selectedExportBranch) => (
+        normalizeBranchName(selectedExportBranch) === normalizeBranchName(branch)
+      ))
+  );
+  const storeOverviewBranchFilterLabel = selectedStoreOverviewExportBranches.includes('All Branches')
+    ? 'All Branches'
+    : selectedStoreOverviewExportBranches.join(', ');
+  useEffect(() => {
+    setOverviewActivityPage(1);
+  }, [selectedBranch]);
+  const totalSales = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const inventoryItemsForLookup = [...inventory, ...archivedItems];
+  const topSellingItemEntry = Object.values(
+    adminRentals
+      .filter((rental) => completedRentalStatuses.includes(rental.status))
+      .reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+  ).sort((left, right) => right.count - left.count)[0] ?? null;
+  const numberOfOrders = adminRentals.length + adminCustomOrders.filter((order) => !order.isArchived).length;
+  const recentCustomerThreshold = new Date();
+  recentCustomerThreshold.setDate(recentCustomerThreshold.getDate() - 30);
+  const newCustomers = users.filter((user) => {
+    if (user.role !== 'Customer' || !user.createdAt) {
+      return false;
+    }
+
+    const createdAt = new Date(user.createdAt);
+    return !Number.isNaN(createdAt.getTime()) && createdAt >= recentCustomerThreshold;
+  }).length;
+  const topSellingInventoryItem = topSellingItemEntry
+    ? inventoryItemsForLookup.find((item) => {
+        const sku = String(item.sku || '').trim();
+        if (topSellingItemEntry.sku && sku) {
+          return sku.toLowerCase() === topSellingItemEntry.sku.toLowerCase();
+        }
+
+        return String(item.name || '').trim().toLowerCase() === topSellingItemEntry.gownName.toLowerCase();
+      }) ?? null
+    : null;
+  const topSellingItemName = topSellingInventoryItem?.name || topSellingItemEntry?.gownName || 'No sales yet';
+  const topSellingItemCount = topSellingItemEntry?.count ?? 0;
+  const rentedItemPalette = ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'];
+  const completedRentalItemCounts = Object.values(
+    adminRentals
+      .filter((rental) => completedRentalStatuses.includes(rental.status))
+      .reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+  )
+    .map((entry) => {
+      const inventoryMatch = inventoryItemsForLookup.find((item) => {
+        const itemSku = String(item.sku || '').trim().toLowerCase();
+        const itemName = String(item.name || '').trim().toLowerCase();
+        const targetSku = String(entry.sku || '').trim().toLowerCase();
+        const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+        return targetSku
+          ? itemSku === targetSku
+          : itemName === targetName;
+      });
+
+      return {
+        name: inventoryMatch?.name || entry.gownName,
+        count: entry.count,
+        inventoryItem: inventoryMatch ?? null,
+      };
+    });
+  const mostRentedItems = completedRentalItemCounts
+    .slice()
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, 5)
+    .map((item, index) => ({
+      ...item,
+      fill: rentedItemPalette[index % rentedItemPalette.length],
+    }));
+  const leastRentedItems = completedRentalItemCounts
+    .slice()
+    .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))
+    .slice(0, 5)
+    .map((item, index) => ({
+      ...item,
+      fill: rentedItemPalette[index % rentedItemPalette.length],
+    }));
+  const itemsPerCategory = useMemo(() => (
+    Object.entries(
+      inventory.reduce<Record<string, number>>((counts, item) => {
+        if (!matchesSelectedBranch(item.branch, selectedBranch)) {
+          return counts;
+        }
+
+        const category = String(item.category || '').trim();
+        if (!category) {
+          return counts;
+        }
+
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {})
+    )
+      .map(([category, count]) => ({ category, count }))
+      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category))
+  ), [inventory, selectedBranch]);
+  const mostRentedItemsChartData = useMemo(() => ({
+    labels: mostRentedItems.map((item) => item.name),
+    datasets: [
+      {
+        label: 'Rentals',
+        data: mostRentedItems.map((item) => item.count),
+        backgroundColor: mostRentedItems.map((item) => item.fill),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 26,
+      },
+    ],
+  }), [mostRentedItems]);
+  const mostRentedItemsChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (_event, elements) => {
+      const clickedIndex = elements[0]?.index;
+      if (clickedIndex === undefined) return;
+
+      const selectedItem = mostRentedItems[clickedIndex]?.inventoryItem;
+      if (selectedItem) {
+        setHoverPreviewItem(selectedItem);
+      }
+    },
+    onHover: (event, elements) => {
+      const target = event.native?.target;
+      if (target instanceof HTMLCanvasElement) {
+        target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      }
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Item: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} rental${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [mostRentedItems]);
+  const itemsPerCategoryChartData = useMemo(() => ({
+    labels: itemsPerCategory.map((item) => item.category),
+    datasets: [
+      {
+        label: 'Items',
+        data: itemsPerCategory.map((item) => item.count),
+        backgroundColor: itemsPerCategory.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 56,
+      },
+    ],
+  }), [itemsPerCategory, rentedItemPalette]);
+  const itemsPerCategoryChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Category: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.y ?? 0).toLocaleString()} item${Number(context.parsed.y ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [itemsPerCategory, rentedItemPalette]);
+  const leastRentedItemsChartData = useMemo(() => ({
+    labels: leastRentedItems.map((item) => item.name),
+    datasets: [
+      {
+        label: 'Rentals',
+        data: leastRentedItems.map((item) => item.count),
+        backgroundColor: leastRentedItems.map((item) => item.fill),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 26,
+      },
+    ],
+  }), [leastRentedItems]);
+  const leastRentedItemsChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (_event, elements) => {
+      const clickedIndex = elements[0]?.index;
+      if (clickedIndex === undefined) return;
+
+      const selectedItem = leastRentedItems[clickedIndex]?.inventoryItem;
+      if (selectedItem) {
+        setHoverPreviewItem(selectedItem);
+      }
+    },
+    onHover: (event, elements) => {
+      const target = event.native?.target;
+      if (target instanceof HTMLCanvasElement) {
+        target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      }
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Item: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} rental${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        max: 5,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [leastRentedItems]);
+  const salesThisWeek = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, currentWeekStart, now))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const salesLastWeek = adminRentals
+    .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart))
+    .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+  const ordersThisWeek = adminRentals.filter((rental) => isWithinRange(rental.createdAt, currentWeekStart, now)).length
+    + adminCustomOrders.filter((order) => !order.isArchived && isWithinRange(order.createdAt, currentWeekStart, now)).length;
+  const ordersLastWeek = adminRentals.filter((rental) => isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart)).length
+    + adminCustomOrders.filter((order) => !order.isArchived && isWithinRange(order.createdAt, previousWeekStart, currentWeekStart)).length;
+  const newCustomersThisWeek = users.filter((user) => user.role === 'Customer' && isWithinRange(user.createdAt, currentWeekStart, now)).length;
+  const newCustomersLastWeek = users.filter((user) => user.role === 'Customer' && isWithinRange(user.createdAt, previousWeekStart, currentWeekStart)).length;
+  const topSellingItemThisWeek = topSellingItemEntry
+    ? adminRentals.filter((rental) => {
+        const rentalSku = String(rental.sku || '').trim().toLowerCase();
+        const rentalName = String(rental.gownName || '').trim().toLowerCase();
+        const targetSku = String(topSellingItemEntry.sku || '').trim().toLowerCase();
+        const targetName = String(topSellingItemEntry.gownName || '').trim().toLowerCase();
+        const matchesItem = targetSku
+          ? rentalSku === targetSku
+          : rentalName === targetName;
+
+        return completedRentalStatuses.includes(rental.status)
+          && matchesItem
+          && isWithinRange(rental.createdAt, currentWeekStart, now);
+      }).length
+    : 0;
+  const topSellingItemLastWeek = topSellingItemEntry
+    ? adminRentals.filter((rental) => {
+        const rentalSku = String(rental.sku || '').trim().toLowerCase();
+        const rentalName = String(rental.gownName || '').trim().toLowerCase();
+        const targetSku = String(topSellingItemEntry.sku || '').trim().toLowerCase();
+        const targetName = String(topSellingItemEntry.gownName || '').trim().toLowerCase();
+        const matchesItem = targetSku
+          ? rentalSku === targetSku
+          : rentalName === targetName;
+
+        return completedRentalStatuses.includes(rental.status)
+          && matchesItem
+          && isWithinRange(rental.createdAt, previousWeekStart, currentWeekStart);
+      }).length
+    : 0;
+  const salesTrend = buildTrendSummary(salesThisWeek, salesLastWeek);
+  const ordersTrend = buildTrendSummary(ordersThisWeek, ordersLastWeek);
+  const customersTrend = buildTrendSummary(newCustomersThisWeek, newCustomersLastWeek);
+  const topSellingTrend = buildTrendSummary(topSellingItemThisWeek, topSellingItemLastWeek);
+  const branchComparisonMetricOptions: Array<{ value: BranchComparisonMetric; label: string }> = [
+    { value: 'revenue', label: 'Revenue' },
+    { value: 'rents', label: 'Rents' },
+    { value: 'appointments', label: 'Appointments' },
+    { value: 'bespoke', label: 'Bespoke' },
+  ];
+  const getBranchComparisonMetricLabel = (metric: BranchComparisonMetric) => (
+    branchComparisonMetricOptions.find((option) => option.value === metric)?.label || 'Revenue'
+  );
+  const getBranchComparisonMetricValue = (
+    entry: { revenue: number; rents: number; appointments: number; bespoke: number },
+    metric: BranchComparisonMetric,
+  ) => {
+    if (metric === 'revenue') return entry.revenue;
+    if (metric === 'rents') return entry.rents;
+    if (metric === 'appointments') return entry.appointments;
+    return entry.bespoke;
+  };
+  const formatBranchComparisonMetricValue = (metric: BranchComparisonMetric, value: number) => (
+    metric === 'revenue'
+      ? `₱${value.toLocaleString()}`
+      : value.toLocaleString()
+  );
+  const branchComparisonMetricLabel = getBranchComparisonMetricLabel(branchComparisonMetric);
+  const branchComparisonDescription = branchComparisonMetric === 'revenue'
+    ? 'Completed rental revenue by branch'
+    : branchComparisonMetric === 'rents'
+      ? 'Rental records by branch'
+      : branchComparisonMetric === 'appointments'
+        ? 'Appointments by branch'
+        : 'Bespoke orders by branch';
+  const branchComparisonSummaryLabel = branchComparisonMetric === 'revenue'
+    ? 'Compared Revenue'
+    : `Compared ${branchComparisonMetricLabel}`;
+  const formatBranchComparisonValue = (value: number) => (
+    formatBranchComparisonMetricValue(branchComparisonMetric, value)
+  );
+  const branchComparisonEmptyLabel = branchComparisonMetric === 'revenue'
+    ? 'No completed rental revenue is available for comparison yet.'
+    : `No ${branchComparisonMetricLabel.toLowerCase()} data is available for comparison yet.`;
+  const branchComparisonBranches = (branchStats.length > 0
+    ? branchStats.map((branchStat) => branchStat.branch)
+    : Array.from(new Set([
+        ...adminRentals.map((rental) => rental.branch),
+        ...adminAppointments.map((appointment) => appointment.branch),
+        ...adminCustomOrders.map((order) => order.branch),
+      ].filter((branch): branch is string => Boolean(branch))))
+  );
+  const branchComparisonData = branchComparisonBranches
+    .map((branchName, index) => {
+      const normalizedBranch = normalizeBranchName(branchName);
+      const revenue = adminRentals
+        .filter((rental) => (
+          completedRentalStatuses.includes(rental.status)
+          && normalizeBranchName(rental.branch) === normalizedBranch
+        ))
+        .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+      const rents = adminRentals.filter((rental) => normalizeBranchName(rental.branch) === normalizedBranch).length;
+      const appointments = adminAppointments.filter((appointment) => normalizeBranchName(appointment.branch) === normalizedBranch).length;
+      const bespoke = adminCustomOrders.filter((order) => normalizeBranchName(order.branch) === normalizedBranch).length;
+
+      return {
+        branch: getShortBranchLabel(branchName),
+        fullBranch: normalizedBranch || branchName,
+        revenue,
+        rents,
+        appointments,
+        bespoke,
+        value: getBranchComparisonMetricValue({ revenue, rents, appointments, bespoke }, branchComparisonMetric),
+        fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+      };
+    })
+    .sort((left, right) => right.value - left.value);
+  const storeOverviewExportBranchOptions = branchComparisonData.map((entry) => entry.fullBranch);
+  const storeOverviewComparisonData = branchComparisonData.filter((entry) => matchesStoreOverviewExportBranch(entry.fullBranch));
+  const totalComparedMetric = branchComparisonData.reduce((sum, branch) => sum + branch.value, 0);
+  const buildStoreOverviewComparisonMetricData = (metric: BranchComparisonMetric) => (
+    branchComparisonData
+      .filter((entry) => matchesStoreOverviewExportBranch(entry.fullBranch))
+      .map((entry) => ({
+        ...entry,
+        value: getBranchComparisonMetricValue(entry, metric),
+      }))
+      .sort((left, right) => right.value - left.value)
+  );
+  const revenueComparisonChartData = useMemo(() => ({
+    labels: branchComparisonData.map((entry) => entry.branch),
+    datasets: [
+      {
+        label: branchComparisonMetricLabel,
+        data: branchComparisonData.map((entry) => entry.value),
+        backgroundColor: branchComparisonData.map((entry) => entry.fill),
+        borderRadius: 12,
+        borderSkipped: false as const,
+        maxBarThickness: 56,
+      },
+    ],
+  }), [branchComparisonData, branchComparisonMetricLabel]);
+  const revenueComparisonChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Branch: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${branchComparisonMetricLabel}: ${formatBranchComparisonValue(Number(context.parsed.y ?? 0))}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+          callback: (value: string | number) => formatBranchComparisonValue(Number(value)),
+        },
+      },
+    },
+  }), [branchComparisonMetricLabel, branchComparisonMetric]);
+
+  const handleSaveOverviewKpisAsPdf = () => {
+    if (!canExportPdfs) return;
+
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const exportItems = getOverviewExportItems(overviewExportBranchFilter, overviewExportTypeFilter);
+    const activityRows = exportItems.map((activity) => [
+      activity.timeLabel,
+      activity.source,
+      activity.title,
+      activity.customerName,
+      activity.detail,
+      activity.branch,
+    ]);
+
+    document.setFont('times', 'normal');
+    document.setFontSize(22);
+    document.text("Today's Activity Report", 40, 44);
+    document.setFontSize(10);
+    document.setTextColor(107, 93, 79);
+    document.text(`Generated: ${generatedAt}`, 40, 64);
+    document.text(`Branch Filter: ${overviewExportBranchFilter}`, 40, 80);
+    document.text(`Type Filter: ${overviewExportTypeLabel}`, 40, 96);
+    document.text(`Scheduled Activities: ${exportItems.length}`, 40, 112);
+
+    autoTable(document, {
+      startY: 128,
+      head: [['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch']],
+      body: activityRows.length > 0
+        ? activityRows
+        : [['No activities scheduled for today.', '', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+    });
+
+    setShowOverviewExportModal(false);
+    document.save(`todays-activities-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+  const handleSaveStoreOverviewAsPdf = () => {
+    if (!canExportPdfs) return;
+
+    const renderStoreOverviewChartImage = (metric: BranchComparisonMetric) => {
+      const metricData = buildStoreOverviewComparisonMetricData(metric);
+      if (metricData.length === 0) {
+        return null;
+      }
+
+      const metricLabel = getBranchComparisonMetricLabel(metric);
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: metricData.map((entry) => entry.branch),
+          datasets: [
+            {
+              label: metricLabel,
+              data: metricData.map((entry) => entry.value),
+              backgroundColor: metricData.map((entry) => entry.fill),
+              borderRadius: 16,
+              borderSkipped: false,
+              maxBarThickness: 72,
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 22,
+                },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+                callback: (value) => formatBranchComparisonMetricValue(metric, Number(value)),
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: `store-overview-chart-background-${metric}`,
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric,
+        metricLabel,
+        image,
+      };
+    };
+    const renderMostRentedItemsChartImage = (
+      items: Array<{ name: string; count: number; fill: string }>,
+      options?: { metricLabel?: string; xAxisMax?: number }
+    ) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: items.map((item) => item.name),
+          datasets: [
+            {
+              label: 'Rentals',
+              data: items.map((item) => item.count),
+              backgroundColor: items.map((item) => item.fill),
+              borderRadius: 12,
+              borderSkipped: false,
+              maxBarThickness: 44,
+            },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              max: options?.xAxisMax,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                precision: 0,
+                font: {
+                  size: 20,
+                },
+              },
+            },
+            y: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-most-rented-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: options?.metricLabel || 'Most Rented Items',
+        image,
+      };
+    };
+    const renderItemsPerCategoryChartImage = (items: Array<{ category: string; count: number; fill: string }>) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: items.map((item) => item.category),
+          datasets: [
+            {
+              label: 'Items',
+              data: items.map((item) => item.count),
+              backgroundColor: items.map((item) => item.fill),
+              borderRadius: 12,
+              borderSkipped: false,
+              maxBarThickness: 70,
+            },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+              },
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                precision: 0,
+                font: {
+                  size: 20,
+                },
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-items-per-category-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: 'Items per Category',
+        image,
+      };
+    };
+
+    const generatedAt = new Date().toLocaleString();
+    const pdfDocument = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const completedRentalsForExport = adminRentals.filter((rental) => (
+      completedRentalStatuses.includes(rental.status)
+      && matchesStoreOverviewExportBranch(rental.branch)
+    ));
+    const activeCustomOrdersForExport = adminCustomOrders.filter((order) => (
+      !order.isArchived
+      && matchesStoreOverviewExportBranch(order.branch)
+    ));
+    const newCustomersForExport = users.filter((user) => {
+      if (user.role !== 'Customer' || !user.createdAt) {
+        return false;
+      }
+
+      const createdAt = new Date(user.createdAt);
+      if (Number.isNaN(createdAt.getTime()) || createdAt < recentCustomerThreshold) {
+        return false;
+      }
+
+      return matchesStoreOverviewExportBranch(user.branch);
+    }).length;
+    const totalSalesForExport = completedRentalsForExport.reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
+    const numberOfOrdersForExport = completedRentalsForExport.length + activeCustomOrdersForExport.length;
+    const topSellingEntryForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    ).sort((left, right) => right.count - left.count)[0] ?? null;
+    const topSellingNameForExport = topSellingEntryForExport?.gownName || 'No sales yet';
+    const topSellingCountForExport = topSellingEntryForExport?.count ?? 0;
+    const mostRentedItemsForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    )
+      .map((entry, index) => {
+        const inventoryMatch = inventoryItemsForLookup.find((item) => {
+          const itemSku = String(item.sku || '').trim().toLowerCase();
+          const itemName = String(item.name || '').trim().toLowerCase();
+          const targetSku = String(entry.sku || '').trim().toLowerCase();
+          const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+          return targetSku
+            ? itemSku === targetSku
+            : itemName === targetName;
+        });
+
+        return {
+          name: inventoryMatch?.name || entry.gownName,
+          count: entry.count,
+          fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+        };
+      })
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 5);
+    const leastRentedItemsForExport = Object.values(
+      completedRentalsForExport.reduce<Record<string, { sku: string; gownName: string; count: number }>>((counts, rental) => {
+        const sku = String(rental.sku || '').trim();
+        const gownName = String(rental.gownName || '').trim();
+        const key = sku || gownName.toLowerCase();
+        if (!key) {
+          return counts;
+        }
+
+        const existing = counts[key];
+        if (existing) {
+          existing.count += 1;
+          return counts;
+        }
+
+        counts[key] = {
+          sku,
+          gownName,
+          count: 1,
+        };
+        return counts;
+      }, {})
+    )
+      .map((entry, index) => {
+        const inventoryMatch = inventoryItemsForLookup.find((item) => {
+          const itemSku = String(item.sku || '').trim().toLowerCase();
+          const itemName = String(item.name || '').trim().toLowerCase();
+          const targetSku = String(entry.sku || '').trim().toLowerCase();
+          const targetName = String(entry.gownName || '').trim().toLowerCase();
+
+          return targetSku
+            ? itemSku === targetSku
+            : itemName === targetName;
+        });
+
+        return {
+          name: inventoryMatch?.name || entry.gownName,
+          count: entry.count,
+          fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+        };
+      })
+      .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))
+      .slice(0, 5);
+    const itemsPerCategoryForExport = inventory
+      .filter((item) => matchesStoreOverviewExportBranch(item.branch))
+      .reduce<Record<string, number>>((counts, item) => {
+        const category = String(item.category || '').trim();
+        if (!category) {
+          return counts;
+        }
+
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {});
+    const itemsPerCategoryChartItemsForExport = Object.entries(itemsPerCategoryForExport)
+      .map(([category, count], index) => ({
+        category,
+        count,
+        fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+      }))
+      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category));
+    const pesoCanvas = globalThis.document.createElement('canvas');
+    pesoCanvas.width = 32;
+    pesoCanvas.height = 32;
+    const pesoContext = pesoCanvas.getContext('2d');
+    if (pesoContext) {
+      pesoContext.clearRect(0, 0, pesoCanvas.width, pesoCanvas.height);
+      pesoContext.fillStyle = '#1A1A1A';
+      pesoContext.font = '22px Arial';
+      pesoContext.textAlign = 'center';
+      pesoContext.textBaseline = 'middle';
+      pesoContext.fillText('₱', 16, 17);
+    }
+    const pesoSymbolImage = pesoCanvas.toDataURL('image/png');
+    const summaryRows = [
+      ['Total Sales', totalSalesForExport.toLocaleString()],
+      ['Number of Orders', numberOfOrdersForExport.toLocaleString()],
+      ['New Customers', newCustomersForExport.toLocaleString()],
+      ['Top Selling Item', `${topSellingNameForExport}${topSellingCountForExport > 0 ? ` (${topSellingCountForExport} rental${topSellingCountForExport === 1 ? '' : 's'})` : ''}`],
+    ];
+    const comparisonRows = storeOverviewComparisonData.map((entry) => [
+      entry.fullBranch,
+      entry.revenue.toLocaleString(),
+      entry.rents.toLocaleString(),
+      entry.appointments.toLocaleString(),
+      entry.bespoke.toLocaleString(),
+    ]);
+    const chartImages = branchComparisonMetricOptions
+      .map((option) => renderStoreOverviewChartImage(option.value))
+      .filter((chart): chart is NonNullable<typeof chart> => Boolean(chart));
+    const itemsPerCategoryChartImage = renderItemsPerCategoryChartImage(itemsPerCategoryChartItemsForExport);
+    if (itemsPerCategoryChartImage) {
+      chartImages.push(itemsPerCategoryChartImage);
+    }
+    const mostRentedChartImage = renderMostRentedItemsChartImage(mostRentedItemsForExport);
+    if (mostRentedChartImage) {
+      chartImages.push(mostRentedChartImage);
+    }
+    const leastRentedChartImage = renderMostRentedItemsChartImage(leastRentedItemsForExport, {
+      metricLabel: 'Least Rented Items',
+      xAxisMax: 5,
+    });
+    if (leastRentedChartImage) {
+      chartImages.push(leastRentedChartImage);
+    }
+
+    pdfDocument.setFont('times', 'normal');
+    pdfDocument.setFontSize(22);
+    pdfDocument.text('Store Overview Report', 40, 44);
+    pdfDocument.setFontSize(10);
+    pdfDocument.setTextColor(107, 93, 79);
+    pdfDocument.text(`Generated: ${generatedAt}`, 40, 64);
+    pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, 80);
+    pdfDocument.text(`Comparison Metric: ${branchComparisonMetricLabel}`, 40, 96);
+
+    autoTable(pdfDocument, {
+      startY: 120,
+      head: [['Metric', 'Value']],
+      body: summaryRows,
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        const rowValues = Array.isArray(data.row.raw) ? data.row.raw : [];
+        if (String(rowValues[0] || '') !== 'Total Sales') return;
+
+        data.cell.styles.cellPadding = { top: 8, right: 8, bottom: 8, left: 22 };
+      },
+      didDrawCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        const rowValues = Array.isArray(data.row.raw) ? data.row.raw : [];
+        if (String(rowValues[0] || '') !== 'Total Sales') return;
+
+        pdfDocument.addImage(pesoSymbolImage, 'PNG', data.cell.x + 8, data.cell.y + 9, 8, 8);
+      },
+    });
+
+    const summaryTable = (pdfDocument as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable;
+    autoTable(pdfDocument, {
+      startY: (summaryTable?.finalY ?? 120) + 24,
+      head: [['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke']],
+      body: comparisonRows.length > 0
+        ? comparisonRows
+        : [['No branch data available for the selected filter.', '', '', '', '']],
+      theme: 'grid',
+      styles: {
+        fontSize: 10,
+        cellPadding: 8,
+        textColor: [26, 26, 26],
+        lineColor: [232, 220, 200],
+      },
+      headStyles: {
+        fillColor: [250, 247, 240],
+        textColor: [107, 93, 79],
+        fontStyle: 'bold',
+      },
+      alternateRowStyles: {
+        fillColor: [252, 250, 245],
+      },
+      margin: { left: 40, right: 40, bottom: 40 },
+      didParseCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        if (comparisonRows.length === 0) return;
+
+        data.cell.styles.cellPadding = { top: 8, right: 8, bottom: 8, left: 22 };
+      },
+      didDrawCell: (data) => {
+        if (data.section !== 'body') return;
+        if (data.column.index !== 1) return;
+        if (comparisonRows.length === 0) return;
+
+        pdfDocument.addImage(pesoSymbolImage, 'PNG', data.cell.x + 8, data.cell.y + 9, 8, 8);
+      },
+    });
+
+    chartImages.forEach((chart, index) => {
+      if (index % 2 === 0) {
+        pdfDocument.addPage();
+      }
+
+      const isTopChart = index % 2 === 0;
+      const sectionTop = isTopChart ? 48 : 414;
+
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(16);
+      pdfDocument.setTextColor(26, 26, 26);
+      pdfDocument.text(`${chart.metricLabel} Comparison Chart`, 40, sectionTop);
+      pdfDocument.setFontSize(10);
+      pdfDocument.setTextColor(107, 93, 79);
+      pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, sectionTop + 18);
+      pdfDocument.addImage(chart.image, 'PNG', 40, sectionTop + 32, 515, 190);
+    });
+
+    setShowStoreOverviewExportModal(false);
+    pdfDocument.save(`store-overview-${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
 
   // Inventory CRUD Functions
   const handleAddItem = async () => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot add gowns.');
+      return;
+    }
+
     if (!validateAddItem()) {
       setInventoryError('Please fill in all required fields');
       return;
@@ -1632,10 +3450,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         size: newItem.size || [],
         price: newItem.price!,
         branch: newItem.branch!,
-        status: newItem.status as 'available' | 'rented' | 'reserved' | 'maintenance',
+        status: normalizeInventoryManagementStatus(newItem.status),
         lastRented: newItem.lastRented ?? null,
         description: newItem.description || '',
-        image: newItem.image || '',
+        image: getItemImageList(newItem)[0] || '',
+        images: getItemImageList(newItem),
+        model3dUrl: getModel3DUrl(newItem),
         stock: newItem.stock ?? 1
       });
       setInventory(prev => [created, ...prev]);
@@ -1644,7 +3464,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       setIsCustomCategoryInputVisible(false);
       setCustomCategoryDraft('');
       setIsConfirmCustomCategoryOpen(false);
-      setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', stock: 1 });
+      setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', images: [], model3dUrl: '', stock: 1 });
       resetImageModal();
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
       showTempMessage('Gown added successfully!');
@@ -1654,6 +3474,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const handleUpdateItem = async () => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot edit gowns.');
+      return;
+    }
+
     if (!editingItem) return;
     setInventoryError(null);
     try {
@@ -1664,10 +3489,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         size: editingItem.size,
         price: editingItem.price,
         branch: editingItem.branch,
-        status: editingItem.status,
+        status: normalizeInventoryManagementStatus(editingItem.status),
         lastRented: editingItem.lastRented ?? null,
         description: editingItem.description || '',
-        image: editingItem.image || '',
+        image: getItemImageList(editingItem)[0] || '',
+        images: getItemImageList(editingItem),
+        model3dUrl: getModel3DUrl(editingItem),
         stock: editingItem.stock ?? 1
       });
       setInventory(prev => prev.map(item => item.id === editingItem.id ? updated : item));
@@ -1684,12 +3511,23 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const handleDeleteItem = async (id: string) => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot archive gowns.');
+      return;
+    }
+
     const target = inventory.find(item => item.id === id);
     if (!target) return;
     setConfirmAction({ type: 'delete', item: target });
   };
 
   const handleConfirmDelete = async (item: InventoryItem) => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot archive gowns.');
+      setConfirmAction(null);
+      return;
+    }
+
     setIsConfirmingAction(true);
     setInventoryError(null);
     try {
@@ -1835,11 +3673,15 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     : userExportOptions.some((option) => option.count > 0);
 
   const openUserExportModal = () => {
+    if (!canExportPdfs) return;
+
     setUserExportFilter(showArchivedUsersOnly ? 'all' : userFilter);
     setShowUserExportModal(true);
   };
 
   const handleSaveUsersAsPdf = (filter: UserExportFilter) => {
+    if (!canExportPdfs) return;
+
     const exportItems = getUserExportItems(filter);
     const exportTitle = showArchivedUsersOnly ? 'Archived Users Report' : 'User Management Report';
     const filterLabel = getUserExportLabel(filter);
@@ -1938,6 +3780,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   const inventoryCurrentPageCount = paginatedInventoryItems.length;
 
   const handleSaveInventoryAsPdf = () => {
+    if (!canExportPdfs) return;
+
     const exportTitle = inventoryView === 'archive' ? 'Archived Inventory Report' : 'Inventory Report';
     const statusHeader = inventoryView === 'archive' ? 'Deleted' : 'Status';
     const generatedAt = new Date().toLocaleString();
@@ -2064,6 +3908,27 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       .join(' ');
   };
 
+  const getAdminRentalStatusBadgeStyle = (status?: string | null) => {
+    switch (String(status || '').trim().toLowerCase()) {
+      case 'active':
+        return { backgroundColor: '#DCFCE7', color: '#166534' };
+      case 'pending':
+        return { backgroundColor: '#FEF3C7', color: '#92400E' };
+      case 'for_payment':
+        return { backgroundColor: '#FFE4E6', color: '#9F1239' };
+      case 'paid_for_confirmation':
+        return { backgroundColor: '#EDE9FE', color: '#6D28D9' };
+      case 'for_pickup':
+        return { backgroundColor: '#CFFAFE', color: '#155E75' };
+      case 'cancelled':
+        return { backgroundColor: '#FEE2E2', color: '#991B1B' };
+      case 'completed':
+        return { backgroundColor: '#D1FAE5', color: '#065F46' };
+      default:
+        return { backgroundColor: '#F5EFE6', color: '#6B5D4F' };
+    }
+  };
+
   const normalizeRentalStatus = (status: unknown) => String(status || '').trim().toLowerCase();
   const isCancelledRentalStatus = (status: unknown) => normalizeRentalStatus(status).includes('cancel');
   const rentalQuery = rentalSearchQuery.trim().toLowerCase();
@@ -2158,69 +4023,103 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             ? filteredForPickupRentals
             : filteredPendingReturns;
 
-  const getRentalExportItems = (filter: RentalExportFilter) => {
-    if (filter === 'archive') {
-      return filteredArchivedRentalCards.length > 0 ? filteredArchivedRentalCards : archivedRentalCards;
+  const getRentalExportItems = (filters: RentalExportSelectableFilter[], branchFilter: string) => {
+    const hasFilter = (filter: RentalExportSelectableFilter) => filters.includes(filter);
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+
+    const items: Array<AdminRentalCard | PendingReturn> = [];
+
+    if (hasFilter('archive')) {
+      items.push(...archivedRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'all') {
-      return filteredAllActiveStatusRentals;
+    if (hasFilter('pending')) {
+      items.push(...pendingRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'pending') {
-      return filteredPendingRentalCards;
+    if (hasFilter('active')) {
+      items.push(...displayedActiveRentalCards.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'active') {
-      return filteredActiveRentalCards;
+    if (hasFilter('for-payment')) {
+      items.push(...forPaymentRentals.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'for-payment') {
-      return filteredForPaymentRentals;
+    if (hasFilter('for-pickup')) {
+      items.push(...forPickupRentals.filter((rental) => branchMatches(rental.branch) && matchesRentalSearch(rental)));
     }
 
-    if (filter === 'for-pickup') {
-      return filteredForPickupRentals;
+    if (hasFilter('returns')) {
+      items.push(...pendingReturns.filter((rental) => {
+        const rentalBranch = activeRentalCards.find((activeRental) => activeRental.id === rental.id)?.branch;
+        if (!branchMatches(rentalBranch)) return false;
+        if (!rentalQuery) return true;
+        return [rental.id, rental.gownName, rental.customer, rental.dueDate]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(rentalQuery));
+      }));
     }
 
-    return filteredPendingReturns;
+    const deduped = new Map<string, AdminRentalCard | PendingReturn>();
+    items.forEach((item) => {
+      const key = `customerName` in item ? `rental-${item.id}` : `return-${item.id}`;
+      deduped.set(key, item);
+    });
+
+    return Array.from(deduped.values());
   };
 
-  const getRentalExportLabel = (filter: RentalExportFilter) => {
-    if (filter === 'archive') return 'Archived Rentals';
-    if (filter === 'all') return 'All Rentals';
-    if (filter === 'pending') return 'Pending Rentals';
-    if (filter === 'active') return 'Active Rentals';
-    if (filter === 'for-payment') return 'For Payment';
-    if (filter === 'for-pickup') return 'For Pickup';
-    return 'Pending Returns';
+  const getRentalExportLabel = (filters: RentalExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === RENTAL_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Rental Statuses';
+    }
+
+    return filters
+      .map((filter) => {
+        if (filter === 'archive') return 'Archived Rentals';
+        if (filter === 'pending') return 'Pending Rentals';
+        if (filter === 'active') return 'Active Rentals';
+        if (filter === 'for-payment') return 'For Payment';
+        if (filter === 'for-pickup') return 'For Pickup';
+        return 'Pending Returns';
+      })
+      .join(', ');
   };
 
-  const rentalExportOptions: Array<{ value: RentalExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Rentals', count: filteredArchivedRentalCards.length },
-    { value: 'all', label: 'All Rentals', count: filteredAllActiveStatusRentals.length },
-    { value: 'pending', label: 'Pending Rentals', count: filteredPendingRentalCards.length },
-    { value: 'active', label: 'Active Rentals', count: filteredActiveRentalCards.length },
-    { value: 'for-payment', label: 'For Payment', count: filteredForPaymentRentals.length },
-    { value: 'for-pickup', label: 'For Pickup', count: filteredForPickupRentals.length },
-    { value: 'returns', label: 'Pending Returns', count: filteredPendingReturns.length },
+  const rentalExportBranchOptions = ['All Branches', 'Taguig Main', 'BGC Branch', 'Makati Branch', 'Quezon City'];
+  const rentalExportOptions: Array<{ value: RentalExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Rentals', count: getRentalExportItems(['archive'], selectedRentalExportBranch).length },
+    { value: 'pending', label: 'Pending Rentals', count: getRentalExportItems(['pending'], selectedRentalExportBranch).length },
+    { value: 'active', label: 'Active Rentals', count: getRentalExportItems(['active'], selectedRentalExportBranch).length },
+    { value: 'for-payment', label: 'For Payment', count: getRentalExportItems(['for-payment'], selectedRentalExportBranch).length },
+    { value: 'for-pickup', label: 'For Pickup', count: getRentalExportItems(['for-pickup'], selectedRentalExportBranch).length },
+    { value: 'returns', label: 'Pending Returns', count: getRentalExportItems(['returns'], selectedRentalExportBranch).length },
   ];
 
-  const canOpenRentalExportModal = rentalManagementView === 'archive'
-    ? archivedRentalCards.length > 0
-    : rentalExportOptions.some((option) => option.count > 0);
+  const canOpenRentalExportModal = rentalExportOptions.some((option) => option.count > 0);
 
   const openRentalExportModal = () => {
-    setRentalExportFilter(rentalManagementView === 'archive' ? 'archive' : rentalViewFilter);
+    if (!canExportPdfs) return;
+
+    setSelectedRentalExportBranch(selectedBranch);
+    setSelectedRentalExportFilters(
+      rentalManagementView === 'archive'
+        ? ['archive']
+        : rentalViewFilter === 'all'
+          ? ['pending', 'active', 'for-payment', 'for-pickup', 'returns']
+          : [rentalViewFilter]
+    );
     setShowRentalExportModal(true);
   };
 
   const rentalTotalPages = Math.max(1, Math.ceil(rentalItemsForCurrentView.length / RENTAL_PAGE_SIZE));
   const safeRentalPage = Math.min(rentalPage, rentalTotalPages);
-  const handleSaveRentalsAsPdf = (filter: RentalExportFilter) => {
-    const exportItems = getRentalExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
-    const filterLabel = getRentalExportLabel(filter);
+  const handleSaveRentalsAsPdf = (filters: RentalExportSelectableFilter[], branchFilter: string) => {
+    if (!canExportPdfs) return;
+
+    const exportItems = getRentalExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
+    const filterLabel = getRentalExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((rental) => {
@@ -2241,7 +4140,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       }
 
       const detailedRental = adminRentals.find((entry) => entry.id === rental.id);
-      const statusValue = filter === 'archive'
+      const statusValue = filters.length === 1 && filters[0] === 'archive'
         ? (rental.status === 'paid_for_confirmation'
             ? 'Paid - For Confirmation'
             : rental.status
@@ -2274,10 +4173,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount']],
       body: rows.length > 0 ? rows : [['-', 'No rental records available for export.', '', '', '', '', '', '']],
       theme: 'grid',
@@ -2298,7 +4198,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-rentals' : `rentals-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-rentals' : 'rentals-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowRentalExportModal(false);
   };
@@ -2357,8 +4257,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
   };
 
   const appointmentQuery = appointmentSearchQuery.trim().toLowerCase();
-  const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
-    if (!matchesSelectedBranch(appointment.branch, selectedBranch)) return false;
+  const matchesAppointmentSearchTerm = (appointment: AdminAppointmentDetail) => {
     if (!appointmentQuery) return true;
 
     return [
@@ -2375,6 +4274,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     ]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(appointmentQuery));
+  };
+  const matchesAppointmentSearch = (appointment: AdminAppointmentDetail) => {
+    if (!matchesSelectedBranch(appointment.branch, selectedBranch)) return false;
+    return matchesAppointmentSearchTerm(appointment);
   };
 
   const pendingAppointments = adminAppointments.filter((appointment) => appointment.status === 'pending');
@@ -2397,49 +4300,81 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       ? filteredPendingAppointments
       : filteredScheduledAppointments;
 
-  const getAppointmentExportItems = (filter: AppointmentExportFilter) => {
-    if (filter === 'archive') {
-      return filteredArchivedAppointments.length > 0 ? filteredArchivedAppointments : archivedAppointments;
-    }
-
-    if (filter === 'all') {
-      return filteredAllAppointments;
-    }
-
-    if (filter === 'pending') {
-      return filteredPendingAppointments;
-    }
-
-    return filteredScheduledAppointments;
-  };
-
-  const getAppointmentExportLabel = (filter: AppointmentExportFilter) => {
-    if (filter === 'archive') return 'Archived Appointments';
-    if (filter === 'all') return 'All Appointments';
-    if (filter === 'pending') return 'Pending Appointments';
-    return 'Scheduled Appointments';
-  };
-
-  const appointmentExportOptions: Array<{ value: AppointmentExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Appointments', count: filteredArchivedAppointments.length },
-    { value: 'all', label: 'All Appointments', count: filteredAllAppointments.length },
-    { value: 'pending', label: 'Pending Appointments', count: filteredPendingAppointments.length },
-    { value: 'scheduled', label: 'Scheduled Appointments', count: filteredScheduledAppointments.length },
+  const appointmentExportBranchOptions = [
+    'All Branches',
+    ...Array.from(
+      new Set(
+        adminAppointments
+          .map((appointment) => appointment.branch)
+          .filter((branch): branch is string => Boolean(branch))
+      )
+    ).sort((left, right) => left.localeCompare(right)),
   ];
 
-  const canOpenAppointmentExportModal = appointmentManagementView === 'archive'
-    ? archivedAppointments.length > 0
-    : appointmentExportOptions.some((option) => option.count > 0);
+  const getAppointmentExportItems = (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+    const items: AdminAppointmentDetail[] = [];
+
+    if (filters.includes('archive')) {
+      items.push(...archivedAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    if (filters.includes('pending')) {
+      items.push(...pendingAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    if (filters.includes('scheduled')) {
+      items.push(...scheduledAppointments.filter((appointment) => branchMatches(appointment.branch) && matchesAppointmentSearchTerm(appointment)));
+    }
+
+    const deduped = new Map<string, AdminAppointmentDetail>();
+    items.forEach((appointment) => {
+      deduped.set(String(appointment.id), appointment);
+    });
+
+    return Array.from(deduped.values());
+  };
+
+  const getAppointmentExportLabel = (filters: AppointmentExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === APPOINTMENT_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Appointment Statuses';
+    }
+
+    return filters.map((filter) => {
+      if (filter === 'archive') return 'Archived Appointments';
+      if (filter === 'pending') return 'Pending Appointments';
+      return 'Scheduled Appointments';
+    }).join(', ');
+  };
+
+  const appointmentExportOptions: Array<{ value: AppointmentExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Appointments', count: getAppointmentExportItems(['archive'], selectedAppointmentExportBranch).length },
+    { value: 'pending', label: 'Pending Appointments', count: getAppointmentExportItems(['pending'], selectedAppointmentExportBranch).length },
+    { value: 'scheduled', label: 'Scheduled Appointments', count: getAppointmentExportItems(['scheduled'], selectedAppointmentExportBranch).length },
+  ];
+
+  const canOpenAppointmentExportModal = appointmentExportOptions.some((option) => option.count > 0);
 
   const openAppointmentExportModal = () => {
-    setAppointmentExportFilter(appointmentManagementView === 'archive' ? 'archive' : appointmentStatusFilter);
+    if (!canExportPdfs) return;
+
+    setSelectedAppointmentExportBranch(selectedBranch);
+    setSelectedAppointmentExportFilters(
+      appointmentManagementView === 'archive'
+        ? ['archive']
+        : appointmentStatusFilter === 'all'
+          ? ['pending', 'scheduled']
+          : [appointmentStatusFilter]
+    );
     setShowAppointmentExportModal(true);
   };
 
-  const handleSaveAppointmentsAsPdf = (filter: AppointmentExportFilter) => {
-    const exportItems = getAppointmentExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
-    const filterLabel = getAppointmentExportLabel(filter);
+  const handleSaveAppointmentsAsPdf = (filters: AppointmentExportSelectableFilter[], branchFilter: string) => {
+    if (!canExportPdfs) return;
+
+    const exportItems = getAppointmentExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
+    const filterLabel = getAppointmentExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((appointment) => [
@@ -2462,10 +4397,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown']],
       body: rows.length > 0 ? rows : [['-', 'No appointment records available for export.', '', '', '', '', '', '', '', '']],
       theme: 'grid',
@@ -2486,7 +4422,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-appointments' : `appointments-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-appointments' : 'appointments-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowAppointmentExportModal(false);
   };
@@ -2607,100 +4543,112 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     return rawValue;
   };
 
-  const getCustomOrderExportItems = (filter: CustomOrderExportFilter) => {
-    const archivedCustomOrders = adminCustomOrders.filter((order) => {
-      const isArchivedOrder = Boolean(order.isArchived);
-      return matchesSelectedBranch(order.branch, selectedBranch) && (isArchivedOrder || order.status === 'rejected');
+  const customOrderMatchesSearchTerm = (order: AdminCustomOrderRecord) => {
+    if (!customOrderQuery) return true;
+
+    return [
+      order.id,
+      order._id,
+      order.referenceId,
+      order.customerName,
+      order.email,
+      order.contactNumber,
+      order.orderType,
+      order.branch,
+      order.status,
+      order.eventDate,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(customOrderQuery));
+  };
+
+  const customOrderExportBranchOptions = [
+    'All Branches',
+    ...Array.from(
+      new Set(
+        adminCustomOrders
+          .map((order) => order.branch)
+          .filter((branch): branch is string => Boolean(branch))
+      )
+    ).sort((left, right) => left.localeCompare(right)),
+  ];
+
+  const getCustomOrderExportItems = (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
+    const branchMatches = (branch: string | null | undefined) => matchesSelectedBranch(branch, branchFilter);
+    const items: AdminCustomOrderRecord[] = [];
+
+    if (filters.includes('archive')) {
+      items.push(...adminCustomOrders.filter((order) => {
+        const isArchivedOrder = Boolean(order.isArchived);
+        return branchMatches(order.branch)
+          && (isArchivedOrder || order.status === 'rejected')
+          && customOrderMatchesSearchTerm(order);
+      }));
+    }
+
+    CUSTOM_ORDER_FILTER_TABS.forEach((status) => {
+      if (!filters.includes(status)) return;
+
+      items.push(...adminCustomOrders.filter((order) => {
+        const isArchivedOrder = Boolean(order.isArchived);
+        return branchMatches(order.branch)
+          && !isArchivedOrder
+          && order.status !== 'rejected'
+          && order.status === status
+          && customOrderMatchesSearchTerm(order);
+      }));
     });
 
-    return adminCustomOrders.filter((order) => {
-      const isArchivedOrder = Boolean(order.isArchived);
-      if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
+    const deduped = new Map<string, AdminCustomOrderRecord>();
+    items.forEach((order) => {
+      deduped.set(String(order.id || order._id || order.referenceId), order);
+    });
 
-      const matchesStatus = filter === 'archive'
-        ? isArchivedOrder || order.status === 'rejected'
-        : !isArchivedOrder && order.status !== 'rejected' && (
-          filter === 'all' || order.status === filter
-        );
-
-      if (!matchesStatus) return false;
-      if (!customOrderQuery) return true;
-
-      return [
-        order.id,
-        order._id,
-        order.referenceId,
-        order.customerName,
-        order.email,
-        order.contactNumber,
-        order.orderType,
-        order.branch,
-        order.status,
-        order.eventDate,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(customOrderQuery));
-    }).length > 0 || filter !== 'archive'
-      ? adminCustomOrders.filter((order) => {
-          const isArchivedOrder = Boolean(order.isArchived);
-          if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
-
-          const matchesStatus = filter === 'archive'
-            ? isArchivedOrder || order.status === 'rejected'
-            : !isArchivedOrder && order.status !== 'rejected' && (
-              filter === 'all' || order.status === filter
-            );
-
-          if (!matchesStatus) return false;
-          if (!customOrderQuery) return true;
-
-          return [
-            order.id,
-            order._id,
-            order.referenceId,
-            order.customerName,
-            order.email,
-            order.contactNumber,
-            order.orderType,
-            order.branch,
-            order.status,
-            order.eventDate,
-          ]
-            .filter(Boolean)
-            .some((value) => String(value).toLowerCase().includes(customOrderQuery));
-        })
-      : archivedCustomOrders;
+    return Array.from(deduped.values());
   };
 
-  const getCustomOrderExportLabel = (filter: CustomOrderExportFilter) => {
-    if (filter === 'archive') return 'Archived Custom Orders';
-    if (filter === 'all') return 'All Orders';
-    return filter === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(filter);
+  const getCustomOrderExportLabel = (filters: CustomOrderExportSelectableFilter[]) => {
+    if (filters.length === 0 || filters.length === CUSTOM_ORDER_EXPORT_FILTER_OPTIONS.length) {
+      return 'All Bespoke Statuses';
+    }
+
+    return filters.map((filter) => {
+      if (filter === 'archive') return 'Archived Custom Orders';
+      return filter === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(filter);
+    }).join(', ');
   };
 
-  const customOrderExportOptions: Array<{ value: CustomOrderExportFilter; label: string; count: number }> = [
-    { value: 'archive', label: 'Archived Custom Orders', count: getCustomOrderExportItems('archive').length },
-    { value: 'all', label: 'All Orders', count: getCustomOrderExportItems('all').length },
+  const customOrderExportOptions: Array<{ value: CustomOrderExportSelectableFilter; label: string; count: number }> = [
+    { value: 'archive', label: 'Archived Custom Orders', count: getCustomOrderExportItems(['archive'], selectedCustomOrderExportBranch).length },
     ...CUSTOM_ORDER_FILTER_TABS.map((status) => ({
-      value: status as CustomOrderExportFilter,
+      value: status as CustomOrderExportSelectableFilter,
       label: status === 'fitting' ? 'Fitting Appointment' : getCustomOrderStatusLabel(status),
-      count: getCustomOrderExportItems(status).length,
+      count: getCustomOrderExportItems([status], selectedCustomOrderExportBranch).length,
     })),
   ];
 
-  const canOpenCustomOrderExportModal = customOrderManagementView === 'archive'
-    ? adminCustomOrders.some((order) => matchesSelectedBranch(order.branch, selectedBranch) && (Boolean(order.isArchived) || order.status === 'rejected'))
-    : customOrderExportOptions.some((option) => option.count > 0);
+  const canOpenCustomOrderExportModal = customOrderExportOptions.some((option) => option.count > 0);
 
   const openCustomOrderExportModal = () => {
-    setCustomOrderExportFilter(customOrderManagementView === 'archive' ? 'archive' : customOrderStatusFilter);
+    if (!canExportPdfs) return;
+
+    setSelectedCustomOrderExportBranch(selectedBranch);
+    setSelectedCustomOrderExportFilters(
+      customOrderManagementView === 'archive'
+        ? ['archive']
+        : customOrderStatusFilter === 'all'
+          ? [...CUSTOM_ORDER_FILTER_TABS]
+          : [customOrderStatusFilter]
+    );
     setShowCustomOrderExportModal(true);
   };
 
-  const handleSaveCustomOrdersAsPdf = (filter: CustomOrderExportFilter) => {
-    const exportItems = getCustomOrderExportItems(filter);
-    const exportTitle = filter === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
-    const filterLabel = getCustomOrderExportLabel(filter);
+  const handleSaveCustomOrdersAsPdf = (filters: CustomOrderExportSelectableFilter[], branchFilter: string) => {
+    if (!canExportPdfs) return;
+
+    const exportItems = getCustomOrderExportItems(filters, branchFilter);
+    const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
+    const filterLabel = getCustomOrderExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((order) => [
@@ -2722,10 +4670,11 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
     document.text(`View: ${filterLabel}`, 40, 80);
-    document.text(`Total records: ${exportItems.length}`, 40, 96);
+    document.text(`Branch: ${branchFilter}`, 40, 96);
+    document.text(`Total records: ${exportItems.length}`, 40, 112);
 
     autoTable(document, {
-      startY: 112,
+      startY: 128,
       head: [['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget']],
       body: rows.length > 0 ? rows : [['-', 'No custom order records available for export.', '', '', '', '', '', '', '']],
       theme: 'grid',
@@ -2746,7 +4695,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       margin: { left: 40, right: 40, bottom: 40 },
     });
 
-    const filename = `${filter === 'archive' ? 'archived-custom-orders' : `custom-orders-${filter}`}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-custom-orders' : 'custom-orders-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
     document.save(filename);
     setShowCustomOrderExportModal(false);
   };
@@ -2974,7 +4923,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
       <div className="max-w-5xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-light mb-2">Admin Dashboard</h1>
+          <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
           <p className="text-[#6B5D4F]">Manage your boutique operations across all branches</p>
         </div>
 
@@ -3070,122 +5019,395 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         {/* Content */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
-            {/* Stats Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <div className="flex items-center justify-between mb-4">
-                  <span
-                    className="w-8 h-8 text-[#D4AF37] text-3xl leading-none inline-flex items-center justify-center"
-                    role="img"
-                    aria-label="Philippine Peso"
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-light">Scheduled Activities</h2>
+              {!isCurrentUserStaff && (
+                <div className="flex items-center gap-3">
+                  {canExportPdfs && (
+                    <button
+                      type="button"
+                      onClick={openOverviewExportModal}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                      aria-label="Save overview KPIs as PDF"
+                    >
+                      <Download className="w-5 h-5" />
+                      Save as PDF
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleRefreshOverview}
+                    disabled={dashboardRefreshScope === 'overview'}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    ₱
-                  </span>
-                  <TrendingUp className="w-5 h-5 text-green-600" />
+                    <RotateCcw className={`w-5 h-5 ${dashboardRefreshScope === 'overview' ? 'animate-spin' : ''}`} />
+                    {dashboardRefreshScope === 'overview' ? 'Refreshing...' : 'Refresh'}
+                  </button>
                 </div>
-                <p className="text-sm text-[#6B5D4F] mb-1">Inventory Value</p>
-                <p className="text-2xl font-light">₱{totalInventoryValue.toLocaleString()}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <Package className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Total Products</p>
-                <p className="text-2xl font-light">{totalProducts}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <AlertCircle className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Low Stock Items</p>
-                <p className="text-2xl font-light">{totalLowStock}</p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
-                <Users className="w-8 h-8 text-[#D4AF37] mb-4" />
-                <p className="text-sm text-[#6B5D4F] mb-1">Out of Stock</p>
-                <p className="text-2xl font-light">{totalOutOfStock}</p>
-              </div>
+              )}
             </div>
 
-            {/* Branch Performance */}
             <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
-              <h2 className="text-2xl font-light mb-6">Branch Performance</h2>
-              {branchPerformanceError && (
-                <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
-                  {branchPerformanceError}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:w-full">
+                <div className="sm:flex-1 sm:pr-6">
+                  <h3 className="text-2xl font-light text-[#1A1A1A]">Today's Activity</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-1">
+                    Scheduled rentals, appointments, and custom order sessions for {selectedBranch}.
+                  </p>
                 </div>
-              )}
-              {branchPerformanceLoading && (
-                <div className="mb-4 text-sm text-[#6B5D4F]">Loading branch performance...</div>
-              )}
-              <div className="space-y-6">
-                {branchStats.map((branch) => (
-                  <div key={branch.branch} className="pt-1">
-                    <div className="flex items-center justify-between mb-5">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="w-5 h-5 text-[#6B5D4F]" />
-                        <h3 className="font-medium">{branch.branch}</h3>
-                      </div>
-                      <span className="text-xl font-light">₱{branch.inventoryValue.toLocaleString()}</span>
+                <div className="inline-flex items-center gap-2 rounded-full bg-[#FAF7F0] px-4 py-2 text-sm text-[#6B5D4F] border border-[#E8DCC8] sm:ml-auto sm:self-start">
+                  <Calendar className="w-4 h-4 text-[#D4AF37]" />
+                  {todaysActivity.length} scheduled
+                </div>
+              </div>
+
+              <div className="mt-6">
+                {todaysActivity.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-[#E8DCC8] bg-[#FCFAF5] px-6 py-10 text-center">
+                    <p className="text-base text-[#3D2B1F]">No scheduled activity for today.</p>
+                    <p className="mt-2 text-sm text-[#8A7763]">New rentals, appointments, and bespoke sessions will appear here in time order.</p>
+                  </div>
+                ) : (
+                  <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[900px]">
+                        <thead className="bg-[#FAF7F0]">
+                          <tr>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Time</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Type</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Activity</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Customer</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Reference ID</th>
+                            <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E8DCC8] bg-white">
+                        {paginatedTodaysActivity.map((activity) => {
+                          return (
+                            <tr key={activity.id} className="hover:bg-[#FAF7F0] transition-colors align-top">
+                              <td className="px-6 py-4 text-sm text-[#3D2B1F] whitespace-nowrap">
+                                {activity.timeLabel}
+                              </td>
+                              <td className="px-6 py-4 text-sm whitespace-nowrap">
+                                {activity.source}
+                              </td>
+                              <td className="px-6 py-4 text-sm font-medium text-[#1A1A1A] leading-6">{activity.title}</td>
+                              <td className="px-6 py-4 text-sm text-[#3D2B1F] leading-6">{activity.customerName}</td>
+                              <td className="px-6 py-4 text-sm text-[#6B5D4F] leading-6">{activity.detail}</td>
+                              <td className="px-6 py-4 text-sm text-[#6B5D4F] whitespace-nowrap">{activity.branch}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      </table>
                     </div>
-
-                    <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Total Products</p>
-                        <p className="font-medium">{branch.totalProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Available</p>
-                        <p className="font-medium text-green-600">{branch.availableProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Rented</p>
-                        <p className="font-medium text-blue-600">{branch.rentedProducts}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Low Stock</p>
-                        <p className="font-medium text-amber-600">{branch.lowStockItems}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Out of Stock</p>
-                        <p className="font-medium text-red-600">{branch.outOfStockItems}</p>
-                      </div>
-
-                      <div className="hidden sm:block bg-transparent rounded-2xl border border-dashed border-[#EDE1CE] px-4 py-4 md:px-5 md:py-5" aria-hidden="true" />
-                    </div>
-
-                    <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Items Sold</p>
-                        <p className="font-medium">{branch.totalItemsSold}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Turnover Rate</p>
-                        <p className="font-medium">{branch.inventoryTurnoverRate}</p>
-                      </div>
-                      <div className="bg-[#FAF7F0] rounded-2xl border border-[#EDE1CE] shadow-sm px-4 py-4 md:px-5 md:py-5">
-                        <p className="text-[#6B5D4F]">Inventory Health</p>
-                        <p className={`font-medium ${
-                          branch.outOfStockItems > 0
-                            ? 'text-red-600'
-                            : branch.lowStockItems > 0
-                              ? 'text-amber-600'
-                              : 'text-green-600'
-                        }`}>
-                          {branch.outOfStockItems > 0
-                            ? 'At Risk'
-                            : branch.lowStockItems > 0
-                              ? 'Watch'
-                              : 'Healthy'}
-                        </p>
+                    <div className="flex items-center justify-between gap-4 border-t border-[#E8DCC8] px-6 py-4">
+                      <p className="text-sm text-[#6B5D4F]">
+                        Page {safeOverviewActivityPage} of {todaysActivityTotalPages}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setOverviewActivityPage(Math.max(1, safeOverviewActivityPage - 1))}
+                          disabled={safeOverviewActivityPage === 1}
+                          className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOverviewActivityPage(Math.min(todaysActivityTotalPages, safeOverviewActivityPage + 1))}
+                          disabled={safeOverviewActivityPage === todaysActivityTotalPages}
+                          className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Next
+                        </button>
                       </div>
                     </div>
                   </div>
-                ))}
-                {!branchPerformanceLoading && branchStats.length === 0 && (
-                  <p className="text-sm text-[#6B5D4F]">No branch inventory data available.</p>
                 )}
               </div>
             </div>
+
+            {!isCurrentUserStaff && (
+              <>
+                <div className="border-t border-[#E8DCC8]" aria-hidden="true" />
+
+                <div className="flex items-center justify-between gap-4">
+                  <h2 className="text-2xl font-light text-[#1A1A1A]">Store Overview</h2>
+                  <div className="flex items-center gap-3">
+                    {canExportPdfs && (
+                      <button
+                        type="button"
+                        onClick={openStoreOverviewExportModal}
+                        className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
+                        aria-label="Save overview KPIs as PDF"
+                      >
+                        <Download className="w-5 h-5" />
+                        Save as PDF
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleRefreshOverview}
+                      disabled={dashboardRefreshScope === 'overview'}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <RotateCcw className={`w-5 h-5 ${dashboardRefreshScope === 'overview' ? 'animate-spin' : ''}`} />
+                      {dashboardRefreshScope === 'overview' ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <span
+                        className="w-8 h-8 text-[#D4AF37] text-3xl leading-none inline-flex items-center justify-center"
+                        role="img"
+                        aria-label="Philippine Peso"
+                      >
+                        ₱
+                      </span>
+                      {salesTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      ) : salesTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${salesTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Total Sales</p>
+                    <p className="text-2xl font-light">₱{totalSales.toLocaleString()}</p>
+                    <p className={`mt-2 text-sm ${salesTrend.textClassName}`}>{salesTrend.label}</p>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="w-8 h-8 text-[#D4AF37]" />
+                      {ordersTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      ) : ordersTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${ordersTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Number of Orders</p>
+                    <p className="text-2xl font-light">{numberOfOrders}</p>
+                    <p className={`mt-2 text-sm ${ordersTrend.textClassName}`}>{ordersTrend.label}</p>
+                  </div>
+
+                  <div className="bg-white p-6 rounded-2xl border border-[#E8DCC8]">
+                    <div className="flex items-center justify-between mb-4">
+                      <Users className="w-8 h-8 text-[#D4AF37]" />
+                      {customersTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      ) : customersTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${customersTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">New Customers</p>
+                    <p className="text-2xl font-light">{newCustomers}</p>
+                    <p className={`mt-2 text-sm ${customersTrend.textClassName}`}>{customersTrend.label}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (topSellingInventoryItem) {
+                        setHoverPreviewItem(topSellingInventoryItem);
+                      }
+                    }}
+                    disabled={!topSellingInventoryItem}
+                    className="bg-white p-6 rounded-2xl border border-[#E8DCC8] text-left transition-colors hover:border-[#D4AF37] disabled:hover:border-[#E8DCC8] disabled:cursor-default"
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="w-8 h-8 text-[#D4AF37]" />
+                      {topSellingTrend.direction === 'down' ? (
+                        <TrendingDown className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      ) : topSellingTrend.direction === 'flat' ? (
+                        <Minus className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      ) : (
+                        <TrendingUp className={`w-5 h-5 ${topSellingTrend.iconClassName}`} />
+                      )}
+                    </div>
+                    <p className="text-sm text-[#6B5D4F] mb-1">Top Selling Item</p>
+                    <p className="text-lg font-light leading-tight text-[#1a1a1a]">{topSellingItemName}</p>
+                    <p className="mt-2 text-sm text-[#6B5D4F]">{topSellingItemCount} rental{topSellingItemCount === 1 ? '' : 's'}</p>
+                    <p className={`mt-1 text-sm ${topSellingTrend.textClassName}`}>{topSellingTrend.label}</p>
+                    <p className="mt-1 text-xs text-[#9E8E80]">{topSellingInventoryItem ? 'Click to view item details' : 'Details unavailable for this item'}</p>
+                  </button>
+                </div>
+
+                {/* Revenue Comparison */}
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div className="flex min-w-0 flex-1 items-start gap-8">
+                      <div className="min-w-0 flex-1">
+                        <h2 className="text-2xl font-light">{branchComparisonMetricLabel} Comparison</h2>
+                        <p className="mt-1 text-sm text-[#6B5D4F]">
+                          {branchComparisonDescription}{selectedBranch === 'All Branches' ? '' : ` for ${selectedBranch}` }.
+                        </p>
+                      </div>
+                      <div className="w-[220px] shrink-0 text-left">
+                        <p className="text-xs uppercase tracking-[0.18em] text-[#9E8E80]">{branchComparisonSummaryLabel}</p>
+                        <p className="mt-1 text-2xl font-light text-[#1A1A1A]">{formatBranchComparisonValue(totalComparedMetric)}</p>
+                      </div>
+                    </div>
+                    <div className="flex w-[220px] shrink-0 justify-end">
+                      <select
+                        aria-label="Select branch comparison metric"
+                        value={branchComparisonMetric}
+                        onChange={(event) => setBranchComparisonMetric(event.target.value as BranchComparisonMetric)}
+                        className="min-w-[180px] rounded-lg border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#1A1A1A] focus:outline-none focus:border-[#D4AF37]"
+                      >
+                        {branchComparisonMetricOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {branchPerformanceError && (
+                    <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+                      {branchPerformanceError}
+                    </div>
+                  )}
+                  {branchPerformanceLoading && (
+                    <div className="mb-4 text-sm text-[#6B5D4F]">Loading {branchComparisonMetricLabel.toLowerCase()} comparison...</div>
+                  )}
+                  <div className="mb-[20px] rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {!branchPerformanceLoading && branchComparisonData.length > 0 && (
+                      <>
+                        <div className="h-[320px] w-full">
+                          <Bar data={revenueComparisonChartData} options={revenueComparisonChartOptions} />
+                        </div>
+                        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          {branchComparisonData.map((entry) => (
+                            <div key={entry.fullBranch} className="rounded-2xl border border-[#E8DCC8] bg-white px-4 py-4">
+                              <p className="text-sm text-[#6B5D4F]">{entry.fullBranch}</p>
+                              <p className="mt-1 text-lg font-light text-[#1A1A1A]">{formatBranchComparisonValue(entry.value)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    {!branchPerformanceLoading && branchComparisonData.length === 0 && (
+                      <p className="text-sm text-[#6B5D4F]">{branchComparisonEmptyLabel}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Items per Category</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Total active inventory items in each category.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {itemsPerCategory.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={itemsPerCategoryChartData} options={itemsPerCategoryChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No inventory category data is available for the selected branch yet.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Most Rented Items</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Top five rented items based on completed rentals.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {mostRentedItems.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={mostRentedItemsChartData} options={mostRentedItemsChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No completed rental data is available for the most rented items chart yet.</p>
+                    )}
+                  </div>
+                  {mostRentedItems.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-3" style={{ marginTop: '20px' }}>
+                      <p className="text-sm font-medium text-[#6B5D4F]">View Items:</p>
+                      <div className="flex flex-wrap gap-3" style={{ marginLeft: '12px' }}>
+                        {mostRentedItems.map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => {
+                              if (item.inventoryItem) {
+                                setHoverPreviewItem(item.inventoryItem);
+                              }
+                            }}
+                            disabled={!item.inventoryItem}
+                            className="rounded-full border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#3D2B1F] transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0] disabled:cursor-default disabled:opacity-60"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Least Rented Items</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Bottom five rented items based on completed rentals.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {leastRentedItems.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={leastRentedItemsChartData} options={leastRentedItemsChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No completed rental data is available for the least rented items chart yet.</p>
+                    )}
+                  </div>
+                  {leastRentedItems.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-3" style={{ marginTop: '20px' }}>
+                      <p className="text-sm font-medium text-[#6B5D4F]">View Items:</p>
+                      <div className="flex flex-wrap gap-3" style={{ marginLeft: '12px' }}>
+                        {leastRentedItems.map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => {
+                              if (item.inventoryItem) {
+                                setHoverPreviewItem(item.inventoryItem);
+                              }
+                            }}
+                            disabled={!item.inventoryItem}
+                            className="rounded-full border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#3D2B1F] transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0] disabled:cursor-default disabled:opacity-60"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -3195,38 +5417,42 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Inventory Management</h2>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSaveInventoryAsPdf}
-                  disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save inventory as PDF"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isArchiveView) {
-                      void loadArchivedInventory();
-                      return;
-                    }
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={handleSaveInventoryAsPdf}
+                    disabled={inventoryLoading || archiveLoading || inventoryExportItems.length === 0}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save inventory as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
+                {(isArchiveView || !isCurrentUserStaff) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isArchiveView) {
+                        void loadArchivedInventory();
+                        return;
+                      }
 
-                    setShowAddItem(true);
-                  }}
-                  disabled={isArchiveView ? archiveLoading : false}
-                  title={isArchiveView ? 'Refresh archived inventory' : 'Add a new gown'}
-                  aria-label={isArchiveView ? 'Refresh archived inventory' : 'Add New Gown'}
-                  className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors ${
-                    isArchiveView
-                      ? 'border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed'
-                      : 'bg-[#1a1a1a] text-white hover:bg-[#D4AF37]'
-                  }`}
-                >
-                  {isArchiveView ? <RotateCcw className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
-                  {isArchiveView ? 'Refresh' : 'Add New Gown'}
-                </button>
+                      setShowAddItem(true);
+                    }}
+                    disabled={isArchiveView ? archiveLoading : false}
+                      title={isArchiveView ? 'Refresh archived inventory' : 'Create item'}
+                      aria-label={isArchiveView ? 'Refresh archived inventory' : 'Create item'}
+                    className={`px-6 py-3 rounded-lg flex items-center gap-2 transition-colors ${
+                      isArchiveView
+                        ? 'border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed'
+                        : 'bg-[#1a1a1a] text-white hover:bg-[#D4AF37]'
+                    }`}
+                  >
+                    {isArchiveView ? <RotateCcw className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+                      {isArchiveView ? 'Refresh' : 'Create item'}
+                  </button>
+                )}
                 <button
                   onClick={handleToggleArchiveView}
                   className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
@@ -3248,15 +5474,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
               />
             </div>
 
-            <p className="text-sm text-[#6B5D4F]">
-              Use the eye icon in Actions to view a product's details.
-            </p>
-
             <div className="text-sm text-[#6B5D4F]">
-              Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'gown' : 'gowns'}
+              Showing {inventoryCurrentPageCount} of {inventoryItemsForCurrentView.length} {inventoryItemsForCurrentView.length === 1 ? 'item' : 'items'}
             </div>
 
-            {/* Inventory status messages */}
             {inventoryError && (
               <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
                 {inventoryError}
@@ -3272,132 +5493,102 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 {archiveError}
               </div>
             )}
-            {inventoryLoading && (
-              <div className="py-12 text-center text-[#6B5D4F]">Loading inventory...</div>
-            )}
-            {inventoryView === 'archive' && archiveLoading && (
-              <div className="py-12 text-center text-[#6B5D4F]">Loading archive...</div>
+            {(inventoryLoading || (inventoryView === 'archive' && archiveLoading)) && (
+              <div className="py-12 text-center text-[#6B5D4F]">
+                {inventoryView === 'archive' ? 'Loading archived inventory...' : 'Loading inventory...'}
+              </div>
             )}
 
-            {/* Inventory Table */}
-            <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
-              <div style={{ height: '650px' }} className="overflow-y-auto overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-[#FAF7F0]">
-                    <tr>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">ID</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Name</th>
-                      {inventoryView === 'archive' && <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Image</th>}
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Category</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Color</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Price</th>
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
-                      {inventoryView === 'archive'
-                        ? <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Deleted</th>
-                        : <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Status</th>
-                      }
-                      <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#E8DCC8]">
-                    {inventoryView === 'active' && !inventoryLoading && filteredInventory.length === 0 && (
-                      <tr><td colSpan={8} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No inventory items match your search.' : 'No items in inventory. Add a gown to get started.'}</td></tr>
-                    )}
-                    {inventoryView === 'archive' && !archiveLoading && filteredArchivedItems.length === 0 && (
-                      <tr><td colSpan={9} className="px-6 py-8 text-center text-[#6B5D4F] text-sm">{inventoryQuery ? 'No archived gowns match your search.' : 'No archived gowns found.'}</td></tr>
-                    )}
-                    {inventoryView === 'active' && paginatedInventoryItems.map((item) => (
-                      <tr
-                        key={item.id}
-                        className="hover:bg-[#FAF7F0] transition-colors"
-                      >
-                        <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
-                        <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
-                        <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
-                        <td className="px-6 py-4">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                            item.status === 'available'
-                              ? 'bg-green-100 text-green-800'
-                              : item.status === 'rented'
-                              ? 'bg-blue-100 text-blue-800'
-                              : item.status === 'reserved'
-                              ? 'bg-purple-100 text-purple-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => setHoverPreviewItem(item)}
-                              className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
-                              title="View details"
-                              aria-label={`View details for ${item.name}`}
-                            >
-                              <Eye className="w-4 h-4 text-[#6B5D4F]" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingItem(item);
-                              }}
-                              className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
-                              title="Edit"
-                            >
-                              <Edit className="w-4 h-4 text-[#6B5D4F]" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                handleDeleteItem(item.id);
-                              }}
-                              className="p-2 hover:bg-red-50 rounded-full transition-colors"
-                              title="Delete"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </button>
-                          </div>
-                        </td>
+            {!inventoryLoading && !(inventoryView === 'archive' && archiveLoading) && (
+              <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px]">
+                    <thead className="bg-[#FAF7F0]">
+                      <tr>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">ID</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Name</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Category</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Color</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Price</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Status</th>
+                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Actions</th>
                       </tr>
-                    ))}
-                    {inventoryView === 'archive' && paginatedInventoryItems.map((item) => (
-                      <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
-                        <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
-                        <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                        <td className="px-6 py-4">
-                          <div className="w-10 h-10 rounded-md bg-[#FAF7F0] border border-[#E8DCC8] overflow-hidden">
-                            {item.image ? (
-                              <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center text-[10px] text-[#9E8E80]">N/A</div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
-                        <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
-                        <td className="px-6 py-4 text-sm text-[#6B5D4F]">
-                          {item.deletedAt ? new Date(item.deletedAt).toLocaleString() : 'Unknown'}
-                        </td>
-                        <td className="px-6 py-4">
-                          <button
-                            onClick={() => handleRestoreItem(item.id)}
-                            disabled={restoringItemId === item.id}
-                            className="px-3 py-2 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] text-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <RotateCcw className="w-4 h-4" />
-                            {restoringItemId === item.id ? 'Restoring...' : 'Restore'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8DCC8] bg-white">
+                      {paginatedInventoryItems.map((item) => {
+                        const inventoryStatus = normalizeInventoryManagementStatus(item.status);
+
+                        return (
+                        <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
+                          <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
+                          <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
+                          <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
+                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
+                          <td className="px-6 py-4">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              inventoryStatus === 'available'
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {inventoryStatus.charAt(0).toUpperCase() + inventoryStatus.slice(1)}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setHoverPreviewItem(item)}
+                                className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                                title="View details"
+                                aria-label={`View details for ${item.name}`}
+                              >
+                                <Eye className="w-4 h-4 text-[#6B5D4F]" />
+                              </button>
+                              {!isArchiveView && !isCurrentUserStaff && (
+                                <button
+                                  onClick={() => {
+                                    setEditingItem(item);
+                                  }}
+                                  className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                                  title="Edit"
+                                >
+                                  <Edit className="w-4 h-4 text-[#6B5D4F]" />
+                                </button>
+                              )}
+                              {isArchiveView ? (
+                                <button
+                                  onClick={() => handleRestoreItem(item.id)}
+                                  disabled={restoringItemId === item.id}
+                                  className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  title="Restore"
+                                >
+                                  <RotateCcw className="w-4 h-4 text-[#6B5D4F]" />
+                                </button>
+                              ) : (
+                                !isCurrentUserStaff && (
+                                  <button
+                                    onClick={() => {
+                                      handleDeleteItem(item.id);
+                                    }}
+                                    className="p-2 hover:bg-red-50 rounded-full transition-colors"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-red-600" />
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            )}
 
             {inventoryItemsForCurrentView.length > INVENTORY_PAGE_SIZE && (
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -3432,21 +5623,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Rental Management</h2>
               <div className="flex items-center gap-3">
+                  {canExportPdfs && (
+                    <button
+                      type="button"
+                      onClick={openRentalExportModal}
+                      disabled={adminRentalsLoading || !canOpenRentalExportModal}
+                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Save rentals as PDF"
+                    >
+                      <Download className="w-5 h-5" />
+                      Save as PDF
+                    </button>
+                  )}
                 <button
                   type="button"
-                  onClick={openRentalExportModal}
-                  disabled={adminRentalsLoading || !canOpenRentalExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save rentals as PDF"
+                  onClick={handleRefreshAdminRentals}
+                  disabled={dashboardRefreshScope === 'rentals'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminRentals}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
-                >
-                  Refresh
+                  {dashboardRefreshScope === 'rentals' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setRentalManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -3623,17 +5818,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             <div className="flex items-center gap-3 mb-2 flex-wrap">
                               <h4 className="font-medium">{rental.gownName}</h4>
                               <span
-                                className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                  rental.status === 'pending'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : rental.status === 'for_payment'
-                                    ? 'bg-rose-100 text-rose-800'
-                                    : rental.status === 'paid_for_confirmation'
-                                    ? 'bg-violet-100 text-violet-800'
-                                    : rental.status === 'for_pickup'
-                                    ? 'bg-cyan-100 text-cyan-800'
-                                    : 'bg-amber-100 text-amber-800'
-                                }`}
+                                className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                                style={getAdminRentalStatusBadgeStyle(rental.status)}
                               >
                                 {getRentalStatusLabel(rental)}
                               </span>
@@ -3803,11 +5989,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
                             <span
-                              className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                rental.status === 'paid_for_confirmation'
-                                  ? 'bg-violet-100 text-violet-800'
-                                  : 'bg-rose-100 text-rose-800'
-                              }`}
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
                             >
                               {rental.status === 'paid_for_confirmation' ? 'Paid - For Confirmation' : 'For Payment'}
                             </span>
@@ -3878,7 +6061,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
-                            <span className="px-3 py-1 bg-cyan-100 text-cyan-800 text-xs rounded-full font-medium">
+                            <span
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
+                            >
                               {getRentalStatusLabel(rental)}
                             </span>
                           </div>
@@ -4034,22 +6220,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{rental.gownName}</h4>
                             <span
-                              style={isCancelledRentalStatus(rental.status) ? { backgroundColor: '#fee2e2', color: '#991b1b' } : undefined}
-                              className={`px-3 py-1 text-xs rounded-full font-medium ${
-                                rental.status === 'completed'
-                                  ? 'bg-green-100 text-green-800'
-                                  : isCancelledRentalStatus(rental.status)
-                                  ? 'bg-red-100 text-red-800'
-                                  : rental.status === 'for_payment'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : rental.status === 'paid_for_confirmation'
-                                  ? 'bg-violet-100 text-violet-800'
-                                  : rental.status === 'for_pickup'
-                                  ? 'bg-cyan-100 text-cyan-800'
-                                  : rental.status === 'active'
-                                  ? 'bg-amber-100 text-amber-800'
-                                  : 'bg-amber-100 text-amber-800'
-                              }`}
+                              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+                              style={getAdminRentalStatusBadgeStyle(rental.status)}
                             >
                               {rental.status === 'paid_for_confirmation'
                                 ? 'Paid - For Confirmation'
@@ -4139,47 +6311,232 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
           />
         )}
 
+        {showOverviewExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose scheduled activity filters for PDF export"
+            onClick={() => setShowOverviewExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Today's Activities as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose which branch and activity type to include in the exported PDF.
+              </p>
+
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="overview-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
+                  </label>
+                  <select
+                    id="overview-export-branch-filter"
+                    value={overviewExportBranchFilter}
+                    onChange={(event) => setOverviewExportBranchFilter(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {['All Branches', ...overviewExportBranchOptions].map((branchOption) => {
+                      const count = getOverviewExportItems(branchOption, overviewExportTypeFilter).length;
+
+                      return (
+                        <option key={branchOption} value={branchOption}>
+                          {`${branchOption} (${count})`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Type</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more activity types.</p>
+                  <div className="space-y-3">
+                    {overviewExportTypeOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          overviewExportTypeFilter.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`overview-export-type-filter-${option.value}`}
+                            value={option.value}
+                            checked={overviewExportTypeFilter.includes(option.value)}
+                            onChange={() => setOverviewExportTypeFilter((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowOverviewExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveOverviewKpisAsPdf}
+                  disabled={!canExportPdfs || overviewExportItems.length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showStoreOverviewExportModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Choose store overview branches for PDF export"
+            onClick={() => setShowStoreOverviewExportModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Store Overview as PDF</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Choose one or more branches to include in the exported PDF.
+              </p>
+
+              <div className="space-y-3 mb-6">
+                {['All Branches', ...storeOverviewExportBranchOptions].map((branchOption) => (
+                  <label
+                    key={branchOption}
+                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                      selectedStoreOverviewExportBranches.includes(branchOption)
+                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      name={`store-overview-export-branch-${branchOption}`}
+                      value={branchOption}
+                      checked={selectedStoreOverviewExportBranches.includes(branchOption)}
+                      onChange={() => toggleStoreOverviewExportBranch(branchOption)}
+                      className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                    />
+                    <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowStoreOverviewExportModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveStoreOverviewAsPdf}
+                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Save PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {showRentalExportModal && (
           <div
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose rental status filter for PDF export"
+            aria-label="Choose rental export filters for PDF export"
             onClick={() => setShowRentalExportModal(false)}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="text-xl sm:text-2xl font-light mb-2">Save Rentals as PDF</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which rental status filter to include in the exported PDF.
+                Choose which branch and rental statuses to include in the exported PDF.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {rentalExportOptions.map((option) => (
-                  <label
-                    key={option.value}
-                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                      rentalExportFilter === option.value
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="rental-export-filter"
-                        value={option.value}
-                        checked={rentalExportFilter === option.value}
-                        onChange={() => setRentalExportFilter(option.value)}
-                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                      />
-                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                    </div>
-                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="rental-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
                   </label>
-                ))}
+                  <select
+                    id="rental-export-branch-filter"
+                    value={selectedRentalExportBranch}
+                    onChange={(event) => setSelectedRentalExportBranch(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {rentalExportBranchOptions.map((branchOption) => (
+                      <option key={branchOption} value={branchOption}>
+                        {branchOption}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more rental statuses.</p>
+                  <div className="space-y-3">
+                    {rentalExportOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          selectedRentalExportFilters.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`rental-export-filter-${option.value}`}
+                            value={option.value}
+                            checked={selectedRentalExportFilters.includes(option.value)}
+                            onChange={() => setSelectedRentalExportFilters((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -4192,8 +6549,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSaveRentalsAsPdf(rentalExportFilter)}
-                  disabled={getRentalExportItems(rentalExportFilter).length === 0}
+                  onClick={() => handleSaveRentalsAsPdf(selectedRentalExportFilters, selectedRentalExportBranch)}
+                  disabled={!canExportPdfs || getRentalExportItems(selectedRentalExportFilters, selectedRentalExportBranch).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -4208,21 +6565,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">Appointment Management</h2>
               <div className="flex items-center gap-3">
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={openAppointmentExportModal}
+                    disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save appointments as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={openAppointmentExportModal}
-                  disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save appointments as PDF"
+                  onClick={handleRefreshAdminAppointments}
+                  disabled={dashboardRefreshScope === 'appointments'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminAppointments}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
-                >
-                  Refresh
+                  {dashboardRefreshScope === 'appointments' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setAppointmentManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -4303,18 +6664,26 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-2">
                             <h4 className="font-medium">{getAppointmentTypeLabel(appointment.type)}</h4>
-                            <span className={`px-3 py-1 text-xs rounded-full font-medium ${
-                              appointment.status === 'scheduled'
-                                ? 'bg-blue-100 text-blue-800'
-                                : appointment.rescheduleReason
-                                ? 'bg-orange-100 text-orange-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}>
-                              {appointment.status === 'scheduled'
-                                ? 'Scheduled'
-                                : appointment.rescheduleReason
+                            <span
+                              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                                appointment.rescheduleReason
+                                  ? ''
+                                  : appointment.status === 'scheduled'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-amber-100 text-amber-800'
+                              }`}
+                              style={appointment.rescheduleReason
+                                ? {
+                                    backgroundColor: '#FDE7C7',
+                                    color: '#B45309'
+                                  }
+                                : undefined}
+                            >
+                              {appointment.rescheduleReason
                                 ? 'Rescheduled'
-                                : 'Pending'}
+                                : appointment.status === 'scheduled'
+                                  ? 'Scheduled'
+                                  : 'Pending'}
                             </span>
                           </div>
                           <div className="grid md:grid-cols-3 gap-3 text-sm text-[#6B5D4F] mb-3">
@@ -4505,42 +6874,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose appointment status filter for PDF export"
+            aria-label="Choose appointment export filters for PDF export"
             onClick={() => setShowAppointmentExportModal(false)}
           >
             <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="text-xl sm:text-2xl font-light mb-2">Save Appointments as PDF</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which appointment status filter to include in the exported PDF.
+                Choose which branch and appointment statuses to include in the exported PDF.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {appointmentExportOptions.map((option) => (
-                  <label
-                    key={option.value}
-                    className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                      appointmentExportFilter === option.value
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="appointment-export-filter"
-                        value={option.value}
-                        checked={appointmentExportFilter === option.value}
-                        onChange={() => setAppointmentExportFilter(option.value)}
-                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                      />
-                      <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                    </div>
-                    <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+              <div className="space-y-6 mb-6">
+                <div>
+                  <label htmlFor="appointment-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Branch
                   </label>
-                ))}
+                  <select
+                    id="appointment-export-branch-filter"
+                    value={selectedAppointmentExportBranch}
+                    onChange={(event) => setSelectedAppointmentExportBranch(event.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                  >
+                    {appointmentExportBranchOptions.map((branchOption) => (
+                      <option key={branchOption} value={branchOption}>
+                        {branchOption}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                  <p className="text-xs text-[#6B5D4F] mb-3">Select one or more appointment statuses.</p>
+                  <div className="space-y-3">
+                    {appointmentExportOptions.map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                          selectedAppointmentExportFilters.includes(option.value)
+                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            name={`appointment-export-filter-${option.value}`}
+                            value={option.value}
+                            checked={selectedAppointmentExportFilters.includes(option.value)}
+                            onChange={() => setSelectedAppointmentExportFilters((current) => (
+                              current.includes(option.value)
+                                ? current.filter((value) => value !== option.value)
+                                : [...current, option.value]
+                            ))}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                        </div>
+                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -4553,8 +6950,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleSaveAppointmentsAsPdf(appointmentExportFilter)}
-                  disabled={getAppointmentExportItems(appointmentExportFilter).length === 0}
+                  onClick={() => handleSaveAppointmentsAsPdf(selectedAppointmentExportFilters, selectedAppointmentExportBranch)}
+                  disabled={!canExportPdfs || getAppointmentExportItems(selectedAppointmentExportFilters, selectedAppointmentExportBranch).length === 0}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Save PDF
@@ -4569,21 +6966,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center gap-4">
               <h2 className="text-2xl font-light">Bespoke Management</h2>
               <div className="flex items-center gap-3">
+                {canExportPdfs && (
+                  <button
+                    type="button"
+                    onClick={openCustomOrderExportModal}
+                    disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
+                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Save custom orders as PDF"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={openCustomOrderExportModal}
-                  disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  aria-label="Save custom orders as PDF"
+                  onClick={handleRefreshAdminCustomOrders}
+                  disabled={dashboardRefreshScope === 'bespoke'}
+                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminCustomOrders}
-                  className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg"
-                >
-                  Refresh
+                  {dashboardRefreshScope === 'bespoke' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setCustomOrderManagementView((prev) => (prev === 'active' ? 'archive' : 'active'))}
@@ -4641,42 +7042,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Choose custom order status filter for PDF export"
+                aria-label="Choose bespoke export filters for PDF export"
                 onClick={() => setShowCustomOrderExportModal(false)}
               >
                 <div
-                  className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+                  className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
                   onClick={(event) => event.stopPropagation()}
                 >
                   <h3 className="text-xl sm:text-2xl font-light mb-2">Save Custom Orders as PDF</h3>
                   <p className="text-sm text-[#6B5D4F] mb-6">
-                    Choose which bespoke status filter to include in the exported PDF.
+                    Choose which branch and bespoke statuses to include in the exported PDF.
                   </p>
 
-                  <div className="space-y-3 mb-6">
-                    {customOrderExportOptions.map((option) => (
-                      <label
-                        key={option.value}
-                        className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                          customOrderExportFilter === option.value
-                            ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="radio"
-                            name="custom-order-export-filter"
-                            value={option.value}
-                            checked={customOrderExportFilter === option.value}
-                            onChange={() => setCustomOrderExportFilter(option.value)}
-                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                          />
-                          <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                        </div>
-                        <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                  <div className="space-y-6 mb-6">
+                    <div>
+                      <label htmlFor="custom-order-export-branch-filter" className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                        Branch
                       </label>
-                    ))}
+                      <select
+                        id="custom-order-export-branch-filter"
+                        value={selectedCustomOrderExportBranch}
+                        onChange={(event) => setSelectedCustomOrderExportBranch(event.target.value)}
+                        className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] bg-white text-[#1A1A1A]"
+                      >
+                        {customOrderExportBranchOptions.map((branchOption) => (
+                          <option key={branchOption} value={branchOption}>
+                            {branchOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <p className="text-sm font-medium text-[#1A1A1A] mb-3">Status</p>
+                      <p className="text-xs text-[#6B5D4F] mb-3">Select one or more bespoke statuses.</p>
+                      <div className="space-y-3">
+                        {customOrderExportOptions.map((option) => (
+                          <label
+                            key={option.value}
+                            className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                              selectedCustomOrderExportFilters.includes(option.value)
+                                ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                                : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="checkbox"
+                                name={`custom-order-export-filter-${option.value}`}
+                                value={option.value}
+                                checked={selectedCustomOrderExportFilters.includes(option.value)}
+                                onChange={() => setSelectedCustomOrderExportFilters((current) => (
+                                  current.includes(option.value)
+                                    ? current.filter((value) => value !== option.value)
+                                    : [...current, option.value]
+                                ))}
+                                className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                              />
+                              <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                            </div>
+                            <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex flex-row items-center gap-3">
@@ -4689,8 +7118,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleSaveCustomOrdersAsPdf(customOrderExportFilter)}
-                      disabled={getCustomOrderExportItems(customOrderExportFilter).length === 0}
+                      onClick={() => handleSaveCustomOrdersAsPdf(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch)}
+                      disabled={!canExportPdfs || getCustomOrderExportItems(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch).length === 0}
                       className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Save PDF
@@ -4824,14 +7253,16 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex justify-between items-center">
               <h2 className="text-2xl font-light">User Management</h2>
               <div className="flex gap-2 shrink-0">
-                <button
-                  onClick={openUserExportModal}
-                  disabled={usersLoading || !canOpenUserExportModal}
-                  className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Download className="w-5 h-5" />
-                  Save as PDF
-                </button>
+                {canExportPdfs && (
+                  <button
+                    onClick={openUserExportModal}
+                    disabled={usersLoading || !canOpenUserExportModal}
+                    className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Download className="w-5 h-5" />
+                    Save as PDF
+                  </button>
+                )}
                 {!showArchivedUsersOnly && !isCurrentUserStaff && (
                   <button
                     onClick={() => {
@@ -4845,10 +7276,12 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   </button>
                 )}
                 <button
-                  onClick={loadUsers}
-                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors"
+                  type="button"
+                  onClick={handleRefreshUsers}
+                  disabled={dashboardRefreshScope === 'users'}
+                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Refresh
+                  {dashboardRefreshScope === 'users' ? 'Refreshing...' : 'Refresh'}
                 </button>
                 <button
                   onClick={() => setShowArchivedUsersOnly((prev) => !prev)}
@@ -5004,23 +7437,25 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                             : isStaffRestricted
                               ? 'Staff accounts cannot archive admin or staff accounts'
                               : undefined;
+                          if (isStaffRestricted) {
+                            return null;
+                          }
+
                           return (
-                        <button
-                          onClick={() => handleArchiveUser(user)}
-                          disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin || isStaffRestricted}
-                          className="px-4 py-2 text-sm bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={archiveTitle}
-                        >
-                          {user.status === 'archived'
-                            ? 'Archived'
-                            : isSelfAdmin
-                              ? 'Logged In'
-                            : isStaffRestricted
-                              ? 'Restricted'
-                            : archivingUserId === user.id
-                              ? 'Archiving...'
-                              : 'Archive'}
-                        </button>
+                            <button
+                              onClick={() => handleArchiveUser(user)}
+                              disabled={user.status === 'archived' || archivingUserId === user.id || isSelfAdmin}
+                              className="px-4 py-2 text-sm bg-red-50 text-red-700 hover:bg-red-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={archiveTitle}
+                            >
+                              {user.status === 'archived'
+                                ? 'Archived'
+                                : isSelfAdmin
+                                  ? 'Logged In'
+                                  : archivingUserId === user.id
+                                    ? 'Archiving...'
+                                    : 'Archive'}
+                            </button>
                           );
                         })()
                       )}
@@ -5109,7 +7544,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       <button
                         type="button"
                         onClick={() => handleSaveUsersAsPdf(userExportFilter)}
-                        disabled={getUserExportItems(userExportFilter).length === 0}
+                        disabled={!canExportPdfs || getUserExportItems(userExportFilter).length === 0}
                         className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Save PDF
@@ -5127,19 +7562,23 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-light">Admin History</h2>
               <div className="flex items-center gap-2">
+                {canExportPdfs && (
+                  <button
+                    onClick={handleSaveAdminHistoryAsPdf}
+                    disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
+                    className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    <Download className="h-4 w-4" />
+                    Save as PDF
+                  </button>
+                )}
                 <button
-                  onClick={handleSaveAdminHistoryAsPdf}
-                  disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
-                  className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                  type="button"
+                  onClick={handleRefreshAdminHistory}
+                  disabled={dashboardRefreshScope === 'history'}
+                  className={`${adminHistoryActionButtonClass} py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
-                  <Download className="h-4 w-4" />
-                  Save as PDF
-                </button>
-                <button
-                  onClick={loadAdminHistory}
-                  className={`${adminHistoryActionButtonClass} py-2`}
-                >
-                  Refresh
+                  {dashboardRefreshScope === 'history' ? 'Refreshing...' : 'Refresh'}
                 </button>
               </div>
             </div>
@@ -5299,17 +7738,17 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
         )}
 
         {/* Add/Edit Item Modal */}
-        {(showAddItem || editingItem) && !isConfirmCustomCategoryOpen && !pendingCategoryDeletion && (
+        {!isCurrentUserStaff && (showAddItem || editingItem) && !isConfirmCustomCategoryOpen && !pendingCategoryDeletion && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-8 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
               <h3 className="text-2xl font-light mb-6">
-                {editingItem ? 'Edit Gown' : 'Add New Gown'}
+                {editingItem ? 'Edit Item' : 'Create New Item'}
               </h3>
 
               <div className="space-y-6">
                 <div className="grid md:grid-cols-2 gap-6">
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Gown Name *</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Item Name *</label>
                     <input
                       type="text"
                       required={!editingItem}
@@ -5480,7 +7919,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       required={!editingItem}
                       aria-invalid={!editingItem && Boolean(addItemErrors.status)}
                       aria-describedby={!editingItem && addItemErrors.status ? 'add-item-status-error' : undefined}
-                      value={editingItem?.status || newItem.status}
+                      value={normalizeInventoryManagementStatus(editingItem?.status || newItem.status)}
                       onChange={(e) => editingItem
                         ? setEditingItem({ ...editingItem, status: e.target.value as any })
                         : (setNewItem({ ...newItem, status: e.target.value as any }), setAddItemErrors(prev => ({ ...prev, status: '' })))
@@ -5488,8 +7927,6 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.status ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                     >
                       <option value="available">Available</option>
-                      <option value="rented">Rented</option>
-                      <option value="reserved">Reserved</option>
                       <option value="maintenance">Maintenance</option>
                     </select>
                     {!editingItem && addItemErrors.status && <p id="add-item-status-error" className="text-sm text-red-600 mt-1">{addItemErrors.status}</p>}
@@ -5516,17 +7953,35 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                 </div>
 
                 <div>
-                  <label className="block text-sm text-[#6B5D4F] mb-2">Product Image</label>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Product Images</label>
 
                   {/* Preview */}
-                  {(editingItem?.image || newItem.image) && (
-                    <div className="mb-3 relative w-full h-40 rounded-lg overflow-hidden border border-[#E8DCC8] bg-[#FAF7F0] flex items-center justify-center">
-                      <img
-                        src={editingItem?.image ?? newItem.image ?? ''}
-                        alt="Preview"
-                        className="w-full h-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
+                  {getItemImageList(editingItem ?? newItem).length > 0 && (
+                    <div className="mb-3 flex gap-3 overflow-x-auto pb-1">
+                      {getItemImageList(editingItem ?? newItem).map((imageUrl, index) => (
+                        <div key={`${imageUrl}-${index}`} className="group relative h-24 w-24 shrink-0">
+                          <div className="h-full w-full overflow-hidden rounded-lg border border-[#E8DCC8] bg-[#FAF7F0]">
+                            <img
+                              src={imageUrl}
+                              alt={`Preview ${index + 1}`}
+                              className="h-full w-full object-cover"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                            />
+                          </div>
+                          <div className="pointer-events-none absolute inset-0 z-10 rounded-lg bg-black/20 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100" />
+                          <div className="pointer-events-none absolute inset-0 z-20 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                            <button
+                              type="button"
+                              onClick={() => removeItemImageAtIndex(index)}
+                              className="pointer-events-auto absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-full bg-[#b42318] text-white shadow-md transition-transform hover:scale-105 hover:bg-[#8f1d14] focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-[#b42318] focus:ring-offset-2"
+                              aria-label={`Remove image ${index + 1}`}
+                              title="Remove image"
+                            >
+                              <X aria-hidden="true" className="relative -left-[5px] h-7 w-7 stroke-[3]" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -5564,10 +8019,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       required={!editingItem}
                       aria-invalid={!editingItem && Boolean(addItemErrors.image)}
                       aria-describedby={!editingItem && addItemErrors.image ? 'add-item-image-error' : undefined}
-                      value={editingItem?.image ?? newItem.image ?? ''}
+                      value={getItemImageList(editingItem ?? newItem)[0] || ''}
                       onChange={(e) => editingItem
-                        ? setEditingItem({ ...editingItem, image: e.target.value })
-                        : (setNewItem({ ...newItem, image: e.target.value }), setAddItemErrors(prev => ({ ...prev, image: '' })))
+                        ? setEditingItem(updatePrimaryImage(editingItem, e.target.value))
+                        : (setNewItem(updatePrimaryImage(newItem, e.target.value)), setAddItemErrors(prev => ({ ...prev, image: '' })))
                       }
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.image ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                       placeholder="https://..."
@@ -5586,8 +8041,8 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                       ) : (
                         <>
                           <Upload className="w-7 h-7 text-[#6B5D4F] mb-2" />
-                          <span className="text-sm text-[#6B5D4F]">Click to upload or drag &amp; drop</span>
-                          <span className="text-xs text-[#9E8E80] mt-1">JPG or PNG — max 5 MB</span>
+                          <span className="text-sm text-[#6B5D4F]">Click to upload or drag &amp; drop up to 6 images</span>
+                          <span className="text-xs text-[#9E8E80] mt-1">JPG or PNG — max 5 MB each</span>
                         </>
                       )}
                       <input
@@ -5595,9 +8050,10 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                         ref={fileInputRef}
                         type="file"
                         accept="image/jpeg,image/png"
+                        multiple
                         className="hidden"
                         onChange={handleImageFileChange}
-                        disabled={isUploadingImage}
+                        disabled={isUploadingImage || getItemImageList(editingItem ?? newItem).length >= MAX_ITEM_IMAGES}
                       />
                     </label>
                   )}
@@ -5608,6 +8064,70 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                   {!editingItem && addItemErrors.image && !imageUploadError && (
                     <p id="add-item-image-error" className="mt-2 text-sm text-red-600">{addItemErrors.image}</p>
                   )}
+
+                  <div className="mt-4 rounded-xl border border-[#E8DCC8] bg-[#FCFAF6] p-4">
+                    <div className="mb-3">
+                      <label className="block text-sm text-[#6B5D4F] mb-1">3D Visual</label>
+                      <p className="text-xs text-[#9E8E80]">Optional. Upload a GLB, GLTF, USDZ, or ZIP model package so this item can later support a 3D view.</p>
+                    </div>
+
+                    {getModel3DUrl(editingItem ?? newItem) && (
+                      <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-[#E8DCC8] bg-white px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-xs uppercase tracking-[0.12em] text-[#9E8E80]">Uploaded Model</p>
+                          <a
+                            href={getModel3DUrl(editingItem ?? newItem)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block truncate text-sm text-[#3D2B1F] underline underline-offset-2"
+                          >
+                            {getDisplayFileName(getModel3DUrl(editingItem ?? newItem))}
+                          </a>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => editingItem
+                            ? setEditingItem((prev) => prev ? { ...prev, model3dUrl: '' } : prev)
+                            : setNewItem((prev) => ({ ...prev, model3dUrl: '' }))}
+                          className="shrink-0 rounded-lg border border-[#E8DCC8] px-3 py-2 text-sm text-[#6B5D4F] transition-colors hover:border-[#b42318] hover:text-[#b42318]"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+
+                    <label
+                      htmlFor="model-upload"
+                      className={`flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-lg transition-colors ${
+                        isUploading3DModel
+                          ? 'border-[#E8DCC8] bg-[#FAF7F0] cursor-not-allowed'
+                          : 'border-[#E8DCC8] cursor-pointer hover:border-[#D4AF37] hover:bg-[#FAF7F0]'
+                      }`}
+                    >
+                      {isUploading3DModel ? (
+                        <span className="text-sm text-[#6B5D4F]">Uploading 3D model...</span>
+                      ) : (
+                        <>
+                          <Upload className="w-7 h-7 text-[#6B5D4F] mb-2" />
+                          <span className="text-sm text-[#6B5D4F]">Click to upload a 3D model</span>
+                          <span className="text-xs text-[#9E8E80] mt-1">GLB, GLTF, USDZ, or ZIP — max 75 MB</span>
+                        </>
+                      )}
+                      <input
+                        id="model-upload"
+                        ref={modelFileInputRef}
+                        type="file"
+                        accept=".glb,.gltf,.usdz,.zip"
+                        className="hidden"
+                        onChange={handle3DModelFileChange}
+                        disabled={isUploading3DModel}
+                      />
+                    </label>
+
+                    {modelUploadError && (
+                      <p className="mt-2 text-sm text-red-600">{modelUploadError}</p>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -5649,7 +8169,7 @@ export function AdminDashboard({ token, currentUserRole, currentUser }: AdminDas
                     onClick={editingItem ? handleUpdateItem : handleAddItem}
                     className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
                   >
-                    {editingItem ? 'Update' : 'Add'} Gown
+                    {editingItem ? 'Update' : 'Add'} Item
                   </button>
                 </div>
               </div>

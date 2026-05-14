@@ -4,6 +4,7 @@ import type { FavoriteGown } from '../App';
 import { customerAPI, type CustomerProfileResponse } from '../services/customerAPI';
 import { rentalAPI, type RentalDetail } from '../services/rentalAPI';
 import { appointmentAPI } from '../services/appointmentAPI';
+import { createCustomerActivityEventSource } from '../services/adminRealtime';
 import { authAPI } from '../services/authAPI';
 import { EditProfileModal } from './EditProfileModal.tsx';
 import { GownDetailsModal } from './GownDetailsModal';
@@ -428,73 +429,89 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
     setHistoryPage(1);
   }, [historySearch, historyTypeFilter, historyStatusFilter]);
 
+  const loadHistory = useCallback(async () => {
+    setIsHistoryLoading(true);
+    setHistoryError('');
+
+    try {
+      const [rentals, appointments] = await Promise.all([
+        rentalAPI.getMyRentals(token),
+        appointmentAPI.getMyAppointments(token),
+      ]);
+
+      const rentalHistory: OrderHistory[] = rentals.map((rental) => ({
+        id: rental.referenceId || rental.id,
+        type: 'Rental',
+        item: rental.gownName,
+        date: rental.startDate,
+        status: formatHistoryStatus(rental.status),
+        branch: rental.branch,
+        rentalDetails: rental,
+      }));
+
+      const appointmentHistory: OrderHistory[] = appointments.map((appointment) => ({
+        id: appointment.id,
+        type: 'Appointment',
+        item: appointment.selectedGownName
+          ? `${formatAppointmentTypeLabel(appointment.type)} - ${appointment.selectedGownName}`
+          : formatAppointmentTypeLabel(appointment.type),
+        date: appointment.date,
+        status: formatHistoryStatus(appointment.status),
+        branch: appointment.branch,
+      }));
+
+      const nextHistory = [...rentalHistory, ...appointmentHistory].sort((left, right) => {
+        const leftTime = new Date(left.date).getTime();
+        const rightTime = new Date(right.date).getTime();
+
+        if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
+        if (Number.isNaN(leftTime)) return 1;
+        if (Number.isNaN(rightTime)) return -1;
+
+        return rightTime - leftTime;
+      });
+
+      setHistoryItems(nextHistory);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Failed to load history.');
+      setHistoryItems([]);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  }, [token]);
+
   useEffect(() => {
     if (isAdmin) return;
 
     let isMounted = true;
 
-    const loadHistory = async () => {
-      setIsHistoryLoading(true);
-      setHistoryError('');
-
-      try {
-        const [rentals, appointments] = await Promise.all([
-          rentalAPI.getMyRentals(token),
-          appointmentAPI.getMyAppointments(token),
-        ]);
-
-        if (!isMounted) return;
-
-        const rentalHistory: OrderHistory[] = rentals.map((rental) => ({
-          id: rental.referenceId || rental.id,
-          type: 'Rental',
-          item: rental.gownName,
-          date: rental.startDate,
-          status: formatHistoryStatus(rental.status),
-          branch: rental.branch,
-          rentalDetails: rental,
-        }));
-
-        const appointmentHistory: OrderHistory[] = appointments.map((appointment) => ({
-          id: appointment.id,
-          type: 'Appointment',
-          item: appointment.selectedGownName
-            ? `${formatAppointmentTypeLabel(appointment.type)} - ${appointment.selectedGownName}`
-            : formatAppointmentTypeLabel(appointment.type),
-          date: appointment.date,
-          status: formatHistoryStatus(appointment.status),
-          branch: appointment.branch,
-        }));
-
-        const nextHistory = [...rentalHistory, ...appointmentHistory].sort((left, right) => {
-          const leftTime = new Date(left.date).getTime();
-          const rightTime = new Date(right.date).getTime();
-
-          if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
-          if (Number.isNaN(leftTime)) return 1;
-          if (Number.isNaN(rightTime)) return -1;
-
-          return rightTime - leftTime;
-        });
-
-        setHistoryItems(nextHistory);
-      } catch (error) {
-        if (!isMounted) return;
-        setHistoryError(error instanceof Error ? error.message : 'Failed to load history.');
-        setHistoryItems([]);
-      } finally {
-        if (isMounted) {
-          setIsHistoryLoading(false);
-        }
+    void loadHistory().catch(() => {
+      if (isMounted) {
+        setHistoryError('Failed to load history.');
       }
-    };
-
-    void loadHistory();
+    });
 
     return () => {
       isMounted = false;
     };
-  }, [token, isAdmin]);
+  }, [token, isAdmin, loadHistory]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+
+    const eventSource = createCustomerActivityEventSource(token);
+
+    const handleCustomerActivityUpdate = () => {
+      void loadHistory();
+    };
+
+    eventSource.addEventListener('customer-activity-update', handleCustomerActivityUpdate);
+
+    return () => {
+      eventSource.removeEventListener('customer-activity-update', handleCustomerActivityUpdate);
+      eventSource.close();
+    };
+  }, [isAdmin, loadHistory, token]);
 
   const handleFirstNameChange = useCallback((value: string) => {
     const formattedValue = value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();

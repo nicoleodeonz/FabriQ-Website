@@ -11,9 +11,10 @@ import {
   updateProduct,
   deleteProduct,
   restoreProduct,
-  uploadImage
+  uploadImage,
+  upload3DModel
 } from '../controllers/inventoryController.js';
-import { upload } from '../config/upload.js';
+import { upload, upload3DModel as upload3DModelFile } from '../config/upload.js';
 
 const router = express.Router();
 
@@ -42,5 +43,22 @@ router.post('/upload-image', authenticate, (req, res, next) => {
     return res.status(400).json({ message: err.message || 'Invalid image upload' });
   });
 }, uploadImage);
+
+router.post('/upload-3d-model', authenticate, (req, res, next) => {
+  upload3DModelFile.single('model')(req, res, (err) => {
+    if (!err) {
+      return next();
+    }
+
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ message: '3D model exceeds 75 MB limit' });
+      }
+      return res.status(400).json({ message: err.message || '3D model upload failed' });
+    }
+
+    return res.status(400).json({ message: err.message || 'Invalid 3D model upload' });
+  });
+}, upload3DModel);
 
 export default router;

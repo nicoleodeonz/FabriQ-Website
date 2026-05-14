@@ -31,6 +31,8 @@ interface GownItem {
   status: 'available' | 'rented' | 'reserved';
   branch: string;
   image: string;
+  images?: string[];
+  model3dUrl?: string;
   rating: number;
   ratings?: InventoryRating[];
 }
@@ -50,6 +52,8 @@ function toCatalogGown(item: InventoryItem): GownItem {
       : 'reserved',
     branch: item.branch,
     image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
+    images: Array.isArray(item.images) ? item.images.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
+    model3dUrl: String(item.model3dUrl || '').trim(),
     rating: typeof item.rating === 'number' ? item.rating : 0,
     ratings: Array.isArray(item.ratings) ? item.ratings : []
   };

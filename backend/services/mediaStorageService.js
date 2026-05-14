@@ -55,6 +55,11 @@ export function isCloudinaryEnabled() {
   return ensureCloudinaryConfigured().isConfigured;
 }
 
+function isCloudinaryFileSizeLimitError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('file size too large') || message.includes('maximum is 10485760');
+}
+
 export async function storeImageFromLocalPath(filePath, options = {}) {
   const config = ensureCloudinaryConfigured();
   if (!config.isConfigured) {
@@ -116,5 +121,50 @@ export async function storeUploadedImage(file, options = {}) {
     };
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : 'Failed to upload image to Cloudinary.');
+  }
+}
+
+export async function storeUploadedAsset(file, options = {}) {
+  const config = ensureCloudinaryConfigured();
+  if (!file) {
+    throw new Error('Uploaded file is required.');
+  }
+
+  if (!config.isConfigured) {
+    return {
+      storage: 'local',
+      url: `/uploads/${file.filename}`,
+      publicId: null,
+    };
+  }
+
+  const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
+
+  try {
+    const result = await cloudinary.uploader.upload(file.path, {
+      folder: targetFolder,
+      resource_type: options.resourceType || 'raw',
+      use_filename: true,
+      unique_filename: true,
+      overwrite: false,
+    });
+
+    await removeLocalTempFile(file.path);
+
+    return {
+      storage: 'cloudinary',
+      url: result.secure_url,
+      publicId: result.public_id,
+    };
+  } catch (error) {
+    if (options.allowLocalFallback && isCloudinaryFileSizeLimitError(error)) {
+      return {
+        storage: 'local',
+        url: `/uploads/${file.filename}`,
+        publicId: null,
+      };
+    }
+
+    throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
   }
 }

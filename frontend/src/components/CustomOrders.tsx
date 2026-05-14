@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, Ruler, ChevronRight, CheckCircle2, Calendar, X } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { customerAPI } from '../services/customerAPI';
 import { buildApiUrl } from '../services/apiConfig';
+import { createCustomerActivityEventSource } from '../services/adminRealtime';
 import { toast } from 'sonner';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import type { CustomerNotificationEntry } from '../services/notificationAPI';
@@ -135,7 +136,7 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
   useModalInteractionLock(isAnyCustomOrderModalOpen, modalRef);
 
   // Fetch orders when the component mounts or when switching to 'existing' tab
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     setLoadingOrders(true);
     try {
       const data = await customerAPI.getMyCustomOrders(token);
@@ -145,7 +146,7 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
     } finally {
       setLoadingOrders(false);
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     setFormData((prev) => ({
@@ -173,10 +174,24 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
 
   useEffect(() => {
     if (activeTab === 'existing' || activeTab === 'history') {
-      fetchOrders();
+      void fetchOrders();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, fetchOrders]);
+
+  useEffect(() => {
+    const eventSource = createCustomerActivityEventSource(token);
+
+    const handleCustomerActivityUpdate = () => {
+      void fetchOrders();
+    };
+
+    eventSource.addEventListener('customer-activity-update', handleCustomerActivityUpdate);
+
+    return () => {
+      eventSource.removeEventListener('customer-activity-update', handleCustomerActivityUpdate);
+      eventSource.close();
+    };
+  }, [fetchOrders, token]);
 
   useEffect(() => {
     if (!selectedOrderId || orders.length === 0) {

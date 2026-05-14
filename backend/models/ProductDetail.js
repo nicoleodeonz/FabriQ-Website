@@ -78,6 +78,18 @@ const ProductDetailSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  images: {
+    type: [String],
+    default: [],
+    validate: {
+      validator: (value) => Array.isArray(value) && value.length <= 6,
+      message: 'A product can have up to 6 images.'
+    }
+  },
+  model3dUrl: {
+    type: String,
+    default: ''
+  },
   featuredHome: {
     type: Boolean,
     default: false

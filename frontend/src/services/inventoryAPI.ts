@@ -23,6 +23,8 @@ export interface InventoryItem {
   lastRented?: string | null;
   description?: string;
   image?: string;
+  images?: string[];
+  model3dUrl?: string;
   featuredHome?: boolean;
   rating?: number;
   ratings?: InventoryRating[];
@@ -186,4 +188,20 @@ export async function uploadImage(token: string, file: File): Promise<string> {
     throw new Error(data?.message || 'Image upload failed');
   }
   return data?.url as string;
+}
+
+export async function upload3DModel(token: string, file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append('model', file);
+  const uploadResponse = await fetch(`${API_BASE}/upload-3d-model`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData
+  });
+  const uploadData = await parseJsonSafe(uploadResponse);
+  if (!uploadResponse.ok) {
+    throw new Error(uploadData?.message || '3D model upload failed');
+  }
+
+  return String(uploadData?.secure_url || uploadData?.url || '');
 }

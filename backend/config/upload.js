@@ -19,6 +19,28 @@ const storage = multer.diskStorage({
   }
 });
 
+function createUpload(options) {
+  const allowedExt = options.allowedExt.map((entry) => entry.toLowerCase());
+  const allowedMime = options.allowedMime.map((entry) => entry.toLowerCase());
+
+  const fileFilter = (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const mime = String(file.mimetype || '').toLowerCase();
+
+    if (allowedExt.includes(ext) && allowedMime.includes(mime)) {
+      cb(null, true);
+    } else {
+      cb(new Error(options.errorMessage));
+    }
+  };
+
+  return multer({
+    storage,
+    fileFilter,
+    limits: { fileSize: options.maxFileSize }
+  });
+}
+
 const fileFilter = (req, file, cb) => {
   const allowedExt = ['.jpg', '.jpeg', '.png'];
   const allowedMime = ['image/jpeg', 'image/png'];
@@ -34,4 +56,20 @@ export const upload = multer({
   storage,
   fileFilter,
   limits: { fileSize: 5 * 1024 * 1024 } // 5 MB
+});
+
+export const upload3DModel = createUpload({
+  allowedExt: ['.glb', '.gltf', '.usdz', '.zip'],
+  allowedMime: [
+    'model/gltf-binary',
+    'model/gltf+json',
+    'model/vnd.usdz+zip',
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/octet-stream',
+    'application/json',
+    'text/plain'
+  ],
+  maxFileSize: 75 * 1024 * 1024,
+  errorMessage: 'Only GLB, GLTF, USDZ, and ZIP model files are allowed'
 });

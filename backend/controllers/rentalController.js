@@ -3,6 +3,7 @@ import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
 import Review from '../models/Review.js';
 import AdminAction from '../models/AdminAction.js';
+import { emitAdminDashboardUpdate, emitCustomerActivityUpdate } from '../services/adminRealtimeService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { toPublicUrl } from '../utils/media.js';
@@ -308,36 +309,46 @@ async function attachReviewMetadata(customerId, rentals) {
     customerId,
     rentalId: { $in: rentalIds },
   })
-    .select('rentalId createdAt')
+    .select('rentalId createdAt score comment')
     .lean();
 
   const reviewMap = new Map(
     reviews.map((review) => [
       String(review.rentalId),
-      review.createdAt ? new Date(review.createdAt).toISOString() : null,
+      {
+        createdAt: review.createdAt ? new Date(review.createdAt).toISOString() : null,
+        score: Number(review.score || 0),
+        comment: String(review.comment || '').trim(),
+      },
     ])
   );
 
   return rentals.map((rental) => ({
     ...rental,
     hasReview: reviewMap.has(String(rental.id)),
-    reviewSubmittedAt: reviewMap.get(String(rental.id)) || null,
+    reviewSubmittedAt: reviewMap.get(String(rental.id))?.createdAt || null,
+    reviewScore: reviewMap.get(String(rental.id))?.score || null,
+    reviewComment: reviewMap.get(String(rental.id))?.comment || '',
   }));
 }
 
-async function syncProductReviewSummary(productId, reviewEntry) {
+async function syncProductReviewSummary(productId) {
   const product = await ProductDetail.findById(productId);
   if (!product) {
     return null;
   }
 
-  const nextRatings = Array.isArray(product.ratings) ? [...product.ratings] : [];
-  nextRatings.push({
-    reviewerName: reviewEntry.customerName,
-    score: reviewEntry.score,
-    comment: reviewEntry.comment,
-    createdAt: reviewEntry.createdAt,
-  });
+  const reviews = await Review.find({ productId })
+    .select('customerName score comment createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const nextRatings = reviews.map((review) => ({
+    reviewerName: review.customerName,
+    score: review.score,
+    comment: review.comment,
+    createdAt: review.createdAt,
+  }));
 
   product.ratings = nextRatings;
   product.rating = computeAverageRating(nextRatings);
@@ -383,6 +394,8 @@ export async function scheduleRentalPickup(req, res) {
     rental.pickupScheduleTime = pickupTime;
     rental.status = 'for_pickup';
     await rental.save();
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'pickup-scheduled', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'pickup-scheduled', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -460,6 +473,8 @@ export async function submitRentalPayment(req, res) {
     rental.status = 'paid_for_confirmation';
 
     await rental.save();
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -573,6 +588,8 @@ export async function createRental(req, res) {
     product.lastRented = new Date();
     await product.save();
     await syncProductAvailabilityByCapacity(product._id);
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'created', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'created', id: String(rental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
@@ -652,25 +669,31 @@ export async function submitRentalReview(req, res) {
       return res.status(400).json({ message: 'Reviews can only be submitted for completed rentals.' });
     }
 
-    const existingReview = await Review.findOne({ rentalId: rental._id }).lean();
-    if (existingReview) {
-      return res.status(409).json({ message: 'A review has already been submitted for this rental.' });
+    let review = await Review.findOne({ rentalId: rental._id, customerId: rental.customerId });
+
+    if (review) {
+      review.score = score;
+      review.comment = comment;
+      review.customerEmail = rental.customerEmail || rental.email || req.user.email || '';
+      review.customerName = rental.customerName || 'Anonymous Customer';
+      review.gownName = rental.gownName;
+      await review.save();
+    } else {
+      review = await Review.create({
+        customerId: rental.customerId,
+        customerEmail: rental.customerEmail || rental.email || req.user.email || '',
+        customerName: rental.customerName || 'Anonymous Customer',
+        productId: rental.productId,
+        rentalId: rental._id,
+        gownName: rental.gownName,
+        score,
+        comment,
+      });
     }
 
-    const review = await Review.create({
-      customerId: rental.customerId,
-      customerEmail: rental.customerEmail || rental.email || req.user.email || '',
-      customerName: rental.customerName || 'Anonymous Customer',
-      productId: rental.productId,
-      rentalId: rental._id,
-      gownName: rental.gownName,
-      score,
-      comment,
-    });
+    await syncProductReviewSummary(rental.productId);
 
-    await syncProductReviewSummary(rental.productId, review);
-
-    return res.status(201).json({
+    return res.status(review.createdAt && review.updatedAt && new Date(review.createdAt).getTime() !== new Date(review.updatedAt).getTime() ? 200 : 201).json({
       review: {
         id: String(review._id),
         rentalId: String(review.rentalId),
@@ -679,6 +702,7 @@ export async function submitRentalReview(req, res) {
         score: review.score,
         comment: review.comment,
         createdAt: review.createdAt ? new Date(review.createdAt).toISOString() : null,
+        updatedAt: review.updatedAt ? new Date(review.updatedAt).toISOString() : null,
       },
     });
   } catch (error) {
@@ -741,6 +765,8 @@ export async function updateRentalStatus(req, res) {
 
     await rental.save();
     await syncProductAvailabilityByCapacity(rental.productId);
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
 
     try {
       const hasPickupSchedule = Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);

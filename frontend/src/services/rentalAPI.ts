@@ -50,6 +50,10 @@ export interface RentalDetail {
   pickupScheduleTime?: string | null;
   hasReview?: boolean;
   reviewSubmittedAt?: string | null;
+  reviewScore?: number | null;
+  reviewComment?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface SubmitRentalReviewPayload {
@@ -65,6 +69,7 @@ export interface SubmittedRentalReview {
   score: number;
   comment: string;
   createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface SubmitRentalPaymentPayload {

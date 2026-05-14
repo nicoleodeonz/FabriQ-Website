@@ -258,17 +258,6 @@ export const signUp = async (req, res) => {
       });
     }
 
-    const smsDeliveryResult = await sendVerificationAcrossChannels({
-      phoneNumber: customerAccount.phoneNumber || '',
-      code: signupCode,
-      purpose: 'account_verification',
-      expiresInHours: 24,
-    });
-
-    if (!smsDeliveryResult?.delivered && !smsDeliveryResult?.skipped) {
-      console.warn('Signup verification SMS was not delivered:', smsDeliveryResult);
-    }
-
     res.status(200).json({
       message: buildCodeDeliveryMessage(
         'Verification code sent. Please check your email to complete signup.',
