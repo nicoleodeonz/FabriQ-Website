@@ -308,6 +308,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [restoringItemId, setRestoringItemId] = useState<string | null>(null);
+  const [incrementingItemId, setIncrementingItemId] = useState<string | null>(null);
+  const [stockModalItem, setStockModalItem] = useState<InventoryItem | null>(null);
+  const [stockQuantityToAdd, setStockQuantityToAdd] = useState('1');
   const [confirmAction, setConfirmAction] = useState<InventoryConfirmAction>(null);
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
   const [hoverPreviewItem, setHoverPreviewItem] = useState<InventoryItem | null>(null);
@@ -507,6 +510,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     confirmAction ||
     showAddItem ||
     editingItem ||
+    stockModalItem ||
     hoverPreviewItem ||
     selectedUser ||
     confirmUserArchive ||
@@ -1900,20 +1904,27 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
   const validateAddItem = () => {
     const errors: Partial<Record<AddItemField, string>> = {};
+    const duplicateItem = inventory.find((item) => (
+      normalizeInventoryManagementStatus(item.status) !== 'archived'
+      && String(item.name || '').trim().toLowerCase() === String(newItem.name || '').trim().toLowerCase()
+    ));
 
     if (!newItem.name?.trim()) errors.name = 'This field is required';
-    if (!newItem.category?.trim()) errors.category = 'This field is required';
-    if (!newItem.color?.trim()) errors.color = 'This field is required';
-    if (newItem.price === undefined || Number.isNaN(Number(newItem.price)) || Number(newItem.price) <= 0) {
-      errors.price = 'This field is required';
-    }
-    if (!newItem.branch?.trim()) errors.branch = 'This field is required';
-    if (!newItem.status?.trim()) errors.status = 'This field is required';
     if (newItem.stock === undefined || Number.isNaN(Number(newItem.stock)) || Number(newItem.stock) <= 0) {
       errors.stock = 'This field is required';
     }
-    if (getItemImageList(newItem).length === 0) errors.image = 'At least one image is required';
-    if (!newItem.description?.trim()) errors.description = 'This field is required';
+
+    if (!duplicateItem) {
+      if (!newItem.category?.trim()) errors.category = 'This field is required';
+      if (!newItem.color?.trim()) errors.color = 'This field is required';
+      if (newItem.price === undefined || Number.isNaN(Number(newItem.price)) || Number(newItem.price) <= 0) {
+        errors.price = 'This field is required';
+      }
+      if (!newItem.branch?.trim()) errors.branch = 'This field is required';
+      if (!newItem.status?.trim()) errors.status = 'This field is required';
+      if (getItemImageList(newItem).length === 0) errors.image = 'At least one image is required';
+      if (!newItem.description?.trim()) errors.description = 'This field is required';
+    }
 
     setAddItemErrors(errors);
     return Object.keys(errors).length === 0;
@@ -3443,7 +3454,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     }
     setInventoryError(null);
     try {
-      const created = await inventoryAPI.createProduct(token, {
+      const existingItem = inventory.find((item) => (
+        normalizeInventoryManagementStatus(item.status) !== 'archived'
+        && String(item.name || '').trim().toLowerCase() === String(newItem.name || '').trim().toLowerCase()
+      ));
+
+      const result = await inventoryAPI.createProduct(token, {
         name: newItem.name!,
         category: newItem.category!,
         color: newItem.color!,
@@ -3458,7 +3474,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         model3dUrl: getModel3DUrl(newItem),
         stock: newItem.stock ?? 1
       });
-      setInventory(prev => [created, ...prev]);
+      setInventory(prev => prev.some((item) => item.id === result.item.id)
+        ? prev.map((item) => item.id === result.item.id ? result.item : item)
+        : [result.item, ...prev]);
       setShowAddItem(false);
       setAddItemErrors({});
       setIsCustomCategoryInputVisible(false);
@@ -3467,7 +3485,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', images: [], model3dUrl: '', stock: 1 });
       resetImageModal();
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
-      showTempMessage('Gown added successfully!');
+      if (result.mergedExisting || existingItem) {
+        showTempMessage(result.message || `Added ${newItem.stock ?? 1} to existing item stock.`);
+      } else {
+        showTempMessage('Gown added successfully!');
+      }
     } catch (err) {
       setInventoryError(err instanceof Error ? err.message : 'Failed to add gown');
     }
@@ -3507,6 +3529,57 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       showTempMessage('Gown updated successfully!');
     } catch (err) {
       setInventoryError(err instanceof Error ? err.message : 'Failed to update gown');
+    }
+  };
+
+  const openAddStockModal = (item: InventoryItem) => {
+    setInventoryError(null);
+    setStockModalItem(item);
+    setStockQuantityToAdd('1');
+  };
+
+  const closeAddStockModal = () => {
+    if (incrementingItemId) {
+      return;
+    }
+
+    setStockModalItem(null);
+    setStockQuantityToAdd('1');
+  };
+
+  const handleIncreaseItemStock = async () => {
+    if (isCurrentUserStaff) {
+      setInventoryError('Staff accounts cannot update gown quantity.');
+      return;
+    }
+
+    if (!stockModalItem) {
+      return;
+    }
+
+    const quantityToAdd = Number(stockQuantityToAdd);
+    if (!Number.isInteger(quantityToAdd) || quantityToAdd < 1) {
+      setInventoryError('Enter a valid stock quantity to add.');
+      return;
+    }
+
+    setIncrementingItemId(stockModalItem.id);
+    setInventoryError(null);
+
+    try {
+      const updated = await inventoryAPI.updateProduct(token, stockModalItem.id, {
+        stock: Math.max(1, Number(stockModalItem.stock ?? 1) + quantityToAdd),
+      });
+
+      setInventory((prev) => prev.map((entry) => (entry.id === stockModalItem.id ? updated : entry)));
+      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+      showTempMessage(`Added ${quantityToAdd} stock to ${stockModalItem.name}.`);
+      setStockModalItem(null);
+      setStockQuantityToAdd('1');
+    } catch (err) {
+      setInventoryError(err instanceof Error ? err.message : 'Failed to update gown quantity');
+    } finally {
+      setIncrementingItemId(null);
     }
   };
 
@@ -5500,19 +5573,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             )}
 
             {!inventoryLoading && !(inventoryView === 'archive' && archiveLoading) && (
-              <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden">
+              <div className="bg-white rounded-2xl border border-[#E8DCC8] overflow-hidden md:mx-[-50px] md:w-[calc(100%+100px)]">
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[980px]">
+                  <table className="w-full min-w-[1080px]">
                     <thead className="bg-[#FAF7F0]">
                       <tr>
                         <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">ID</th>
                         <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Name</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Category</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Color</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Price</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Branch</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Status</th>
-                        <th className="px-6 py-4 text-left text-sm text-[#6B5D4F]">Actions</th>
+                        <th className="w-[84px] px-0 py-4 text-center text-sm text-[#6B5D4F]">Qty</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Category</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Color</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Price</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Branch</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Status</th>
+                        <th className="px-6 py-4 text-center text-sm text-[#6B5D4F]">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E8DCC8] bg-white">
@@ -5523,11 +5597,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                         <tr key={item.id} className="hover:bg-[#FAF7F0] transition-colors">
                           <td className="px-6 py-4 text-sm">{item.sku ?? item.id}</td>
                           <td className="px-6 py-4 text-sm font-medium">{item.name}</td>
-                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.category}</td>
-                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.color}</td>
-                          <td className="px-6 py-4 text-sm">₱{item.price.toLocaleString()}</td>
-                          <td className="px-6 py-4 text-sm text-[#6B5D4F]">{item.branch}</td>
-                          <td className="px-6 py-4">
+                          <td className="w-[84px] px-0 py-4 text-center text-sm text-[#6B5D4F]">{item.stock ?? 1}</td>
+                          <td className="px-6 py-4 text-center text-sm text-[#6B5D4F]">{item.category}</td>
+                          <td className="px-6 py-4 text-center text-sm text-[#6B5D4F]">{item.color}</td>
+                          <td className="px-6 py-4 text-center text-sm">₱{item.price.toLocaleString()}</td>
+                          <td className="px-6 py-4 text-center text-sm text-[#6B5D4F]">{item.branch}</td>
+                          <td className="px-6 py-4 text-center">
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                               inventoryStatus === 'available'
                                 ? 'bg-green-100 text-green-800'
@@ -5537,7 +5612,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                             </span>
                           </td>
                           <td className="px-6 py-4">
-                            <div className="flex gap-2">
+                            <div className="flex justify-center gap-2">
                               <button
                                 onClick={() => setHoverPreviewItem(item)}
                                 className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
@@ -5546,6 +5621,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                               >
                                 <Eye className="w-4 h-4 text-[#6B5D4F]" />
                               </button>
+                              {!isArchiveView && !isCurrentUserStaff && (
+                                <button
+                                  onClick={() => openAddStockModal(item)}
+                                  className="p-2 hover:bg-[#FAF7F0] rounded-full transition-colors"
+                                  title="Increase quantity"
+                                  aria-label={`Increase quantity for ${item.name}`}
+                                >
+                                  <Plus className="w-4 h-4 text-[#6B5D4F]" />
+                                </button>
+                              )}
                               {!isArchiveView && !isCurrentUserStaff && (
                                 <button
                                   onClick={() => {
@@ -8174,6 +8259,63 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     {editingItem ? 'Update' : 'Add'} Item
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isCurrentUserStaff && stockModalItem && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add stock quantity"
+            onClick={closeAddStockModal}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-2xl font-light mb-2">Add Stock Quantity</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Enter how many units to add for <span className="font-medium text-[#1a1a1a]">{stockModalItem.name}</span>.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
+                <p className="text-xs uppercase tracking-[0.12em] text-[#9E8E80] mb-1">Current Stock</p>
+                <p className="text-lg text-[#1a1a1a]">{stockModalItem.stock ?? 1}</p>
+              </div>
+
+              <div>
+                <label className="block text-sm text-[#6B5D4F] mb-2">Quantity to Add</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={stockQuantityToAdd}
+                  onChange={(e) => setStockQuantityToAdd(e.target.value)}
+                  className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37]"
+                  placeholder="1"
+                />
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={closeAddStockModal}
+                  disabled={incrementingItemId === stockModalItem.id}
+                  className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleIncreaseItemStock()}
+                  disabled={incrementingItemId === stockModalItem.id}
+                  className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {incrementingItemId === stockModalItem.id ? 'Adding...' : 'Add Stock'}
+                </button>
               </div>
             </div>
           </div>

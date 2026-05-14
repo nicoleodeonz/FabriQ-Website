@@ -532,7 +532,7 @@ export default function App() {
       getPublicInventory().catch(() => []),
     ]);
 
-    updateFavoriteGownsState(hydrateFavoriteGowns(customer.favoriteGowns, inventoryItems));
+    updateFavoriteGownsState(hydrateFavoriteGowns(customer.favoriteGowns ?? [], inventoryItems));
     setCurrentUser((prev) => {
       if (!prev) return prev;
 

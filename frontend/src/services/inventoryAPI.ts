@@ -63,6 +63,12 @@ export interface BranchPerformanceSummary {
 
 export type InventoryItemInput = Omit<InventoryItem, 'id' | 'sku' | 'createdAt' | 'updatedAt'>;
 
+export interface CreateProductResult {
+  item: InventoryItem;
+  mergedExisting?: boolean;
+  message?: string;
+}
+
 async function parseJsonSafe(response: Response): Promise<any | null> {
   const raw = await response.text();
   if (!raw) return null;
@@ -144,12 +150,12 @@ export async function getBranchPerformance(
   );
 }
 
-export async function createProduct(token: string, item: InventoryItemInput): Promise<InventoryItem> {
-  const data = await request<{ item: InventoryItem }>(API_BASE, token, {
+export async function createProduct(token: string, item: InventoryItemInput): Promise<CreateProductResult> {
+  const data = await request<CreateProductResult>(API_BASE, token, {
     method: 'POST',
     body: JSON.stringify(item)
   });
-  return data.item;
+  return data;
 }
 
 export async function updateProduct(

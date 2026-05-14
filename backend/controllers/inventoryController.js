@@ -58,6 +58,10 @@ function normalizeImagesInput(images, image) {
   return normalizedImages.slice(0, 6);
 }
 
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function logAdminAction(req, payload) {
   try {
     await AdminAction.create({
@@ -442,7 +446,43 @@ export async function createProduct(req, res) {
         const { name, category, color, size, price, branch, status, lastRented,
           description, image, images, model3dUrl, featuredHome, rating, ratings, stock } = req.body;
 
-    if (!name || !category || !color || price === undefined || !branch) {
+    const trimmedName = String(name || '').trim();
+
+    if (!trimmedName) {
+      return res.status(400).json({ message: 'Missing required field: name' });
+    }
+
+    const requestedStock = typeof stock === 'number' && Number.isFinite(stock) ? Math.max(1, Number(stock)) : 1;
+    const existingProduct = await ProductDetail.findOne({
+      status: { $ne: 'archived' },
+      name: { $regex: new RegExp(`^${escapeRegex(trimmedName)}$`, 'i') }
+    });
+
+    if (existingProduct) {
+      existingProduct.stock = Math.max(0, Number(existingProduct.stock || 0)) + requestedStock;
+      existingProduct.updatedAt = new Date();
+      await existingProduct.save();
+
+      await logAdminAction(req, {
+        action: 'inventory_stock_added',
+        targetUserId: `${existingProduct.name || 'Unnamed Gown'} (${existingProduct.sku || 'NO-SKU'})`,
+        targetRole: 'Inventory',
+        details: {
+          gownName: existingProduct.name || '',
+          sku: existingProduct.sku || '',
+          addedStock: requestedStock,
+          stock: Number(existingProduct.stock || 0)
+        }
+      });
+
+      return res.status(200).json({
+        item: normalizeProductResponse(req, existingProduct),
+        mergedExisting: true,
+        message: `Added ${requestedStock} to existing item stock.`
+      });
+    }
+
+    if (!category || !color || price === undefined || !branch) {
       return res.status(400).json({ message: 'Missing required fields: name, category, color, price, branch' });
     }
     if (typeof price !== 'number' || price < 0) {
@@ -455,7 +495,7 @@ export async function createProduct(req, res) {
     const sku = await generateSKU();
     const product = new ProductDetail({
       sku,
-      name: name.trim(),
+      name: trimmedName,
       category: category.trim(),
       color: color.trim(),
       size: Array.isArray(size) ? size : [],
@@ -470,7 +510,7 @@ export async function createProduct(req, res) {
       featuredHome: Boolean(featuredHome),
       rating: computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0),
       ratings: normalizedRatings,
-      stock: typeof stock === 'number' ? stock : 1,
+      stock: requestedStock,
       deletedAt: null
     });
     await product.save();
@@ -491,7 +531,7 @@ export async function createProduct(req, res) {
     });
 
     const obj = normalizeProductResponse(req, product);
-    res.status(201).json({ item: obj });
+    res.status(201).json({ item: obj, mergedExisting: false });
   } catch (err) {
     console.error('createProduct error:', err);
     if (err.name === 'ValidationError') {
