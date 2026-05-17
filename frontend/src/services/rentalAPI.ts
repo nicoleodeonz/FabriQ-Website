@@ -34,7 +34,7 @@ export interface RentalDetail {
   sku: string;
   startDate: string;
   endDate: string;
-  status: 'pending' | 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'completed' | 'cancelled';
+  status: 'pending' | 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'completed' | 'cancelled' | 'item_lost';
   totalPrice: number;
   downpayment: number;
   branch: string;
@@ -183,9 +183,9 @@ export const rentalAPI = {
   updateRentalStatus: async (
     token: string,
     id: string,
-    status: 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'cancelled' | 'completed',
+    status: 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'cancelled' | 'completed' | 'item_lost',
     reason?: string
-  ): Promise<void> => {
+  ): Promise<AdminRentalDetail> => {
     const response = await fetch(`${API_BASE_URL}/rentals/${id}/status`, {
       method: 'PATCH',
       headers: {
@@ -199,6 +199,12 @@ export const rentalAPI = {
       const body = await parseJsonSafe(response);
       throw new Error(getErrorMessage('Failed to update rental status', body));
     }
+
+    const data = await parseJsonSafe(response);
+    if (!data?.rental) {
+      throw new Error('Failed to update rental status: empty server response.');
+    }
+    return data.rental;
   },
 
   submitRentalPayment: async (

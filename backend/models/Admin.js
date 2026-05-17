@@ -41,6 +41,10 @@ const AdminAccountSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  mustChangePassword: {
+    type: Boolean,
+    default: false
+  },
   resetPasswordCodeHash: {
     type: String,
     default: null

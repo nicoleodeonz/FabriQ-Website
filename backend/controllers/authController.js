@@ -643,7 +643,8 @@ export const login = async (req, res) => {
         phoneVerified: role === 'customer' ? Boolean(user.phoneVerified) : false,
         phoneVerifiedAt: role === 'customer' ? user.phoneVerifiedAt : null,
         address: role === 'customer' ? user.address : elevatedProfile.address,
-        preferredBranch: role === 'customer' ? user.preferredBranch : elevatedProfile.preferredBranch
+        preferredBranch: role === 'customer' ? user.preferredBranch : elevatedProfile.preferredBranch,
+        mustChangePassword: Boolean(user.mustChangePassword),
       },
       token
     });
@@ -688,7 +689,8 @@ export const getMe = async (req, res) => {
         phoneVerified: isElevatedRole(user.role) ? false : Boolean(user.phoneVerified),
         phoneVerifiedAt: isElevatedRole(user.role) ? null : user.phoneVerifiedAt,
         address: isElevatedRole(user.role) ? elevatedProfile.address : user.address,
-        preferredBranch: isElevatedRole(user.role) ? elevatedProfile.preferredBranch : user.preferredBranch
+        preferredBranch: isElevatedRole(user.role) ? elevatedProfile.preferredBranch : user.preferredBranch,
+        mustChangePassword: Boolean(user.mustChangePassword),
       }
     });
   } catch (error) {
@@ -739,6 +741,9 @@ export const changePassword = async (req, res) => {
 
     account.password = newPassword;
     account.tokenVersion = Number(account.tokenVersion || 0) + 1;
+    if (typeof account.mustChangePassword !== 'undefined') {
+      account.mustChangePassword = false;
+    }
     clearResetFields(account);
     await account.save();
 

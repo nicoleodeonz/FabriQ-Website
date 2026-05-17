@@ -19,7 +19,7 @@ interface Rental {
   sku?: string;
   startDate: string;
   endDate: string;
-  status: 'pending' | 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'completed' | 'cancelled';
+  status: 'pending' | 'for_payment' | 'paid_for_confirmation' | 'for_pickup' | 'active' | 'completed' | 'cancelled' | 'item_lost';
   totalPrice: number;
   downpayment: number;
   branch: string;
@@ -242,6 +242,10 @@ function getRentalStatusLabel(rental: Pick<Rental, 'status' | 'pickupScheduleDat
     return hasScheduledPickup(rental) ? 'For Pickup' : 'Schedule Pickup';
   }
 
+  if (normalizedStatus === 'item_lost') {
+    return 'Item Lost';
+  }
+
   return normalizedStatus
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -260,7 +264,7 @@ const RENTAL_PROGRESS_STEPS: Array<{ key: Rental['status']; label: string }> = [
 function getRentalProgressIndex(status?: string | null) {
   const normalizedStatus = normalizeRentalStatusKey(status);
 
-  if (normalizedStatus === 'cancelled') {
+  if (normalizedStatus === 'cancelled' || normalizedStatus === 'item_lost') {
     return -1;
   }
 
@@ -270,7 +274,7 @@ function getRentalProgressIndex(status?: string | null) {
 function getRentalProgressColors(status?: string | null) {
   const normalizedStatus = normalizeRentalStatusKey(status);
 
-  if (normalizedStatus === 'cancelled') {
+  if (normalizedStatus === 'cancelled' || normalizedStatus === 'item_lost') {
     return {
       activeDot: '#B91C1C',
       activeLine: '#FECACA',
@@ -569,7 +573,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
       return;
     }
 
-    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled';
+    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled' || matchedRental.status === 'item_lost';
     setActiveTab(isHistorical ? 'history' : 'existing');
     setSelectedRentalDetails(matchedRental);
     setIsRentalDetailsOpen(true);
@@ -601,7 +605,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
       return;
     }
 
-    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled';
+    const isHistorical = matchedRental.status === 'completed' || matchedRental.status === 'cancelled' || matchedRental.status === 'item_lost';
     setActiveTab(isHistorical ? 'history' : 'existing');
     setSelectedRentalDetails(matchedRental);
     setIsRentalDetailsOpen(true);
@@ -842,7 +846,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
   }, [formData.branch, formData.contactNumber, formData.endDate, formData.eventType, formData.gownId, formData.startDate]);
   const isRentalFormComplete = missingRentalFields.length === 0;
   const currentRentals = useMemo(
-    () => rentals.filter((rental) => rental.status !== 'completed' && rental.status !== 'cancelled'),
+    () => rentals.filter((rental) => rental.status !== 'completed' && rental.status !== 'cancelled' && rental.status !== 'item_lost'),
     [rentals]
   );
   const totalMyRentalsPages = Math.max(1, Math.ceil(currentRentals.length / MY_RENTALS_PAGE_SIZE));
@@ -857,7 +861,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     [rentals]
   );
   const rentalHistory = useMemo(
-    () => rentals.filter((rental) => rental.status === 'completed' || rental.status === 'cancelled'),
+    () => rentals.filter((rental) => rental.status === 'completed' || rental.status === 'cancelled' || rental.status === 'item_lost'),
     [rentals]
   );
   const totalHistoryPages = Math.max(1, Math.ceil(rentalHistory.length / RENTAL_HISTORY_PAGE_SIZE));
@@ -2204,7 +2208,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                     </span>
                   </div>
                 )}
-                {selectedRentalDetails.status === 'cancelled' && selectedRentalDetails.rejectionReason && (
+                {(selectedRentalDetails.status === 'cancelled' || selectedRentalDetails.status === 'item_lost') && selectedRentalDetails.rejectionReason && (
                   <div className="flex justify-between gap-4">
                     <span className="text-[#6B5D4F]">Rejection Reason</span>
                     <span className="text-right font-medium text-black">{selectedRentalDetails.rejectionReason}</span>

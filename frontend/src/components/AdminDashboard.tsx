@@ -56,6 +56,7 @@ interface NewUserForm {
 interface PendingReturn {
   id: string;
   gownName: string;
+  sku?: string;
   customer: string;
   dueDate: string;
   daysLate: number;
@@ -67,18 +68,23 @@ interface RentalFollowUpTarget {
   customer: string;
   dueDate: string;
   daysLate: number;
-  status: 'pending' | 'active' | 'for-payment' | 'for-pickup';
+  status: 'pending' | 'active' | 'for-payment' | 'for-pickup' | 'item_lost';
 }
 
 interface AdminRentalCard {
   id: string;
   referenceId?: string;
   gownName: string;
+  sku?: string;
   customerName: string;
+  startDate?: string;
   endDate: string;
   status: AdminRentalDetail['status'];
   totalPrice: number;
   branch: string;
+  rejectionReason?: string | null;
+  pickupScheduleDate?: string | null;
+  pickupScheduleTime?: string | null;
 }
 
 interface CurrentAdminUser {
@@ -336,7 +342,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const cancelConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const primaryConfirmButtonRef = useRef<HTMLButtonElement>(null);
   const categoryDropdownRef = useRef<HTMLDivElement>(null);
-  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
+  const [editingItem, setEditingItem] = useState<Partial<InventoryItem> | null>(null);
   const [showAddItem, setShowAddItem] = useState(false);
   const [addItemErrors, setAddItemErrors] = useState<Partial<Record<AddItemField, string>>>({});
   const [isCustomCategoryInputVisible, setIsCustomCategoryInputVisible] = useState(false);
@@ -516,6 +522,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [selectedCustomOrderExportBranch, setSelectedCustomOrderExportBranch] = useState<string>('All Branches');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
+  const [customOrderModalTab, setCustomOrderModalTab] = useState<'order' | 'customer' | 'notes'>('order');
+  const [rentalModalTab, setRentalModalTab] = useState<'order' | 'payment' | 'customer'>('order');
   const [isApproveCustomOrderConfirmOpen, setIsApproveCustomOrderConfirmOpen] = useState(false);
   const [isDoneCustomOrderConfirmOpen, setIsDoneCustomOrderConfirmOpen] = useState(false);
   const [isArchiveCompletedCustomOrderConfirmOpen, setIsArchiveCompletedCustomOrderConfirmOpen] = useState(false);
@@ -540,6 +548,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [rentalStatusError, setRentalStatusError] = useState<string | null>(null);
   const [rentalActionInProgress, setRentalActionInProgress] = useState<'approve' | 'reject' | 'picked-up' | 'returned' | null>(null);
   const [isItemReturnedConfirmOpen, setIsItemReturnedConfirmOpen] = useState(false);
+  const [isItemLostConfirmOpen, setIsItemLostConfirmOpen] = useState(false);
   const [selectedReturnRental, setSelectedReturnRental] = useState<PendingReturn | null>(null);
 
   // Notification State
@@ -573,6 +582,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     isRejectRentalConfirmOpen ||
     isPickedUpConfirmOpen ||
     isItemReturnedConfirmOpen ||
+    isItemLostConfirmOpen ||
     showNotificationModal ||
     isSendReminderConfirmOpen ||
     isReminderSentSuccessOpen ||
@@ -881,14 +891,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
-    setIsRejectCustomOrderConfirmOpen(false);
-    setSelectedCustomOrder(null);
-    setRejectCustomOrderReason('');
     setRejectCustomOrderError(null);
 
     const updated = await handleCustomOrderStatusUpdate(orderId, 'rejected', trimmedReason);
-    if (!updated && adminCustomOrdersError) {
-      setRejectCustomOrderError(adminCustomOrdersError);
+    if (updated) {
+      setIsRejectCustomOrderConfirmOpen(false);
+      setRejectCustomOrderReason('');
+      setSelectedCustomOrder(null);
+    } else {
+      setRejectCustomOrderError(adminCustomOrdersError || 'Failed to reject order');
     }
   }
 
@@ -903,14 +914,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
-    setIsAdjustCustomOrderConfirmOpen(false);
-    setSelectedCustomOrder(null);
-    setAdjustCustomOrderReason('');
     setAdjustCustomOrderError(null);
 
     const updated = await handleCustomOrderStatusUpdate(orderId, 'in-progress', trimmedReason);
-    if (!updated && adminCustomOrdersError) {
-      setAdjustCustomOrderError(adminCustomOrdersError);
+    if (updated) {
+      setIsAdjustCustomOrderConfirmOpen(false);
+      setSelectedCustomOrder(null);
+      setAdjustCustomOrderReason('');
+    } else {
+      setAdjustCustomOrderError(adminCustomOrdersError || 'Failed to request adjustment');
     }
   }
 
@@ -2028,10 +2040,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setRentalStatusError(null);
 
     try {
-      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, nextStatus);
+      const updated = await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, nextStatus);
       setAdminRentals((prev) =>
         prev.map((rental) =>
-          rental.id === selectedPendingRental.id ? { ...rental, status: nextStatus } : rental
+          rental.id === selectedPendingRental.id ? updated : rental
         )
       );
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
@@ -2356,8 +2368,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const validateAddItem = () => {
     const errors: Partial<Record<AddItemField, string>> = {};
     const duplicateItem = inventory.find((item) => (
-      normalizeInventoryManagementStatus(item.status) !== 'archived'
-      && String(item.name || '').trim().toLowerCase() === String(newItem.name || '').trim().toLowerCase()
+      String(item.name || '').trim().toLowerCase() === String(newItem.name || '').trim().toLowerCase()
     ));
 
     if (!newItem.name?.trim()) errors.name = 'This field is required';
@@ -4049,7 +4060,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setInventoryError(null);
     try {
       const existingItem = inventory.find((item) => (
-        normalizeInventoryManagementStatus(item.status) !== 'archived'
+        String(item.status || '').trim().toLowerCase() !== 'archived'
         && String(item.name || '').trim().toLowerCase() === String(newItem.name || '').trim().toLowerCase()
       ));
 
@@ -4095,7 +4106,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
-    if (!editingItem) return;
+    if (!editingItem?.id) return;
     setInventoryError(null);
     try {
       const updated = await inventoryAPI.updateProduct(token, editingItem.id, {
@@ -4560,11 +4571,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       id: rental.id,
       referenceId: rental.referenceId,
       gownName: rental.gownName,
+      sku: rental.sku,
       customerName: rental.customerName,
+      startDate: rental.startDate,
       endDate: rental.endDate,
       status: rental.status,
       totalPrice: rental.totalPrice,
       branch: rental.branch,
+      pickupScheduleDate: rental.pickupScheduleDate,
+      pickupScheduleTime: rental.pickupScheduleTime,
     }));
 
   const pendingRentalCards = currentRentalCards.filter((rental) => rental.status === 'pending');
@@ -4579,30 +4594,45 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     return today <= due;
   });
   const archivedRentalCards: AdminRentalCard[] = adminRentals
-    .filter((rental) => rental.status === 'completed')
+    .filter((rental) => rental.status === 'completed' || rental.status === 'cancelled' || rental.status === 'item_lost')
+    .sort((a, b) => {
+      const dateA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+      const dateB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    })
     .map((rental) => ({
       id: rental.id,
       referenceId: rental.referenceId,
       gownName: rental.gownName,
+      sku: rental.sku,
       customerName: rental.customerName,
+      startDate: rental.startDate,
       endDate: rental.endDate,
       status: rental.status,
       totalPrice: rental.totalPrice,
       branch: rental.branch,
+      rejectionReason: rental.rejectionReason,
+      pickupScheduleDate: rental.pickupScheduleDate,
+      pickupScheduleTime: rental.pickupScheduleTime,
     }));
   const forPaymentRentals = adminRentals.filter(
     (rental) => rental.status === 'for_payment' || rental.status === 'paid_for_confirmation'
   );
   const forPickupRentals = adminRentals.filter((rental) => rental.status === 'for_pickup');
 
-  const isPickupScheduled = (rental: AdminRentalDetail) =>
+  const isPickupScheduled = (rental: Pick<AdminRentalDetail, 'pickupScheduleDate' | 'pickupScheduleTime'>) =>
     Boolean(rental.pickupScheduleDate && rental.pickupScheduleTime);
 
-  const getRentalStatusLabel = (rental: AdminRentalDetail) => {
+  const getRentalStatusLabel = (rental: Pick<AdminRentalDetail, 'status' | 'pickupScheduleDate' | 'pickupScheduleTime'>) => {
     if (rental.status === 'paid_for_confirmation') return 'Paid - For Confirmation';
     if (rental.status === 'for_pickup') {
       return isPickupScheduled(rental) ? 'Pickup is Scheduled' : 'Schedule Pickup';
     }
+
+    if (rental.status === 'item_lost') {
+      return 'Item Lost';
+    }
+
     const status = rental.status;
     return status
       .split('_')
@@ -4624,6 +4654,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         return { backgroundColor: '#CFFAFE', color: '#155E75' };
       case 'cancelled':
         return { backgroundColor: '#FEE2E2', color: '#991B1B' };
+      case 'item_lost':
+        return { backgroundColor: '#FEE2E2', color: '#B91C1C' };
       case 'completed':
         return { backgroundColor: '#D1FAE5', color: '#065F46' };
       default:
@@ -4669,27 +4701,30 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
 
   const pendingReturns: PendingReturn[] = activeRentalCards
-    .map((rental) => {
+    .filter((rental) => {
       const due = new Date(rental.endDate);
       due.setHours(0, 0, 0, 0);
-      if (Number.isNaN(due.getTime())) return null;
+      if (Number.isNaN(due.getTime())) return false;
 
       const threeDaysBeforeDue = new Date(due);
       threeDaysBeforeDue.setDate(threeDaysBeforeDue.getDate() - 3);
 
-      if (today < threeDaysBeforeDue) return null;
-
+      return today >= threeDaysBeforeDue;
+    })
+    .map((rental) => {
+      const due = new Date(rental.endDate);
+      due.setHours(0, 0, 0, 0);
       const daysLate = Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
 
       return {
         id: rental.id,
         gownName: rental.gownName,
+        sku: rental.sku,
         customer: rental.customerName,
         dueDate: rental.endDate,
         daysLate,
       };
-    })
-    .filter((rental): rental is PendingReturn => rental !== null);
+    });
 
   const isWithinReturnFollowUpWindow = (endDate: string) => {
     const due = new Date(endDate);
@@ -4841,7 +4876,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         ];
       }
 
-      const detailedRental = adminRentals.find((entry) => entry.id === rental.id);
       const statusValue = filters.length === 1 && filters[0] === 'archive'
         ? (rental.status === 'paid_for_confirmation'
             ? 'Paid - For Confirmation'
@@ -4849,19 +4883,14 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 .split('_')
                 .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
                 .join(' '))
-        : detailedRental
-          ? getRentalStatusLabel(detailedRental)
-          : rental.status
-              .split('_')
-              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-              .join(' ');
+        : getRentalStatusLabel(rental)
 
       return [
         rental.referenceId || rental.id,
         rental.gownName,
         rental.customerName,
         rental.branch,
-        detailedRental?.startDate || rental.endDate || 'Not scheduled',
+        rental.startDate || rental.endDate || 'Not scheduled',
         rental.endDate || 'Not scheduled',
         statusValue,
         `PHP ${Number(rental.totalPrice || 0).toLocaleString()}`,
@@ -4966,7 +4995,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       customer: rental.customerName,
       dueDate: rental.endDate,
       daysLate,
-      status: rental.status === 'active' ? 'active' : rental.status === 'pending' ? 'pending' : 'for-payment',
+      status: rental.status === 'active' 
+        ? 'active' 
+        : rental.status === 'pending' 
+          ? 'pending' 
+          : rental.status === 'item_lost'
+            ? 'item_lost'
+            : rental.status === 'for_pickup' || rental.status === 'paid_for_confirmation'
+              ? 'for-pickup'
+              : 'for-payment',
     };
   };
 
@@ -5248,6 +5285,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     if (status === 'fitting') return 'bg-cyan-100 text-cyan-800';
     if (status === 'rejected') return 'bg-red-100 text-red-800';
     return 'bg-green-100 text-green-800';
+  };
+
+  const getRentalStatusBadgeClass = (status: AdminRentalDetail['status']) => {
+    if (status === 'pending') return 'bg-amber-100 text-amber-800';
+    if (status === 'for_payment') return 'bg-rose-100 text-rose-800';
+    if (status === 'paid_for_confirmation') return 'bg-violet-100 text-violet-800';
+    if (status === 'for_pickup') return 'bg-cyan-100 text-cyan-800';
+    if (status === 'active') return 'bg-amber-100 text-amber-800';
+    if (status === 'completed') return 'bg-green-100 text-green-800';
+    if (status === 'cancelled' || status === 'item_lost') return 'bg-red-100 text-red-800';
+    return 'bg-[#EDE1CE] text-[#5B4A36]';
   };
 
   const getNextCustomOrderStatus = (status: AdminCustomOrderStatus): AdminCustomOrderStatus | null => {
@@ -5626,6 +5674,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is currently awaiting payment. Please settle the required payment so we can proceed with the next step. Thank you!`
         : selectedRental.status === 'for-pickup'
           ? `Dear ${selectedRental.customer}, this is a follow-up for your rental of '${selectedRental.gownName}'. Your rental is ready for pickup. Please check your scheduled pickup details and coordinate with Hannah Vanessa Boutique if you need any changes. Thank you!`
+        : selectedRental.status === 'item_lost'
+          ? `Dear ${selectedRental.customer}, we are contacting you regarding the rental of '${selectedRental.gownName}' which has been marked as lost/unreturned. Please contact Hannah Vanessa Boutique immediately to settle the replacement fees. Thank you.`
       : `Dear ${selectedRental.customer}, this is a friendly reminder that your rented gown '${selectedRental.gownName}' is due for return on ${selectedRental.dueDate}. ${selectedRental.daysLate > 0 ? `You currently have a late fee of ₱${(selectedRental.daysLate * RENTAL_LATE_FEE_PER_DAY).toLocaleString()}. ` : ''}Please return it to Hannah Vanessa Boutique at your earliest convenience. Thank you!`
     : '';
 
@@ -6997,12 +7047,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                               className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
                               style={getAdminRentalStatusBadgeStyle(rental.status)}
                             >
-                              {rental.status === 'paid_for_confirmation'
-                                ? 'Paid - For Confirmation'
-                                : rental.status
-                                    .split('_')
-                                    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-                                    .join(' ')}
+                              {getRentalStatusLabel(rental)}
                             </span>
                           </div>
                           <div className="flex items-center gap-6 text-sm text-[#6B5D4F]">
@@ -8777,11 +8822,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       min={1}
                       aria-invalid={!editingItem && Boolean(addItemErrors.stock)}
                       aria-describedby={!editingItem && addItemErrors.stock ? 'add-item-stock-error' : undefined}
-                      value={editingItem?.stock ?? newItem.stock ?? 1}
-                      onChange={(e) => editingItem
-                        ? setEditingItem({ ...editingItem, stock: Number(e.target.value) })
-                        : (setNewItem({ ...newItem, stock: Number(e.target.value) }), setAddItemErrors(prev => ({ ...prev, stock: '' })))
-                      }
+                      value={(newItem as Partial<InventoryItem>).stock ?? 1}
+                      onChange={(e) => {
+                        const nextStock = Number(e.target.value);
+                        if (editingItem) {
+                          setEditingItem((prev) => prev ? { ...prev, stock: nextStock } : prev);
+                        } else {
+                          setNewItem((prev) => ({ ...(prev ?? {}), stock: nextStock }));
+                          setAddItemErrors((prev) => ({ ...prev, stock: '' }));
+                        }
+                      }}
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.stock ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                       placeholder="1"
                     />
@@ -8858,7 +8908,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       aria-describedby={!editingItem && addItemErrors.image ? 'add-item-image-error' : undefined}
                       value={getItemImageList(editingItem ?? newItem)[0] || ''}
                       onChange={(e) => editingItem
-                        ? setEditingItem(updatePrimaryImage(editingItem, e.target.value))
+                        ? setEditingItem((prev) => prev ? updatePrimaryImage(prev, e.target.value) : prev)
                         : (setNewItem(updatePrimaryImage(newItem, e.target.value)), setAddItemErrors(prev => ({ ...prev, image: '' })))
                       }
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.image ? 'border-red-400' : 'border-[#E8DCC8]'}`}
@@ -9597,247 +9647,629 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
         {/* Rental Details Modal */}
         {showPendingRentalModal && selectedPendingRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-6">
-                <div>
-                  <h3 className="text-2xl font-light">Rental Details</h3>
-                  <span
-                    style={isCancelledRentalStatus(selectedPendingRental.status) ? { backgroundColor: '#fee2e2', color: '#991b1b' } : undefined}
-                    className={`inline-block mt-1 px-3 py-1 text-xs rounded-full font-medium ${
-                      selectedPendingRental.status === 'pending'
-                        ? 'bg-amber-100 text-amber-800'
-                        : selectedPendingRental.status === 'for_payment'
-                        ? 'bg-rose-100 text-rose-800'
-                        : selectedPendingRental.status === 'paid_for_confirmation'
-                        ? 'bg-violet-100 text-violet-800'
-                        : selectedPendingRental.status === 'for_pickup'
-                        ? 'bg-cyan-100 text-cyan-800'
-                        : isCancelledRentalStatus(selectedPendingRental.status)
-                        ? 'bg-red-100 text-red-800'
-                        : selectedPendingRental.status === 'active'
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-[#EDE1CE] text-[#5B4A36]'
-                    }`}
-                  >
-                    {getRentalStatusLabel(selectedPendingRental)}
-                  </span>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div
+              className="bg-white rounded-3xl w-full max-w-4xl flex flex-col overflow-hidden shadow-2xl"
+              style={{ height: '78vh' }}
+            >
+              {/* Fixed Header */}
+              <div 
+                style={{
+                  padding: '24px 40px',
+                  borderBottom: '1px solid #E8DCC8',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  backgroundColor: 'white',
+                  zIndex: 10,
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <h3 
+                      style={{ 
+                        fontSize: '24px', 
+                        fontWeight: '700', 
+                        color: '#1a1a1a',
+                        letterSpacing: '-0.02em',
+                        fontFamily: 'serif'
+                      }}
+                    >
+                      Rental Details
+                    </h3>
+                    <div 
+                      style={{ 
+                        position: 'absolute', 
+                        bottom: '-8px', 
+                        left: '0', 
+                        width: '40px', 
+                        height: '3px', 
+                        backgroundColor: '#D4AF37',
+                        borderRadius: '2px'
+                      }}
+                    />
+                  </div>
+                    <span 
+                      style={{ 
+                        padding: '6px 16px', 
+                        fontSize: '11px', 
+                        fontWeight: '800', 
+                        borderRadius: '100px', 
+                        textTransform: 'uppercase', 
+                        letterSpacing: '0.1em',
+                        border: '1px solid currentColor',
+                        backgroundColor: 'white',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                      className={getRentalStatusBadgeClass(selectedPendingRental.status)}
+                    >
+                      {getRentalStatusLabel(selectedPendingRental)}
+                    </span>
                 </div>
                 <button
                   onClick={() => {
                     setShowPendingRentalModal(false);
                     setSelectedPendingRental(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.color = '#1a1a1a';
+                    e.currentTarget.style.transform = 'rotate(90deg)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = '#6B5D4F';
+                    e.currentTarget.style.transform = 'rotate(0deg)';
+                  }}
+                  aria-label="Close modal"
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '22px', height: '22px' }} />
                 </button>
               </div>
 
-              <div className="space-y-5">
-                {/* Gown Info */}
-                <div className="bg-[#FAF7F0] p-4 rounded-xl">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Gown</p>
-                  <p className="text-lg font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
-                  <p className="text-sm text-[#6B5D4F] mt-0.5">SKU: {selectedPendingRental.sku}</p>
-                  <p className="text-sm text-[#6B5D4F] mt-0.5">Reference ID: {selectedPendingRental.referenceId || selectedPendingRental.id}</p>
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto bg-white">
+                {/* Tab Navigation */}
+                <div 
+                  style={{ 
+                    display: 'flex', 
+                    gap: '40px', 
+                    padding: '0 40px', 
+                    borderBottom: '1px solid #F2EADF',
+                    backgroundColor: '#FAF7F0/30'
+                  }}
+                >
+                  {[
+                    { id: 'order', label: 'Order', icon: Package },
+                    { id: 'payment', label: 'Payment', icon: TrendingUp },
+                    { id: 'customer', label: 'Customer', icon: Users }
+                  ].map((tab) => {
+                    const isActive = rentalModalTab === tab.id;
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setRentalModalTab(tab.id as any)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '16px 0',
+                          fontSize: '14px',
+                          fontWeight: isActive ? '700' : '500',
+                          color: isActive ? '#1a1a1a' : '#9C8B7A',
+                          borderBottom: `2px solid ${isActive ? '#D4AF37' : 'transparent'}`,
+                          cursor: 'pointer',
+                          transition: 'all 0.3s',
+                          backgroundColor: 'transparent',
+                          borderTop: 'none',
+                          borderLeft: 'none',
+                          borderRight: 'none',
+                          outline: 'none'
+                        }}
+                      >
+                        <Icon style={{ width: '18px', height: '18px', opacity: isActive ? 1 : 0.6 }} />
+                        {tab.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                {/* Customer Info */}
-                <div className="bg-[#FAF7F0] p-4 rounded-xl">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Customer</p>
-                  <div className="space-y-1.5 text-sm text-[#6B5D4F]">
-                    <div className="flex items-center gap-2">
-                      <Users className="w-4 h-4 shrink-0" />
-                      <span>{selectedPendingRental.customerName}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[#9C8B7A]">Email:</span>
-                      <span>{selectedPendingRental.customerEmail}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[#9C8B7A]">Contact:</span>
-                      <span>{selectedPendingRental.contactNumber}</span>
-                    </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 240px',
+                    gap: '32px',
+                    alignItems: 'start',
+                  }}
+                  className="p-8"
+                >
+                  {/* Left Column: Details (Tabbed) */}
+                  <div className="space-y-8">
+                    {rentalModalTab === 'order' && (
+                      /* Order Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Package className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Rental Information</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm">
+                          <div className="mb-6">
+                            <p className="text-2xl font-semibold text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
+                            <div className="h-1 w-12 bg-[#D4AF37] mt-2 rounded-full"></div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-y-6 gap-x-10">
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Start Date</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedPendingRental.startDate}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">End Date</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedPendingRental.endDate}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Branch</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedPendingRental.branch}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Event Type</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedPendingRental.eventType}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">SKU</p>
+                              <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedPendingRental.sku}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Reference ID</p>
+                              <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedPendingRental.referenceId || selectedPendingRental.id}</p>
+                            </div>
+                          </div>
+
+                          {isPickupScheduled(selectedPendingRental) && (
+                            <div className="mt-8 space-y-3 pt-6 border-t border-[#E8DCC8]/30">
+                              <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                                <span className="text-[#6B5D4F] text-sm font-medium">Pickup Schedule</span>
+                                <span className="text-xs font-bold px-3 py-1 rounded-full bg-green-50 text-green-700 border border-green-100">
+                                  {selectedPendingRental.pickupScheduleDate} at {selectedPendingRental.pickupScheduleTime}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}
+
+                    {rentalModalTab === 'payment' && (
+                      /* Payment Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <TrendingUp className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wider">Payment Details</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm space-y-6">
+                          <div className="grid grid-cols-2 gap-6">
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Downpayment</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-lg text-[#3D2B1F] font-bold min-h-[40px] flex items-center">
+                                ₱{selectedPendingRental.downpayment.toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Total Price</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-lg text-[#D4AF37] font-bold min-h-[40px] flex items-center">
+                                ₱{selectedPendingRental.totalPrice.toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+                          {selectedPendingRental.paymentSubmittedAt && (
+                            <div className="space-y-4 pt-4 border-t border-[#E8DCC8]/30">
+                              <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                  <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Paid At</p>
+                                  <p className="text-sm text-[#3D2B1F] font-medium">
+                                    {new Date(selectedPendingRental.paymentSubmittedAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                {selectedPendingRental.paymentReferenceNumber && (
+                                  <div>
+                                    <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Reference Number</p>
+                                    <p className="text-sm text-[#3D2B1F] font-mono font-medium">
+                                      {selectedPendingRental.paymentReferenceNumber}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                              {selectedPendingRental.paymentReceiptUrl && (
+                                <div>
+                                  <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Payment Receipt</p>
+                                  <a
+                                    href={selectedPendingRental.paymentReceiptUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block"
+                                  >
+                                    <div className="rounded-xl border border-[#E8DCC8]/30 overflow-hidden bg-white aspect-video flex items-center justify-center">
+                                      <ImageWithFallback
+                                        src={selectedPendingRental.paymentReceiptUrl}
+                                        alt="Payment receipt"
+                                        className="w-full h-full object-contain"
+                                      />
+                                    </div>
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}
+
+                    {rentalModalTab === 'customer' && (
+                      /* Customer Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Users className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Customer Details</h4>
+                        </div>
+                        <div 
+                          style={{ 
+                            backgroundColor: '#FAF7F0',
+                            padding: '32px',
+                            borderRadius: '24px',
+                            border: '1px solid rgba(232, 220, 200, 0.5)',
+                            boxShadow: '0 4px 15px rgba(0,0,0,0.02)'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                            <div 
+                              style={{ 
+                                width: '64px', 
+                                height: '64px', 
+                                borderRadius: '50%', 
+                                backgroundColor: '#E8DCC8', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                justifyContent: 'center', 
+                                color: '#7F6D5C', 
+                                fontSize: '24px', 
+                                fontWeight: '700', 
+                                border: '3px solid white', 
+                                boxShadow: '0 4px 10px rgba(0,0,0,0.05)',
+                                flexShrink: 0
+                              }}
+                            >
+                              {selectedPendingRental.customerName.charAt(0)}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ fontSize: '20px', fontWeight: '700', color: '#3D2B1F', marginBottom: '8px' }}>
+                                {selectedPendingRental.customerName}
+                              </p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                  <Mail style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                  <span style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {selectedPendingRental.customerEmail || 'No email provided'}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                  <Phone style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                  <span style={{ fontSize: '14px' }}>
+                                    {selectedPendingRental.contactNumber || 'No phone provided'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {rentalStatusError && (
+                      <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                        <p className="text-sm text-red-700">{rentalStatusError}</p>
+                      </div>
+                    )}
                   </div>
-                </div>
 
-                {/* Rental Period */}
-                <div className="bg-[#FAF7F0] p-4 rounded-xl">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Rental Period</p>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p className="text-[#9C8B7A] mb-0.5">Start Date</p>
-                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.startDate}</p>
+                  {/* Right Column: Gown Image */}
+                  <div className="sticky top-0">
+                    <div className="flex items-center justify-between gap-2 mb-6">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-5 h-5 text-[#D4AF37]" />
+                        <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Gown Preview</h4>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-[#9C8B7A] mb-0.5">End Date</p>
-                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.endDate}</p>
-                    </div>
-                    <div>
-                      <p className="text-[#9C8B7A] mb-0.5">Branch</p>
-                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.branch}</p>
-                    </div>
-                    <div>
-                      <p className="text-[#9C8B7A] mb-0.5">Event Type</p>
-                      <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.eventType}</p>
-                    </div>
-                    {isPickupScheduled(selectedPendingRental) && (
-                      <>
-                        <div>
-                          <p className="text-[#9C8B7A] mb-0.5">Pickup Date</p>
-                          <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.pickupScheduleDate}</p>
+
+                    {selectedPendingRental.gownImage ? (
+                      <div className="w-full">
+                        <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
+                          <ImageWithFallback
+                            src={selectedPendingRental.gownImage}
+                            alt={selectedPendingRental.gownName}
+                            className="w-full h-full object-cover"
+                          />
                         </div>
-                        <div>
-                          <p className="text-[#9C8B7A] mb-0.5">Pickup Time</p>
-                          <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.pickupScheduleTime}</p>
-                        </div>
-                      </>
+                      </div>
+                    ) : (
+                      <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-[#D8C8B2] bg-[#FAF7F0] flex flex-col items-center justify-center text-center p-6">
+                        <Package className="w-8 h-8 text-[#D8C8B2] mb-3" />
+                        <p className="text-xs text-[#8A7A69] font-medium px-2">
+                          No gown image available.
+                        </p>
+                      </div>
                     )}
                   </div>
                 </div>
-
-                {/* Payment */}
-                <div className="bg-[#FAF7F0] p-4 rounded-xl">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Payment</p>
-                  <div className="flex justify-between text-sm">
-                    <div>
-                      <p className="text-[#9C8B7A] mb-0.5">Downpayment</p>
-                      <p className="font-medium text-[#3D2B1F]">₱{selectedPendingRental.downpayment.toLocaleString()}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[#9C8B7A] mb-0.5">Total Price</p>
-                      <p className="text-lg font-medium text-[#3D2B1F]">₱{selectedPendingRental.totalPrice.toLocaleString()}</p>
-                    </div>
-                  </div>
-
-                  {selectedPendingRental.paymentSubmittedAt && (
-                    <div className="mt-4 border-t border-[#E8DCC8] pt-4 space-y-3 text-sm">
-                      <div className="flex justify-between gap-4">
-                        <p className="text-[#9C8B7A]">Paid At</p>
-                        <p className="font-medium text-right text-[#3D2B1F]">
-                          {new Date(selectedPendingRental.paymentSubmittedAt).toLocaleString()}
-                        </p>
-                      </div>
-                      {selectedPendingRental.paymentReferenceNumber && (
-                        <div className="flex justify-between gap-4">
-                          <p className="text-[#9C8B7A]">Reference Number</p>
-                          <p className="font-medium text-right text-[#3D2B1F]">
-                            {selectedPendingRental.paymentReferenceNumber}
-                          </p>
-                        </div>
-                      )}
-
-                      {selectedPendingRental.paymentReceiptUrl && (
-                        <div>
-                          <p className="text-[#9C8B7A] mb-2">Payment Receipt</p>
-                          <a
-                            href={selectedPendingRental.paymentReceiptUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block"
-                          >
-                            <ImageWithFallback
-                              src={selectedPendingRental.paymentReceiptUrl}
-                              alt="Payment receipt"
-                              className="w-full h-56 object-contain rounded-lg border border-[#E8DCC8] bg-[#FAF7F0]"
-                            />
-                          </a>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
               </div>
 
-              {rentalStatusError && (
-                <p className="mt-4 text-sm text-red-600 text-center">{rentalStatusError}</p>
-              )}
-
-              <div className="mt-8 sticky bottom-0 bg-white pt-6 flex flex-wrap gap-3 relative">
-                <div
-                  className="absolute left-0 right-0 top-0 border-t border-[#E8DCC8]"
-                  style={{ transform: 'translateY(-30px)' }}
-                />
+              {/* Fixed Footer: Actions */}
+              <div 
+                style={{ 
+                  padding: '24px 40px',
+                  borderTop: '1px solid #E8DCC8',
+                  backgroundColor: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '40px',
+                  zIndex: 30,
+                  boxShadow: '0 -15px 40px rgba(0,0,0,0.03)'
+                }}
+              >
                 <button
-                  disabled={rentalStatusUpdating}
                   onClick={() => {
                     setShowPendingRentalModal(false);
                     setSelectedPendingRental(null);
-                    setRentalStatusError(null);
-                    setRentalActionInProgress(null);
-                    setIsApproveRentalConfirmOpen(false);
-                    setIsRejectRentalConfirmOpen(false);
-                    setIsPickedUpConfirmOpen(false);
-                    setRejectRentalReason('');
-                    setRejectRentalError(null);
                   }}
-                  className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    padding: '14px 36px',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    color: '#7F6D5C',
+                    backgroundColor: '#FAF7F0',
+                    borderRadius: '18px',
+                    border: '1px solid #E8DCC8',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#F2EADF';
+                    e.currentTarget.style.borderColor = '#D8C8B2';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                  }}
                 >
-                  Close
+                  Close Details
                 </button>
-                {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'for_payment' || selectedPendingRental.status === 'paid_for_confirmation') && (
-                  <>
-                    <button
-                      disabled={rentalStatusUpdating}
-                      onClick={() => {
-                        setRejectRentalReason('');
-                        setRejectRentalError(null);
-                        setIsRejectRentalConfirmOpen(true);
-                      }}
-                      className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
-                    >
-                      <span style={{ color: '#B86A6A', WebkitTextFillColor: '#B86A6A' }}>
-                        Reject
-                      </span>
-                    </button>
-                    {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'paid_for_confirmation') && (
+
+                {(selectedPendingRental.status === 'cancelled' || selectedPendingRental.status === 'item_lost') && selectedPendingRental.rejectionReason && (
+                  <div 
+                    style={{ 
+                      flex: 1, 
+                      backgroundColor: '#fef2f2', 
+                      borderRadius: '16px', 
+                      padding: '12px 24px', 
+                      border: '1px solid #fee2e2',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
+                    }}
+                  >
+                    <span style={{ fontSize: '10px', fontWeight: '800', color: '#b91c1c', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {selectedPendingRental.status === 'item_lost' ? 'Reason for Item Lost' : 'Reason for Cancellation'}
+                    </span>
+                    <p style={{ fontSize: '13px', color: '#7f1d1d', fontWeight: '500', margin: 0 }}>
+                      {selectedPendingRental.rejectionReason}
+                    </p>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'for_payment' || selectedPendingRental.status === 'paid_for_confirmation') && (
+                    <>
                       <button
                         disabled={rentalStatusUpdating}
                         onClick={() => {
-                          setRentalStatusError(null);
-                          setIsApproveRentalConfirmOpen(true);
+                          setRejectRentalReason('');
+                          setRejectRentalError(null);
+                          setIsRejectRentalConfirmOpen(true);
                         }}
-                        className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                        style={{
+                          padding: '14px 32px',
+                          backgroundColor: '#fef2f2',
+                          color: '#b91c1c',
+                          border: '1px solid #fee2e2',
+                          borderRadius: '18px',
+                          fontWeight: 'bold',
+                          fontSize: '14px',
+                          cursor: 'pointer',
+                          transition: 'all 0.3s'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fee2e2';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fef2f2';
+                        }}
                       >
-                        {rentalActionInProgress === 'approve'
-                          ? 'Processing...'
-                          : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Schedule Pickup' : 'Approve')}
+                        Reject Rental
                       </button>
-                    )}
-                  </>
-                )}
-                {selectedPendingRental.status === 'for_pickup' && isPickupScheduled(selectedPendingRental) && (
-                  <button
-                    disabled={rentalStatusUpdating}
-                    onClick={() => {
-                      setRentalStatusError(null);
-                      setIsPickedUpConfirmOpen(true);
-                    }}
-                    className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-cyan-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
-                  >
-                    Picked Up
-                  </button>
-                )}
-                {selectedPendingRental.status === 'active' && (
-                  <button
-                    disabled={rentalStatusUpdating}
-                    onClick={() => {
-                      setRentalStatusError(null);
-                      setSelectedReturnRental({
-                        id: selectedPendingRental.id,
-                        gownName: selectedPendingRental.gownName,
-                        customer: selectedPendingRental.customerName,
-                        dueDate: selectedPendingRental.endDate,
-                        daysLate: 0,
-                      });
-                      setIsItemReturnedConfirmOpen(true);
-                    }}
-                    className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
-                  >
-                    Item Returned
-                  </button>
-                )}
+                      {(selectedPendingRental.status === 'pending' || selectedPendingRental.status === 'paid_for_confirmation') && (
+                        <button
+                          disabled={rentalStatusUpdating}
+                          onClick={() => {
+                            setRentalStatusError(null);
+                            setIsApproveRentalConfirmOpen(true);
+                          }}
+                          style={{
+                            padding: '14px 48px',
+                            borderRadius: '18px',
+                            fontWeight: 'bold',
+                            fontSize: '14px',
+                            transition: 'all 0.3s',
+                            backgroundColor: '#D4AF37',
+                            color: 'white',
+                            border: 'none',
+                            cursor: 'pointer',
+                            boxShadow: '0 4px 15px rgba(212, 175, 55, 0.3)'
+                          }}
+                          onMouseOver={(e) => {
+                            e.currentTarget.style.backgroundColor = '#B48F27';
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = '0 6px 20px rgba(212, 175, 55, 0.4)';
+                          }}
+                          onMouseOut={(e) => {
+                            e.currentTarget.style.backgroundColor = '#D4AF37';
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow = '0 4px 15px rgba(212, 175, 55, 0.3)';
+                          }}
+                        >
+                          {rentalActionInProgress === 'approve'
+                            ? 'Processing...'
+                            : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Schedule Pickup' : 'Approve Rental')}
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {selectedPendingRental.status === 'for_pickup' && isPickupScheduled(selectedPendingRental) && (
+                    <button
+                      disabled={rentalStatusUpdating}
+                      onClick={() => {
+                        setRentalStatusError(null);
+                        setIsPickedUpConfirmOpen(true);
+                      }}
+                      style={{
+                        padding: '14px 48px',
+                        borderRadius: '18px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.3s',
+                        backgroundColor: '#0891b2',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 15px rgba(8, 145, 178, 0.3)'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#0e7490';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#0891b2';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                      }}
+                    >
+                      Confirm Picked Up
+                    </button>
+                  )}
+                  {selectedPendingRental.status === 'active' && (
+                    <div style={{ display: 'flex', gap: '16px' }}>
+                      <button
+                        disabled={rentalStatusUpdating}
+                        onClick={() => {
+                          const due = new Date(selectedPendingRental.endDate);
+                          due.setHours(0, 0, 0, 0);
+                          const daysLate = Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
+
+                          setRentalStatusError(null);
+                          setSelectedReturnRental({
+                            id: selectedPendingRental.id,
+                            gownName: selectedPendingRental.gownName,
+                            customer: selectedPendingRental.customerName,
+                            dueDate: selectedPendingRental.endDate,
+                            daysLate,
+                            sku: selectedPendingRental.sku,
+                          });
+                          setRejectRentalReason('');
+                          setIsItemLostConfirmOpen(true);
+                        }}
+                        style={{
+                          padding: '14px 48px',
+                          borderRadius: '18px',
+                          fontWeight: 'bold',
+                          fontSize: '14px',
+                          transition: 'all 0.3s',
+                          backgroundColor: '#fef2f2',
+                          color: '#b91c1c',
+                          border: '1px solid #fee2e2',
+                          cursor: 'pointer'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fee2e2';
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fef2f2';
+                          e.currentTarget.style.transform = 'translateY(0)';
+                        }}
+                      >
+                        Item Lost
+                      </button>
+                      <button
+                        disabled={rentalStatusUpdating}
+                        onClick={() => {
+                          const due = new Date(selectedPendingRental.endDate);
+                          due.setHours(0, 0, 0, 0);
+                          const daysLate = Math.max(0, Math.floor((today.getTime() - due.getTime()) / (1000 * 60 * 60 * 24)));
+
+                          setRentalStatusError(null);
+                          setSelectedReturnRental({
+                            id: selectedPendingRental.id,
+                            gownName: selectedPendingRental.gownName,
+                            customer: selectedPendingRental.customerName,
+                            dueDate: selectedPendingRental.endDate,
+                            daysLate,
+                            sku: selectedPendingRental.sku,
+                          });
+                          setIsItemReturnedConfirmOpen(true);
+                        }}
+                        style={{
+                          padding: '14px 48px',
+                          borderRadius: '18px',
+                          fontWeight: 'bold',
+                          fontSize: '14px',
+                          transition: 'all 0.3s',
+                          backgroundColor: '#16a34a',
+                          color: 'white',
+                          border: 'none',
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 15px rgba(22, 163, 74, 0.3)'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#15803d';
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#16a34a';
+                          e.currentTarget.style.transform = 'translateY(0)';
+                        }}
+                      >
+                        Confirm Item Returned
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -9848,463 +10280,1094 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           const rejectionReason = getCustomOrderRejectionReason(selectedCustomOrder);
 
           return (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div
-                className="bg-white rounded-2xl w-full px-6 pt-10 pb-4 overflow-y-auto"
-              style={{ maxWidth: '750px', height: 'calc(75vh + 20px)' }}
-            >
-              <div style={{ height: '20px' }} />
-              <div className="flex justify-between items-start mb-6 pl-4 pr-2">
-                <div className="pr-4">
-                  <div className="flex items-center gap-3" style={{ paddingLeft: '32px', paddingTop: '16px' }}>
-                    <h3 className="text-2xl font-light">Custom Order Details</h3>
-                    <span className={`inline-block px-3 py-1 text-xs rounded-full font-medium ${getCustomOrderStatusBadgeClass(selectedCustomOrder.status)}`}>
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div
+                className="bg-white rounded-3xl w-full max-w-4xl flex flex-col overflow-hidden shadow-2xl"
+                style={{ height: '78vh' }}
+              >
+                {/* Fixed Header */}
+                <div 
+                  style={{
+                    padding: '24px 40px',
+                    borderBottom: '1px solid #E8DCC8',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    backgroundColor: 'white',
+                    zIndex: 10,
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                    <div style={{ position: 'relative' }}>
+                      <h3 
+                        style={{ 
+                          fontSize: '24px', 
+                          fontWeight: '700', 
+                          color: '#1a1a1a',
+                          letterSpacing: '-0.02em',
+                          fontFamily: 'serif'
+                        }}
+                      >
+                        Custom Order Details
+                      </h3>
+                      <div 
+                        style={{ 
+                          position: 'absolute', 
+                          bottom: '-8px', 
+                          left: '0', 
+                          width: '40px', 
+                          height: '3px', 
+                          backgroundColor: '#D4AF37',
+                          borderRadius: '2px'
+                        }}
+                      />
+                    </div>
+                    <span 
+                      style={{ 
+                        padding: '6px 16px', 
+                        fontSize: '11px', 
+                        fontWeight: '800', 
+                        borderRadius: '100px', 
+                        textTransform: 'uppercase', 
+                        letterSpacing: '0.1em',
+                        border: '1px solid currentColor',
+                        backgroundColor: 'white',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                      className={getCustomOrderStatusBadgeClass(selectedCustomOrder.status)}
+                    >
                       {getCustomOrderStatusLabel(selectedCustomOrder.status)}
                     </span>
                   </div>
-                </div>
-                <button
-                  onClick={() => setSelectedCustomOrder(null)}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(0, 1fr) 340px',
-                  gap: '6px',
-                  alignItems: 'start',
-                }}
-              >
-                <div className="min-w-0 flex-1 space-y-5" style={{ paddingLeft: '32px' }}>
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-2">Order</p>
-                    <p className="text-lg font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                    <div className="mt-3 grid gap-2 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Event Date:</span> {selectedCustomOrder.eventDate || 'Not set'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Branch:</span> {selectedCustomOrder.branch || 'No branch selected'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedCustomOrder.budget)}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {selectedCustomOrder.consultationDate
-                        ? `${selectedCustomOrder.consultationDate}${selectedCustomOrder.consultationTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.consultationTime)}` : ''}`
-                        : 'Not scheduled yet'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Fitting Appointment:</span> {selectedCustomOrder.fittingDate
-                        ? `${selectedCustomOrder.fittingDate}${selectedCustomOrder.fittingTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.fittingTime)}` : ''}`
-                        : 'Not scheduled yet'}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Customer</p>
-                    <div className="grid gap-2 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Name:</span> {selectedCustomOrder.customerName}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Email:</span> {selectedCustomOrder.email || 'No email'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Phone:</span> {selectedCustomOrder.contactNumber || 'No phone'}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Design Notes</p>
-                    <div className="space-y-3 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Preferred Colors:</span> {selectedCustomOrder.preferredColors || 'None provided'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Fabric Preference:</span> {selectedCustomOrder.fabricPreference || 'None provided'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Special Requests:</span> {selectedCustomOrder.specialRequests || 'None provided'}</p>
-                    </div>
-                  </div>
+                  <button
+                    onClick={() => setSelectedCustomOrder(null)}
+                    style={{
+                      padding: '10px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: '#6B5D4F',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#FAF7F0';
+                      e.currentTarget.style.color = '#1a1a1a';
+                      e.currentTarget.style.transform = 'rotate(90deg)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                      e.currentTarget.style.color = '#6B5D4F';
+                      e.currentTarget.style.transform = 'rotate(0deg)';
+                    }}
+                    aria-label="Close modal"
+                  >
+                    <X style={{ width: '22px', height: '22px' }} />
+                  </button>
                 </div>
 
-                <div style={{ width: '180px' }} className="space-y-5">
-                  <div className="bg-[#FAF7F0] p-4 rounded-xl flex flex-col">
-                    <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Design Inspiration</p>
-                    {selectedCustomOrder.designImageUrl ? (
-                      <div
-                        className="rounded-xl border border-[#E8DCC8] bg-white overflow-y-auto overflow-x-hidden"
-                        style={{ height: '400px', width: '300px' }}
-                      >
-                        <img
-                          src={selectedCustomOrder.designImageUrl}
-                          alt={`${selectedCustomOrder.orderType || 'Custom order'} inspiration`}
-                          className="block w-full object-contain bg-white"
-                          style={{ height: '600px' }}
-                        />
-                      </div>
-                    ) : (
-                      <div className="flex-1 min-h-[12rem] rounded-xl border border-dashed border-[#D8C8B2] bg-white/60 flex items-center justify-center text-sm text-[#8A7A69] text-center px-6">
-                        No design inspiration image was provided for this custom order.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {selectedCustomOrder.status === 'rejected' && rejectionReason && (
-                <div className="mt-6 px-8">
-                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    <p className="font-semibold uppercase tracking-wide text-red-600">Reason for Rejection</p>
-                    <p className="mt-1 whitespace-pre-wrap">{rejectionReason}</p>
-                  </div>
-                </div>
-              )}
-
-              {customOrderManagementView !== 'archive' && getCustomOrderConsultationScheduleMessage(selectedCustomOrder) && (
-                <div className="mt-6 px-8">
-                  <p className="text-sm text-[#6B5D4F]">
-                    {getCustomOrderConsultationScheduleMessage(selectedCustomOrder)}
-                  </p>
-                </div>
-              )}
-
-              {customOrderManagementView !== 'archive' && getCustomOrderFittingScheduleMessage(selectedCustomOrder) && (
-                <div className="mt-6 px-8">
-                  <p className="text-sm text-[#6B5D4F]">
-                    {getCustomOrderFittingScheduleMessage(selectedCustomOrder)}
-                  </p>
-                </div>
-              )}
-
-              {(customOrderManagementView !== 'archive' || selectedCustomOrder.status === 'completed') && (
-                <div className="mt-8 sticky bottom-0 bg-white pt-6 pb-3 px-1 flex flex-wrap gap-3 relative">
-                  {(() => {
-                    const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
-                    const isUpdating = customOrderStatusUpdatingId === orderId;
-                    const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
-                    const canAdvance = canAdvanceCustomOrderStatus(selectedCustomOrder);
-                    const approveDisabledReason = getCustomOrderApproveDisabledReason(selectedCustomOrder);
-                    const isFittingStage = selectedCustomOrder.status === 'fitting';
-                    const canAdjust = canAdjustCustomOrder(selectedCustomOrder);
-                    const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed' && !isFittingStage;
-                    const isInquiryStage = selectedCustomOrder.status === 'inquiry';
-                    const isCompletedOrder = selectedCustomOrder.status === 'completed';
-                    const isArchivedCompletedOrder = isCompletedOrder && Boolean(selectedCustomOrder.isArchived);
-                    const isDoneDisabled = isArchivedCompletedOrder ? false : isCompletedOrder ? isUpdating : isUpdating || !nextStatus || !canAdvance;
-
-                    return (
-                      <>
+                {/* Scrollable Content */}
+                <div className="flex-1 overflow-y-auto bg-white">
+                  {/* Tab Navigation */}
+                  <div 
+                    style={{ 
+                      display: 'flex', 
+                      gap: '40px', 
+                      padding: '0 40px', 
+                      borderBottom: '1px solid #F2EADF',
+                      backgroundColor: '#FAF7F0/30'
+                    }}
+                  >
+                    {[
+                      { id: 'order', label: 'Order', icon: Package },
+                      { id: 'notes', label: 'Notes', icon: Edit },
+                      { id: 'customer', label: 'Customer', icon: Users }
+                    ].map((tab) => {
+                      const isActive = customOrderModalTab === tab.id;
+                      const Icon = tab.icon;
+                      return (
                         <button
-                          onClick={() => setSelectedCustomOrder(null)}
-                          className="flex-1 min-w-[140px] py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
-                        >
-                          Close
-                        </button>
-                        {isFittingStage ? (
-                          <button
-                            onClick={() => {
-                              if (!orderId || !canAdjust) return;
-                              setAdminCustomOrdersError(null);
-                              setAdjustCustomOrderReason('');
-                              setAdjustCustomOrderError(null);
-                              setIsAdjustCustomOrderConfirmOpen(true);
-                            }}
-                            disabled={isUpdating || !canAdjust}
-                            title={canAdjust ? undefined : 'Adjustment is only available on the scheduled fitting appointment date.'}
-                            className="flex-1 min-w-[140px] py-3 border-2 border-orange-200 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isUpdating ? 'Adjusting...' : 'Adjustment'}
-                          </button>
-                        ) : canReject && (
-                          <button
-                            onClick={() => {
-                              if (!orderId || !canReject) return;
-                              setAdminCustomOrdersError(null);
-                              setRejectCustomOrderReason('');
-                              setRejectCustomOrderError(null);
-                              setIsRejectCustomOrderConfirmOpen(true);
-                            }}
-                            disabled={isUpdating || !canReject}
-                            className="flex-1 min-w-[140px] py-3 border-2 border-red-200 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                              {isUpdating && canReject ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...') : (isInquiryStage ? 'Reject' : 'Cancel')}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => {
-                            if (isArchivedCompletedOrder) {
-                              setSelectedCustomOrder(null);
-                              return;
-                            }
-                            if (isCompletedOrder) {
-                              setAdminCustomOrdersError(null);
-                              setIsArchiveCompletedCustomOrderConfirmOpen(true);
-                              return;
-                            }
-                            if (!orderId || !nextStatus || !canAdvance) return;
-                            setAdminCustomOrdersError(null);
-                            setIsDoneCustomOrderConfirmOpen(true);
+                          key={tab.id}
+                          onClick={() => setCustomOrderModalTab(tab.id as any)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '16px 0',
+                            fontSize: '14px',
+                            fontWeight: isActive ? '700' : '500',
+                            color: isActive ? '#1a1a1a' : '#9C8B7A',
+                            borderBottom: `2px solid ${isActive ? '#D4AF37' : 'transparent'}`,
+                            cursor: 'pointer',
+                            transition: 'all 0.3s',
+                            backgroundColor: 'transparent',
+                            borderTop: 'none',
+                            borderLeft: 'none',
+                            borderRight: 'none',
+                            outline: 'none'
                           }}
-                          disabled={isDoneDisabled}
-                          className={`flex-1 min-w-[140px] py-3 border-2 rounded-xl font-semibold ${
-                            isDoneDisabled
-                              ? ''
-                              : 'transition-colors border-[#E8DCC8] bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:border-[#D4AF37]'
-                          }`}
-                          style={isDoneDisabled ? {
-                            borderColor: '#fed7aa',
-                            backgroundColor: '#fff7ed',
-                            color: '#c2410c',
-                            opacity: 0.3,
-                            cursor: 'not-allowed',
-                          } : undefined}
-                          title={isCompletedOrder ? undefined : approveDisabledReason || undefined}
                         >
-                          {isArchivedCompletedOrder
-                            ? 'Done'
-                            : isCompletedOrder
-                            ? 'Done'
-                            : isUpdating && !!nextStatus
-                              ? 'Approving...'
-                              : selectedCustomOrder?.status === 'inquiry'
-                                ? 'Approve'
-                                : 'Done'}
+                          <Icon style={{ width: '18px', height: '18px', opacity: isActive ? 1 : 0.6 }} />
+                          {tab.label}
                         </button>
-                              {isDoneCustomOrderConfirmOpen && selectedCustomOrder && (() => {
-                                const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
-                                if (!nextStatus || !canAdvanceCustomOrderStatus(selectedCustomOrder)) return null;
+                      );
+                    })}
+                  </div>
 
-                                const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
-                                const isUpdating = customOrderStatusUpdatingId === orderId;
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 240px',
+                      gap: '32px',
+                      alignItems: 'start',
+                    }}
+                    className="p-8"
+                  >
+                    {/* Left Column: Details (Tabbed) */}
+                    <div className="space-y-8">
+                      {customOrderModalTab === 'order' && (
+                        /* Order Section */
+                        <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Package className="w-5 h-5 text-[#D4AF37]" />
+                            <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Order Information</h4>
+                          </div>
+                          <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm">
+                            <div className="mb-6">
+                              <p className="text-2xl font-semibold text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                              <div className="h-1 w-12 bg-[#D4AF37] mt-2 rounded-full"></div>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-y-6 gap-x-10">
+                              <div>
+                                <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Event Date</p>
+                                <p className="font-semibold text-[#3D2B1F] text-base">{selectedCustomOrder.eventDate || 'Not set'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Branch</p>
+                                <p className="font-semibold text-[#3D2B1F] text-base">{selectedCustomOrder.branch || 'No branch selected'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Budget</p>
+                                <p className="font-semibold text-[#3D2B1F] text-base">{formatCustomOrderBudget(selectedCustomOrder.budget)}</p>
+                              </div>
+                              <div>
+                                <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Reference ID</p>
+                                <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                              </div>
+                            </div>
 
-                                return (
-                                  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-                                    <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-                                      <div className="flex justify-between items-start mb-4">
-                                        <h3 className="text-2xl font-light">Confirm Mark as Done</h3>
-                                        <button
-                                          type="button"
-                                          disabled={isUpdating}
-                                          onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
-                                          className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                                          aria-label="Close done confirmation"
-                                        >
-                                          <X className="w-5 h-5" />
-                                        </button>
-                                      </div>
+                            <div className="mt-8 space-y-3 pt-6 border-t border-[#E8DCC8]/30">
+                              <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                                <span className="text-[#6B5D4F] text-sm font-medium">Design Consultation</span>
+                                <span className={`text-xs font-bold px-3 py-1 rounded-full ${selectedCustomOrder.consultationDate ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-[#FAF7F0] text-[#9C8B7A] border border-[#E8DCC8]/50'}`}>
+                                  {selectedCustomOrder.consultationDate
+                                    ? `${selectedCustomOrder.consultationDate}${selectedCustomOrder.consultationTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.consultationTime)}` : ''}`
+                                    : 'Not scheduled yet'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                                <span className="text-[#6B5D4F] text-sm font-medium">Fitting Appointment</span>
+                                <span className={`text-xs font-bold px-3 py-1 rounded-full ${selectedCustomOrder.fittingDate ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-[#FAF7F0] text-[#9C8B7A] border border-[#E8DCC8]/50'}`}>
+                                  {selectedCustomOrder.fittingDate
+                                    ? `${selectedCustomOrder.fittingDate}${selectedCustomOrder.fittingTime ? ` at ${formatConsultationTimeLabel(selectedCustomOrder.fittingTime)}` : ''}`
+                                    : 'Not scheduled yet'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      )}
 
-                                      <p className="text-sm text-[#6B5D4F] mb-4">
-                                        This will move the custom order to {getCustomOrderStatusLabel(nextStatus)}.
-                                      </p>
+                      {customOrderModalTab === 'notes' && (
+                        /* Design Notes Section */
+                        <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Edit className="w-5 h-5 text-[#D4AF37]" />
+                            <h4 className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wider">Design Notes</h4>
+                          </div>
+                          <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm space-y-6">
+                            <div className="grid grid-cols-2 gap-6">
+                              <div>
+                                <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Preferred Colors</p>
+                                <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[40px] flex items-center">
+                                  {selectedCustomOrder.preferredColors || 'None provided'}
+                                </div>
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Fabric Preference</p>
+                                <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[40px] flex items-center">
+                                  {selectedCustomOrder.fabricPreference || 'None provided'}
+                                </div>
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Special Requests</p>
+                              <div className="bg-white p-4 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[80px] leading-relaxed">
+                                {selectedCustomOrder.specialRequests || 'No special requests provided'}
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      )}
 
-                                      <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                                        <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
-                                        <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                                        <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
-                                        <p className="text-sm text-[#6B5D4F]">Next Status: {getCustomOrderStatusLabel(nextStatus)}</p>
-                                      </div>
-
-                                      {adminCustomOrdersError && (
-                                        <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
-                                      )}
-
-                                      <div className="mt-6 flex gap-3">
-                                        <button
-                                          type="button"
-                                          disabled={isUpdating}
-                                          onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
-                                          className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
-                                        >
-                                          Cancel
-                                        </button>
-                                        <button
-                                          type="button"
-                                          disabled={isUpdating}
-                                          onClick={async () => {
-                                            setIsDoneCustomOrderConfirmOpen(false);
-                                            await handleConfirmApproveCustomOrder();
-                                          }}
-                                          className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
-                                        >
-                                          {isUpdating ? 'Processing...' : 'Yes, Approve'}
-                                        </button>
-                                      </div>
-                                    </div>
+                      {customOrderModalTab === 'customer' && (
+                        /* Customer Section */
+                        <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Users className="w-5 h-5 text-[#D4AF37]" />
+                            <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Customer Details</h4>
+                          </div>
+                          <div 
+                            style={{ 
+                              backgroundColor: '#FAF7F0',
+                              padding: '32px',
+                              borderRadius: '24px',
+                              border: '1px solid rgba(232, 220, 200, 0.5)',
+                              boxShadow: '0 4px 15px rgba(0,0,0,0.02)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                              <div 
+                                style={{ 
+                                  width: '64px', 
+                                  height: '64px', 
+                                  borderRadius: '50%', 
+                                  backgroundColor: '#E8DCC8', 
+                                  display: 'flex', 
+                                  alignItems: 'center', 
+                                  justifyContent: 'center', 
+                                  color: '#7F6D5C', 
+                                  fontSize: '24px', 
+                                  fontWeight: '700', 
+                                  border: '3px solid white', 
+                                  boxShadow: '0 4px 10px rgba(0,0,0,0.05)',
+                                  flexShrink: 0
+                                }}
+                              >
+                                {selectedCustomOrder.customerName.charAt(0)}
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ fontSize: '20px', fontWeight: '700', color: '#3D2B1F', marginBottom: '8px' }}>
+                                  {selectedCustomOrder.customerName}
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                    <Mail style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                    <span style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {selectedCustomOrder.email || 'No email provided'}
+                                    </span>
                                   </div>
-                                );
-                              })()}
-                      </>
-                    );
-                  })()}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                    <Phone style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                    <span style={{ fontSize: '14px' }}>
+                                      {selectedCustomOrder.contactNumber || 'No phone provided'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      )}
+
+                      {/* Status Specific Messages (Show regardless of tab if applicable) */}
+                      {(rejectionReason || getCustomOrderConsultationScheduleMessage(selectedCustomOrder) || getCustomOrderFittingScheduleMessage(selectedCustomOrder)) && (
+                        <div className="space-y-3 pt-2">
+                          {selectedCustomOrder.status === 'rejected' && rejectionReason && (
+                            <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                              <p className="text-[10px] font-bold uppercase text-red-600 mb-1">Reason for Rejection</p>
+                              <p className="text-sm text-red-700 whitespace-pre-wrap">{rejectionReason}</p>
+                            </div>
+                          )}
+                          {(getCustomOrderConsultationScheduleMessage(selectedCustomOrder) || getCustomOrderFittingScheduleMessage(selectedCustomOrder)) && (
+                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex gap-3">
+                              <Calendar className="w-4 h-4 text-blue-500 shrink-0" />
+                              <p className="text-xs text-blue-700 leading-normal">
+                                {getCustomOrderConsultationScheduleMessage(selectedCustomOrder) || getCustomOrderFittingScheduleMessage(selectedCustomOrder)}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right Column: Image Inspiration */}
+                    <div className="sticky top-0">
+                      <div className="flex items-center justify-between gap-2 mb-6">
+                        <div className="flex items-center gap-2">
+                          <Eye className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Inspiration</h4>
+                        </div>
+                      </div>
+
+                      {selectedCustomOrder.designImageUrl ? (
+                        <div className="w-full">
+                          <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
+                            <ImageWithFallback
+                              src={selectedCustomOrder.designImageUrl}
+                              alt="Inspiration"
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-[#D8C8B2] bg-[#FAF7F0] flex flex-col items-center justify-center text-center p-6">
+                          <Package className="w-8 h-8 text-[#D8C8B2] mb-3" />
+                          <p className="text-xs text-[#8A7A69] font-medium px-2">
+                            No design inspiration provided.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              )}
+
+                {/* Fixed Footer: Actions */}
+                {(customOrderManagementView !== 'archive' || selectedCustomOrder.status === 'completed') && (
+                  <div 
+                    style={{ 
+                      padding: '24px 40px',
+                      borderTop: '1px solid #E8DCC8',
+                      backgroundColor: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '40px',
+                      zIndex: 30,
+                      boxShadow: '0 -15px 40px rgba(0,0,0,0.03)'
+                    }}
+                  >
+                    <button
+                      onClick={() => setSelectedCustomOrder(null)}
+                      style={{
+                        padding: '14px 36px',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        color: '#7F6D5C',
+                        backgroundColor: '#FAF7F0',
+                        borderRadius: '18px',
+                        border: '1px solid #E8DCC8',
+                        cursor: 'pointer',
+                        transition: 'all 0.3s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#F2EADF';
+                        e.currentTarget.style.borderColor = '#D8C8B2';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#FAF7F0';
+                        e.currentTarget.style.borderColor = '#E8DCC8';
+                      }}
+                    >
+                      Close Details
+                    </button>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      {(() => {
+                        const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+                        const isUpdating = customOrderStatusUpdatingId === orderId;
+                        const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+                        const canAdvance = canAdvanceCustomOrderStatus(selectedCustomOrder);
+                        const approveDisabledReason = getCustomOrderApproveDisabledReason(selectedCustomOrder);
+                        const isFittingStage = selectedCustomOrder.status === 'fitting';
+                        const canAdjust = canAdjustCustomOrder(selectedCustomOrder);
+                        const canReject = selectedCustomOrder.status !== 'rejected' && selectedCustomOrder.status !== 'completed' && !isFittingStage;
+                        const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+                        const isCompletedOrder = selectedCustomOrder.status === 'completed';
+                        const isArchivedCompletedOrder = isCompletedOrder && Boolean(selectedCustomOrder.isArchived);
+                        const isDoneDisabled = isArchivedCompletedOrder ? false : isCompletedOrder ? isUpdating : isUpdating || !nextStatus || !canAdvance;
+
+                        return (
+                          <>
+                            {isFittingStage ? (
+                              <button
+                                onClick={() => {
+                                  if (!orderId || !canAdjust) return;
+                                  setAdminCustomOrdersError(null);
+                                  setAdjustCustomOrderReason('');
+                                  setAdjustCustomOrderError(null);
+                                  setIsAdjustCustomOrderConfirmOpen(true);
+                                }}
+                                disabled={isUpdating || !canAdjust}
+                                style={{
+                                  padding: '14px 32px',
+                                  backgroundColor: '#fff7ed',
+                                  color: '#c2410c',
+                                  border: '1px solid #ffedd5',
+                                  borderRadius: '18px',
+                                  fontWeight: 'bold',
+                                  fontSize: '14px',
+                                  cursor: canAdjust ? 'pointer' : 'not-allowed',
+                                  transition: 'all 0.3s',
+                                  opacity: canAdjust ? 1 : 0.5,
+                                  boxShadow: '0 2px 4px rgba(194, 65, 12, 0.05)'
+                                }}
+                                onMouseOver={(e) => {
+                                  if (canAdjust) e.currentTarget.style.backgroundColor = '#ffedd5';
+                                }}
+                                onMouseOut={(e) => {
+                                  if (canAdjust) e.currentTarget.style.backgroundColor = '#fff7ed';
+                                }}
+                              >
+                                {isUpdating ? 'Updating...' : 'Request Adjustment'}
+                              </button>
+                            ) : canReject && (
+                              <button
+                                onClick={() => {
+                                  if (!orderId || !canReject) return;
+                                  setAdminCustomOrdersError(null);
+                                  setRejectCustomOrderReason('');
+                                  setRejectCustomOrderError(null);
+                                  setIsRejectCustomOrderConfirmOpen(true);
+                                }}
+                                disabled={isUpdating || !canReject}
+                                style={{
+                                  padding: '14px 32px',
+                                  backgroundColor: '#fef2f2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fee2e2',
+                                  borderRadius: '18px',
+                                  fontWeight: 'bold',
+                                  fontSize: '14px',
+                                  cursor: canReject ? 'pointer' : 'not-allowed',
+                                  transition: 'all 0.3s',
+                                  opacity: canReject ? 1 : 0.5
+                                }}
+                                onMouseOver={(e) => {
+                                  if (canReject) e.currentTarget.style.backgroundColor = '#fee2e2';
+                                }}
+                                onMouseOut={(e) => {
+                                  if (canReject) e.currentTarget.style.backgroundColor = '#fef2f2';
+                                }}
+                              >
+                                {isUpdating ? '...' : (isInquiryStage ? 'Reject Order' : 'Cancel Order')}
+                              </button>
+                            )}
+
+                            <button
+                              onClick={() => {
+                                if (isArchivedCompletedOrder) {
+                                  setSelectedCustomOrder(null);
+                                  return;
+                                }
+                                if (isCompletedOrder) {
+                                  setAdminCustomOrdersError(null);
+                                  setIsArchiveCompletedCustomOrderConfirmOpen(true);
+                                  return;
+                                }
+                                if (!orderId || !nextStatus || !canAdvance) return;
+                                setAdminCustomOrdersError(null);
+                                setIsDoneCustomOrderConfirmOpen(true);
+                              }}
+                              disabled={isDoneDisabled}
+                              style={{
+                                padding: '14px 48px',
+                                borderRadius: '18px',
+                                fontWeight: 'bold',
+                                fontSize: '14px',
+                                transition: 'all 0.3s',
+                                cursor: isDoneDisabled ? 'not-allowed' : 'pointer',
+                                backgroundColor: isDoneDisabled ? '#E8DCC8' : '#1a1a1a',
+                                color: isDoneDisabled ? '#9C8B7A' : 'white',
+                                border: 'none',
+                                boxShadow: isDoneDisabled ? 'none' : '0 10px 25px rgba(0,0,0,0.15)',
+                                minWidth: '200px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                whiteSpace: 'nowrap'
+                              }}
+                              onMouseOver={(e) => {
+                                if (!isDoneDisabled) {
+                                  e.currentTarget.style.backgroundColor = '#D4AF37';
+                                  e.currentTarget.style.transform = 'translateY(-1px)';
+                                  e.currentTarget.style.boxShadow = '0 12px 30px rgba(212, 175, 55, 0.3)';
+                                }
+                              }}
+                              onMouseOut={(e) => {
+                                if (!isDoneDisabled) {
+                                  e.currentTarget.style.backgroundColor = '#1a1a1a';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                  e.currentTarget.style.boxShadow = '0 10px 25px rgba(0,0,0,0.15)';
+                                }
+                              }}
+                              title={isCompletedOrder ? undefined : approveDisabledReason || undefined}
+                            >
+                              {isArchivedCompletedOrder
+                                ? 'Done'
+                                : isCompletedOrder
+                                ? 'Archive Order'
+                                : isUpdating
+                                  ? 'Processing...'
+                                  : (selectedCustomOrder?.status === 'inquiry' ? 'Approve Order' : 'Mark as Done')}
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Sub-modals */}
+                {isDoneCustomOrderConfirmOpen && selectedCustomOrder && (() => {
+                  const nextStatus = getNextCustomOrderStatus(selectedCustomOrder.status);
+                  if (!nextStatus || !canAdvanceCustomOrderStatus(selectedCustomOrder)) return null;
+
+                  const orderId = String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+                  const isUpdating = customOrderStatusUpdatingId === orderId;
+
+                  return (
+                    <div 
+                      style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0,0,0,0.6)',
+                        backdropFilter: 'blur(8px)',
+                        zIndex: 100,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '16px'
+                      }}
+                    >
+                      <div 
+                        style={{
+                          backgroundColor: 'white',
+                          borderRadius: '32px',
+                          maxWidth: '440px',
+                          width: '100%',
+                          padding: '40px',
+                          boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                          border: '1px solid rgba(232, 220, 200, 0.3)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                          <div style={{ position: 'relative' }}>
+                            <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>Confirm Approval</h3>
+                            <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={isUpdating}
+                            onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
+                            style={{
+                              padding: '10px',
+                              borderRadius: '50%',
+                              backgroundColor: 'transparent',
+                              border: 'none',
+                              color: '#6B5D4F',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                            onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            <X style={{ width: '24px', height: '24px' }} />
+                          </button>
+                        </div>
+
+                        <p className="text-[#6B5D4F] mb-8 leading-relaxed text-base">
+                          Are you sure you want to advance this order to <span className="font-bold text-[#D4AF37]">{getCustomOrderStatusLabel(nextStatus)}</span>?
+                        </p>
+
+                        <div 
+                          style={{ 
+                            borderRadius: '24px', 
+                            border: '1px solid #E8DCC8', 
+                            backgroundColor: '#FAF7F0/50', 
+                            padding: '24px', 
+                            marginBottom: '40px',
+                            boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                          }}
+                        >
+                          <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                              <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                              <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedCustomOrder.customerName}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {adminCustomOrdersError && (
+                          <p className="mb-6 text-sm text-red-600 bg-red-50 p-3 rounded-xl border border-red-100">{adminCustomOrdersError}</p>
+                        )}
+
+                        <div className="flex gap-4">
+                          <button
+                            type="button"
+                            disabled={isUpdating}
+                            onClick={() => setIsDoneCustomOrderConfirmOpen(false)}
+                            style={{
+                              flex: 1,
+                              padding: '16px',
+                              backgroundColor: '#FAF7F0',
+                              color: '#6B5D4F',
+                              borderRadius: '100px',
+                              border: '1px solid #E8DCC8',
+                              fontWeight: 'bold',
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                              transition: 'all 0.3s'
+                            }}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.backgroundColor = '#F2EADF';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.backgroundColor = '#FAF7F0';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isUpdating}
+                            onClick={async () => {
+                              setIsDoneCustomOrderConfirmOpen(false);
+                              await handleConfirmApproveCustomOrder();
+                            }}
+                            style={{
+                              flex: 1,
+                              padding: '16px',
+                              backgroundColor: '#1a1a1a',
+                              color: 'white',
+                              borderRadius: '100px',
+                              border: 'none',
+                              fontWeight: 'bold',
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                              transition: 'all 0.3s',
+                              boxShadow: '0 8px 20px rgba(0,0,0,0.1)'
+                            }}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.backgroundColor = '#D4AF37';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                              e.currentTarget.style.boxShadow = '0 12px 30px rgba(212, 175, 55, 0.3)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.backgroundColor = '#1a1a1a';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = '0 8px 20px rgba(0,0,0,0.1)';
+                            }}
+                          >
+                            {isUpdating ? 'Processing...' : 'Yes, Approve'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {isRejectCustomOrderConfirmOpen && selectedCustomOrder && (
+                  <div 
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      backgroundColor: 'rgba(0,0,0,0.6)',
+                      backdropFilter: 'blur(8px)',
+                      zIndex: 100,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '16px'
+                    }}
+                  >
+                    <div 
+                      style={{
+                        backgroundColor: 'white',
+                        borderRadius: '32px',
+                        maxWidth: '440px',
+                        width: '100%',
+                        padding: '40px',
+                        boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(232, 220, 200, 0.3)',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {(() => {
+                        const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+                        const isUpdating = customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '');
+
+                        return (
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                              <div style={{ position: 'relative' }}>
+                                <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                                  {isInquiryStage ? 'Confirm Rejection' : 'Confirm Cancellation'}
+                                </h3>
+                                <div style={{ height: '6px', width: '48px', backgroundColor: '#b91c1c', borderRadius: '100px' }}></div>
+                              </div>
+                              <button
+                                type="button"
+                                disabled={isUpdating}
+                                onClick={() => {
+                                  setIsRejectCustomOrderConfirmOpen(false);
+                                  setRejectCustomOrderReason('');
+                                  setRejectCustomOrderError(null);
+                                }}
+                                style={{
+                                  padding: '10px',
+                                  borderRadius: '50%',
+                                  backgroundColor: 'transparent',
+                                  border: 'none',
+                                  color: '#b91c1c',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
+                                onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                              >
+                                <X style={{ width: '24px', height: '24px' }} />
+                              </button>
+                            </div>
+
+                            <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                              {isInquiryStage
+                                ? 'Please provide a reason before rejecting this custom order. This action cannot be undone.'
+                                : 'Please provide a reason before cancelling this custom order. This action cannot be undone.'}
+                            </p>
+
+                            <div 
+                              style={{ 
+                                borderRadius: '24px', 
+                                border: '1px solid #fee2e2', 
+                                backgroundColor: '#fef2f2/50', 
+                                padding: '24px', 
+                                marginBottom: '32px',
+                                boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                              }}
+                            >
+                              <p style={{ fontSize: '10px', color: '#b91c1c', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Impacted</p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                                <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedCustomOrder.customerName}</p>
+                              </div>
+                            </div>
+
+                            <div style={{ marginBottom: '32px' }}>
+                              <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: '#9C8B7A', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                                {isInquiryStage ? 'Reason for Rejection *' : 'Reason for Cancellation *'}
+                              </label>
+                              <textarea
+                                value={rejectCustomOrderReason}
+                                onChange={(e) => {
+                                  setRejectCustomOrderReason(e.target.value);
+                                  if (rejectCustomOrderError) setRejectCustomOrderError(null);
+                                }}
+                                rows={4}
+                                placeholder={isInquiryStage
+                                  ? 'State why this custom order is being rejected'
+                                  : 'State why this custom order is being cancelled'}
+                                style={{
+                                  width: '100%',
+                                  padding: '16px 20px',
+                                  borderRadius: '20px',
+                                  border: '1px solid #E8DCC8',
+                                  outline: 'none',
+                                  transition: 'all 0.3s',
+                                  resize: 'none',
+                                  backgroundColor: 'white',
+                                  color: '#3D2B1F',
+                                  fontSize: '14px',
+                                  lineHeight: '1.6'
+                                }}
+                                disabled={isUpdating}
+                                onFocus={(e) => {
+                                  e.currentTarget.style.borderColor = '#b91c1c';
+                                  e.currentTarget.style.boxShadow = '0 0 0 4px rgba(185, 28, 28, 0.05)';
+                                }}
+                                onBlur={(e) => {
+                                  e.currentTarget.style.borderColor = '#E8DCC8';
+                                  e.currentTarget.style.boxShadow = 'none';
+                                }}
+                              />
+                            </div>
+
+                            {rejectCustomOrderError && (
+                              <p style={{ marginBottom: '24px', fontSize: '13px', color: '#b91c1c', backgroundColor: '#fef2f2', padding: '12px 16px', borderRadius: '16px', border: '1px solid #fee2e2' }}>
+                                {rejectCustomOrderError}
+                              </p>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '16px' }}>
+                              <button
+                                type="button"
+                                disabled={isUpdating}
+                                onClick={() => {
+                                  setIsRejectCustomOrderConfirmOpen(false);
+                                  setRejectCustomOrderReason('');
+                                  setRejectCustomOrderError(null);
+                                }}
+                                style={{
+                                  flex: 1,
+                                  padding: '16px',
+                                  backgroundColor: '#FAF7F0',
+                                  color: '#6B5D4F',
+                                  borderRadius: '100px',
+                                  border: '1px solid #E8DCC8',
+                                  fontWeight: 'bold',
+                                  fontSize: '14px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.3s'
+                                }}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.backgroundColor = '#F2EADF';
+                                  e.currentTarget.style.transform = 'translateY(-1px)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.backgroundColor = '#FAF7F0';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                }}
+                              >
+                                Go Back
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isUpdating}
+                                onClick={handleConfirmRejectCustomOrder}
+                                style={{
+                                  flex: 1,
+                                  padding: '16px',
+                                  backgroundColor: '#b91c1c',
+                                  color: 'white',
+                                  borderRadius: '100px',
+                                  border: 'none',
+                                  fontWeight: 'bold',
+                                  fontSize: '14px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.3s',
+                                  boxShadow: '0 8px 20px rgba(185, 28, 28, 0.2)'
+                                }}
+                                onMouseOver={(e) => {
+                                  e.currentTarget.style.backgroundColor = '#991b1b';
+                                  e.currentTarget.style.transform = 'translateY(-1px)';
+                                  e.currentTarget.style.boxShadow = '0 12px 25px rgba(185, 28, 28, 0.3)';
+                                }}
+                                onMouseOut={(e) => {
+                                  e.currentTarget.style.backgroundColor = '#b91c1c';
+                                  e.currentTarget.style.transform = 'translateY(0)';
+                                  e.currentTarget.style.boxShadow = '0 8px 20px rgba(185, 28, 28, 0.2)';
+                                }}
+                              >
+                                {isUpdating
+                                  ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...')
+                                  : (isInquiryStage ? 'Confirm Reject' : 'Confirm Cancel')}
+                              </button>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           );
         })()}
 
-        {isRejectCustomOrderConfirmOpen && selectedCustomOrder && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
+        {isAdjustCustomOrderConfirmOpen && selectedCustomOrder && selectedCustomOrder.status === 'fitting' && (
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)',
+                overflow: 'hidden'
+              }}
+            >
               {(() => {
-                const isInquiryStage = selectedCustomOrder.status === 'inquiry';
+                const isUpdating = customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '');
 
                 return (
                   <>
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">{isInquiryStage ? 'Confirm Rejection' : 'Confirm Cancellation'}</h3>
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={() => {
-                    setIsRejectCustomOrderConfirmOpen(false);
-                    setRejectCustomOrderReason('');
-                    setRejectCustomOrderError(null);
-                  }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close custom order rejection confirmation"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                      <div style={{ position: 'relative' }}>
+                        <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>Request Adjustment</h3>
+                        <div style={{ height: '6px', width: '48px', backgroundColor: '#f97316', borderRadius: '100px' }}></div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={isUpdating}
+                        onClick={() => {
+                          setIsAdjustCustomOrderConfirmOpen(false);
+                          setAdjustCustomOrderReason('');
+                          setAdjustCustomOrderError(null);
+                        }}
+                        style={{
+                          padding: '10px',
+                          borderRadius: '50%',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          color: '#f97316',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fff7ed'}
+                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        <X style={{ width: '24px', height: '24px' }} />
+                      </button>
+                    </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                {isInquiryStage
-                  ? 'Please provide a reason before rejecting this custom order.'
-                  : 'Please provide a reason before cancelling this custom order.'}
-              </p>
+                    <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                      Please provide a detailed reason for the adjustment. This will move the custom order back to <span style={{ fontWeight: 'bold', color: '#1a1a1a' }}>In Progress</span>.
+                    </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Current Status: {getCustomOrderStatusLabel(selectedCustomOrder.status)}</p>
-              </div>
+                    <div 
+                      style={{ 
+                        borderRadius: '24px', 
+                        border: '1px solid #ffedd5', 
+                        backgroundColor: '#fff7ed/50', 
+                        padding: '24px', 
+                        marginBottom: '32px',
+                        boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                      }}
+                    >
+                      <p style={{ fontSize: '10px', color: '#f97316', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                        <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedCustomOrder.customerName}</p>
+                      </div>
+                    </div>
 
-              <label className="block text-sm text-[#6B5D4F] mb-2">
-                {isInquiryStage ? 'Reason for rejection *' : 'Reason for cancellation *'}
-              </label>
-              <textarea
-                value={rejectCustomOrderReason}
-                onChange={(e) => {
-                  setRejectCustomOrderReason(e.target.value);
-                  if (rejectCustomOrderError) setRejectCustomOrderError(null);
-                }}
-                rows={4}
-                placeholder={isInquiryStage
-                  ? 'State why this custom order is being rejected'
-                  : 'State why this custom order is being cancelled'}
-                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
-                disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-              />
+                    <div style={{ marginBottom: '32px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: '#9C8B7A', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                        Reason for Adjustment *
+                      </label>
+                      <textarea
+                        value={adjustCustomOrderReason}
+                        onChange={(e) => {
+                          setAdjustCustomOrderReason(e.target.value);
+                          if (adjustCustomOrderError) setAdjustCustomOrderError(null);
+                        }}
+                        rows={4}
+                        placeholder="State why this custom order needs adjustment"
+                        style={{
+                          width: '100%',
+                          padding: '16px 20px',
+                          borderRadius: '20px',
+                          border: '1px solid #E8DCC8',
+                          outline: 'none',
+                          transition: 'all 0.3s',
+                          resize: 'none',
+                          backgroundColor: 'white',
+                          color: '#3D2B1F',
+                          fontSize: '14px',
+                          lineHeight: '1.6'
+                        }}
+                        disabled={isUpdating}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = '#f97316';
+                          e.currentTarget.style.boxShadow = '0 0 0 4px rgba(249, 115, 22, 0.05)';
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = '#E8DCC8';
+                          e.currentTarget.style.boxShadow = 'none';
+                        }}
+                      />
+                    </div>
 
-              {rejectCustomOrderError && (
-                <p className="mt-3 text-sm text-red-600">{rejectCustomOrderError}</p>
-              )}
+                    {adjustCustomOrderError && (
+                      <p style={{ marginBottom: '24px', fontSize: '13px', color: '#c2410c', backgroundColor: '#fff7ed', padding: '12px 16px', borderRadius: '16px', border: '1px solid #ffedd5' }}>
+                        {adjustCustomOrderError}
+                      </p>
+                    )}
 
-              {adminCustomOrdersError && !rejectCustomOrderError && (
-                <p className="mt-3 text-sm text-red-600">{adminCustomOrdersError}</p>
-              )}
-
-              <div className="mt-6 flex gap-3">
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={() => {
-                    setIsRejectCustomOrderConfirmOpen(false);
-                    setRejectCustomOrderReason('');
-                    setRejectCustomOrderError(null);
-                  }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={handleConfirmRejectCustomOrder}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
-                >
-                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')
-                    ? (isInquiryStage ? 'Rejecting...' : 'Cancelling...')
-                    : (isInquiryStage ? 'Confirm Reject' : 'Confirm Cancel')}
-                </button>
-              </div>
+                    <div style={{ display: 'flex', gap: '16px' }}>
+                      <button
+                        type="button"
+                        disabled={isUpdating}
+                        onClick={() => {
+                          setIsAdjustCustomOrderConfirmOpen(false);
+                          setAdjustCustomOrderReason('');
+                          setAdjustCustomOrderError(null);
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '16px',
+                          backgroundColor: '#FAF7F0',
+                          color: '#6B5D4F',
+                          borderRadius: '100px',
+                          border: '1px solid #E8DCC8',
+                          fontWeight: 'bold',
+                          fontSize: '14px',
+                          cursor: 'pointer',
+                          transition: 'all 0.3s'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#F2EADF';
+                          e.currentTarget.style.transform = 'translateY(-1px)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#FAF7F0';
+                          e.currentTarget.style.transform = 'translateY(0)';
+                        }}
+                      >
+                        Go Back
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isUpdating}
+                        onClick={handleConfirmAdjustCustomOrder}
+                        style={{
+                          flex: 1,
+                          padding: '16px',
+                          backgroundColor: '#c2410c',
+                          color: 'white',
+                          borderRadius: '100px',
+                          border: 'none',
+                          fontWeight: 'bold',
+                          fontSize: '14px',
+                          cursor: 'pointer',
+                          transition: 'all 0.3s',
+                          boxShadow: '0 8px 20px rgba(194, 65, 12, 0.2)'
+                        }}
+                        onMouseOver={(e) => {
+                          e.currentTarget.style.backgroundColor = '#9a3412';
+                          e.currentTarget.style.transform = 'translateY(-1px)';
+                          e.currentTarget.style.boxShadow = '0 12px 25px rgba(194, 65, 12, 0.3)';
+                        }}
+                        onMouseOut={(e) => {
+                          e.currentTarget.style.backgroundColor = '#c2410c';
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.boxShadow = '0 8px 20px rgba(194, 65, 12, 0.2)';
+                        }}
+                      >
+                        {isUpdating ? 'Updating...' : 'Confirm'}
+                      </button>
+                    </div>
                   </>
                 );
               })()}
-            </div>
-          </div>
-        )}
-
-        {isAdjustCustomOrderConfirmOpen && selectedCustomOrder && selectedCustomOrder.status === 'fitting' && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Adjustment</h3>
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={() => {
-                    setIsAdjustCustomOrderConfirmOpen(false);
-                    setAdjustCustomOrderReason('');
-                    setAdjustCustomOrderError(null);
-                  }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close custom order adjustment confirmation"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                Please provide the reason for the adjustment. This will move the custom order back to In Progress.
-              </p>
-
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Current Status: {getCustomOrderStatusLabel(selectedCustomOrder.status)}</p>
-                <p className="text-sm text-[#6B5D4F]">Next Status: In Progress</p>
-              </div>
-
-              <label className="block text-sm text-[#6B5D4F] mb-2">
-                Reason for adjustment *
-              </label>
-              <textarea
-                value={adjustCustomOrderReason}
-                onChange={(e) => {
-                  setAdjustCustomOrderReason(e.target.value);
-                  if (adjustCustomOrderError) setAdjustCustomOrderError(null);
-                }}
-                rows={4}
-                placeholder="State why this custom order needs adjustment"
-                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
-                disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-              />
-
-              {adjustCustomOrderError && (
-                <p className="mt-3 text-sm text-red-600">{adjustCustomOrderError}</p>
-              )}
-
-              {adminCustomOrdersError && !adjustCustomOrderError && (
-                <p className="mt-3 text-sm text-red-600">{adminCustomOrdersError}</p>
-              )}
-
-              <div className="mt-6 flex gap-3">
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={() => {
-                    setIsAdjustCustomOrderConfirmOpen(false);
-                    setAdjustCustomOrderReason('');
-                    setAdjustCustomOrderError(null);
-                  }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')}
-                  onClick={handleConfirmAdjustCustomOrder}
-                  className="flex-1 py-3 border-2 border-orange-200 bg-orange-50 text-orange-700 rounded-xl hover:bg-orange-100 transition-colors font-semibold disabled:opacity-50"
-                >
-                  {customOrderStatusUpdatingId === String(selectedCustomOrder.id || selectedCustomOrder._id || '')
-                    ? 'Adjusting...'
-                    : 'Confirm Adjustment'}
-                </button>
-              </div>
             </div>
           </div>
         )}
@@ -10317,42 +11380,108 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           const isUpdating = customOrderStatusUpdatingId === orderId;
 
           return (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="text-2xl font-light">Confirm Approval</h3>
+            <div 
+              style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(0,0,0,0.6)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 100,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '16px'
+              }}
+            >
+              <div 
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '32px',
+                  maxWidth: '440px',
+                  width: '100%',
+                  padding: '40px',
+                  boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                  border: '1px solid rgba(232, 220, 200, 0.3)'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>Confirm Approval</h3>
+                    <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                  </div>
                   <button
                     type="button"
                     disabled={isUpdating}
                     onClick={() => setIsApproveCustomOrderConfirmOpen(false)}
-                    className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                    aria-label="Close custom order approval confirmation"
+                    style={{
+                      padding: '10px',
+                      borderRadius: '50%',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      color: '#6B5D4F',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    <X className="w-5 h-5" />
+                    <X style={{ width: '24px', height: '24px' }} />
                   </button>
                 </div>
 
-                <p className="text-sm text-[#6B5D4F] mb-4">
-                  This will move the custom order to {getCustomOrderStatusLabel(nextStatus)}.
+                <p className="text-[#6B5D4F] mb-8 leading-relaxed text-base">
+                  Are you sure you want to advance this order to <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>{getCustomOrderStatusLabel(nextStatus)}</span>?
                 </p>
 
-                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
-                  <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                  <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
-                  <p className="text-sm text-[#6B5D4F]">Next Status: {getCustomOrderStatusLabel(nextStatus)}</p>
+                <div 
+                  style={{ 
+                    borderRadius: '24px', 
+                    border: '1px solid #E8DCC8', 
+                    backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                    padding: '24px', 
+                    marginBottom: '40px',
+                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                  }}
+                >
+                  <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                      <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedCustomOrder.customerName}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {adminCustomOrdersError && (
-                  <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
+                  <p className="mb-6 text-sm text-red-600 bg-red-50 p-3 rounded-xl border border-red-100">{adminCustomOrdersError}</p>
                 )}
 
-                <div className="mt-6 flex gap-3">
+                <div className="flex gap-4">
                   <button
                     type="button"
                     disabled={isUpdating}
                     onClick={() => setIsApproveCustomOrderConfirmOpen(false)}
-                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                    style={{
+                      flex: 1,
+                      padding: '16px',
+                      backgroundColor: '#FAF7F0',
+                      color: '#6B5D4F',
+                      borderRadius: '100px',
+                      border: '1px solid #E8DCC8',
+                      fontWeight: 'bold',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#F2EADF';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = '#FAF7F0';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
                   >
                     Cancel
                   </button>
@@ -10360,7 +11489,29 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     type="button"
                     disabled={isUpdating}
                     onClick={handleConfirmApproveCustomOrder}
-                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                    style={{
+                      flex: 1,
+                      padding: '16px',
+                      backgroundColor: '#1a1a1a',
+                      color: 'white',
+                      borderRadius: '100px',
+                      border: 'none',
+                      fontWeight: 'bold',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s',
+                      boxShadow: '0 8px 20px rgba(0, 0, 0, 0.1)'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#000';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 12px 30px rgba(0, 0, 0, 0.15)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1a1a1a';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.1)';
+                    }}
                   >
                     {isUpdating ? 'Approving...' : `Confirm`}
                   </button>
@@ -10375,42 +11526,112 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           const isUpdating = customOrderStatusUpdatingId === orderId;
 
           return (
-            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-                <div className="flex justify-between items-start mb-4">
-                  <h3 className="text-2xl font-light">Confirm Completed Order</h3>
+            <div 
+              style={{
+                position: 'fixed',
+                inset: 0,
+                backgroundColor: 'rgba(0,0,0,0.6)',
+                backdropFilter: 'blur(8px)',
+                zIndex: 100,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '16px'
+              }}
+            >
+              <div 
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '32px',
+                  maxWidth: '440px',
+                  width: '100%',
+                  padding: '40px',
+                  boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                  border: '1px solid rgba(232, 220, 200, 0.3)'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>Archive Order</h3>
+                    <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                  </div>
                   <button
                     type="button"
                     disabled={isUpdating}
                     onClick={() => setIsArchiveCompletedCustomOrderConfirmOpen(false)}
-                    className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                    aria-label="Close completed custom order confirmation"
+                    style={{
+                      padding: '10px',
+                      borderRadius: '50%',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      color: '#6B5D4F',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    <X className="w-5 h-5" />
+                    <X style={{ width: '24px', height: '24px' }} />
                   </button>
                 </div>
 
-                <p className="text-sm text-[#6B5D4F] mb-4">
-                  Is this order complete? If confirmed, it will be moved to the bespoke management archive.
+                <p className="text-[#6B5D4F] mb-8 leading-relaxed text-base">
+                  Is this order complete? If confirmed, it will be moved to the <span className="font-bold text-[#1a1a1a]">Bespoke Management Archive</span>.
                 </p>
 
-                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Custom Order</p>
-                  <p className="font-medium text-[#3D2B1F]">{selectedCustomOrder.orderType || 'Custom Order'}</p>
-                  <p className="text-sm text-[#6B5D4F]">Customer: {selectedCustomOrder.customerName}</p>
-                  <p className="text-sm text-[#6B5D4F]">Reference ID: {selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                <div 
+                  style={{ 
+                    borderRadius: '24px', 
+                    border: '1px solid #E8DCC8', 
+                    backgroundColor: '#FAF7F0/50', 
+                    padding: '24px', 
+                    marginBottom: '40px',
+                    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                  }}
+                >
+                  <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Details</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedCustomOrder.orderType || 'Custom Order'}</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                      <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedCustomOrder.customerName}</span>
+                    </div>
+                    <div style={{ pt: '4px' }}>
+                      <p style={{ fontSize: '9px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '4px' }}>Reference ID</p>
+                      <p style={{ fontSize: '13px', fontWeight: '600', color: '#3D2B1F', fontFamily: 'monospace' }}>{selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
+                    </div>
+                  </div>
                 </div>
 
                 {adminCustomOrdersError && (
-                  <p className="mb-4 text-sm text-red-600">{adminCustomOrdersError}</p>
+                  <p className="mb-6 text-sm text-red-600 bg-red-50 p-3 rounded-xl border border-red-100">{adminCustomOrdersError}</p>
                 )}
 
-                <div className="mt-6 flex gap-3">
+                <div className="flex gap-4">
                   <button
                     type="button"
                     disabled={isUpdating}
                     onClick={() => setIsArchiveCompletedCustomOrderConfirmOpen(false)}
-                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                    style={{
+                      flex: 1,
+                      padding: '16px',
+                      backgroundColor: '#FAF7F0',
+                      color: '#6B5D4F',
+                      borderRadius: '100px',
+                      border: '1px solid #E8DCC8',
+                      fontWeight: 'bold',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#F2EADF';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = '#FAF7F0';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
                   >
                     Cancel
                   </button>
@@ -10418,7 +11639,29 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     type="button"
                     disabled={isUpdating}
                     onClick={handleConfirmArchiveCompletedCustomOrder}
-                    className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                    style={{
+                      flex: 1,
+                      padding: '16px',
+                      backgroundColor: '#1a1a1a',
+                      color: 'white',
+                      borderRadius: '100px',
+                      border: 'none',
+                      fontWeight: 'bold',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.3s',
+                      boxShadow: '0 8px 20px rgba(0,0,0,0.1)'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#D4AF37';
+                      e.currentTarget.style.transform = 'translateY(-1px)';
+                      e.currentTarget.style.boxShadow = '0 12px 30px rgba(212, 175, 55, 0.3)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1a1a1a';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(0,0,0,0.1)';
+                    }}
                   >
                     {isUpdating ? 'Archiving...' : 'Confirm'}
                   </button>
@@ -10428,41 +11671,266 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           );
         })()}
 
-        {isItemReturnedConfirmOpen && selectedReturnRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Item Returned</h3>
+        {isItemLostConfirmOpen && selectedReturnRental && (
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)',
+                overflow: 'hidden'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Item Lost
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#b91c1c', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={() => {
-                    setIsItemReturnedConfirmOpen(false);
-                    setSelectedReturnRental(null);
+                    setIsItemLostConfirmOpen(false);
+                    setRejectRentalReason('');
+                    setRejectRentalError(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close item returned confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#b91c1c',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                Confirm that the customer has returned the gown.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Please provide a detailed reason before marking this item as <span style={{ color: '#b91c1c', fontWeight: 'bold' }}>Lost</span>. This will move the rental to the archive.
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedReturnRental.gownName}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedReturnRental.customer}</p>
-                <p className="text-sm text-[#6B5D4F]">Due: {selectedReturnRental.dueDate}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #fee2e2', 
+                  backgroundColor: 'rgba(254, 242, 242, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#b91c1c', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Item Impacted</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedReturnRental.gownName}</p>
+                  <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedReturnRental.customer}</p>
+                </div>
               </div>
 
-              {rentalStatusError && rentalActionInProgress === 'returned' && (
-                <p className="text-red-600 text-sm mb-3">{rentalStatusError}</p>
+              <div style={{ marginBottom: '32px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: '#9C8B7A', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                  Reason for Marking as Lost *
+                </label>
+                <textarea
+                  value={rejectRentalReason}
+                  onChange={(e) => {
+                    setRejectRentalReason(e.target.value);
+                    if (rejectRentalError) setRejectRentalError(null);
+                  }}
+                  rows={4}
+                  placeholder="State why this item is being marked as lost (e.g. damaged beyond repair, lost by customer)"
+                  style={{
+                    width: '100%',
+                    padding: '16px 20px',
+                    borderRadius: '20px',
+                    border: '1px solid #E8DCC8',
+                    outline: 'none',
+                    fontSize: '14px',
+                    color: '#3D2B1F',
+                    backgroundColor: '#fff',
+                    transition: 'all 0.2s',
+                    resize: 'none'
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = '#D4AF37';
+                    e.currentTarget.style.boxShadow = '0 0 0 4px rgba(212, 175, 55, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  disabled={rentalStatusUpdating}
+                />
+              </div>
+
+              {rejectRentalError && (
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {rejectRentalError}
+                </p>
               )}
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsItemLostConfirmOpen(false);
+                    setRejectRentalReason('');
+                    setRejectRentalError(null);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                >
+                  Go Back
+                </button>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={async () => {
+                    if (!selectedReturnRental) return;
+
+                    const trimmedReason = rejectRentalReason.trim();
+                    if (!trimmedReason) {
+                      setRejectRentalError('Reason is required.');
+                      return;
+                    }
+
+                    setRentalStatusUpdating(true);
+                    setRentalActionInProgress('reject');
+                    setRentalStatusError(null);
+                    setRejectRentalError(null);
+
+                    try {
+                      const updated = await rentalAPI.rentalAPI.updateRentalStatus(
+                        token,
+                        selectedReturnRental.id,
+                        'item_lost',
+                        trimmedReason
+                      );
+
+                      // Deduct inventory by 1 if SKU is available
+                      const rentalSku = String(selectedReturnRental.sku || '').trim();
+                      if (rentalSku) {
+                        setInventory((prev) =>
+                          prev.map((item) =>
+                            String(item.sku || '').trim().toLowerCase() === rentalSku.toLowerCase()
+                              ? { ...item, stock: Math.max(0, (item.stock ?? 1) - 1) }
+                              : item
+                          )
+                        );
+                      }
+
+                      setAdminRentals((prev) => prev.map((r) => r.id === selectedReturnRental.id ? updated : r));
+                      window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
+                      setIsItemLostConfirmOpen(false);
+                      setRejectRentalReason('');
+                      setShowPendingRentalModal(false);
+                      setSelectedPendingRental(null);
+                      setSelectedReturnRental(null);
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : 'Failed to mark item as lost.';
+                      setRejectRentalError(message);
+                      setRentalStatusError(message);
+                    } finally {
+                      setRentalStatusUpdating(false);
+                      setRentalActionInProgress(null);
+                    }
+                  }}
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#b91c1c',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(185, 28, 28, 0.2)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#991b1b';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#b91c1c';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
+                >
+                  {rentalActionInProgress === 'reject' ? 'Processing...' : 'Confirm Lost'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isItemReturnedConfirmOpen && selectedReturnRental && (
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Return
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
@@ -10470,7 +11938,78 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setIsItemReturnedConfirmOpen(false);
                     setSelectedReturnRental(null);
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <X style={{ width: '24px', height: '24px' }} />
+                </button>
+              </div>
+
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Are you sure you want to confirm that this gown has been <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>Returned</span> by the customer?
+              </p>
+
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedReturnRental.gownName}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                    <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                    <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedReturnRental.customer}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                    <Calendar style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                    <span style={{ fontSize: '14px', fontWeight: '500' }}>Due: {selectedReturnRental.dueDate}</span>
+                  </div>
+                </div>
+              </div>
+
+              {rentalStatusError && rentalActionInProgress === 'returned' && (
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {rentalStatusError}
+                </p>
+              )}
+
+              <div style={{ display: 'flex', gap: '16px' }}>
+                <button
+                  type="button"
+                  disabled={rentalStatusUpdating}
+                  onClick={() => {
+                    setIsItemReturnedConfirmOpen(false);
+                    setSelectedReturnRental(null);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
                   Cancel
                 </button>
@@ -10483,10 +12022,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setRentalActionInProgress('returned');
                     setRentalStatusError(null);
                     try {
-                      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedReturnRental.id, 'completed');
+                      const updated = await rentalAPI.rentalAPI.updateRentalStatus(token, selectedReturnRental.id, 'completed');
                       setAdminRentals((prev) =>
                         prev.map((r) =>
-                          r.id === selectedReturnRental.id ? { ...r, status: 'completed' } : r
+                          r.id === selectedReturnRental.id ? updated : r
                         )
                       );
                       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
@@ -10501,9 +12040,29 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       setRentalActionInProgress(null);
                     }
                   }}
-                  className="flex-1 py-3 border-2 border-green-300 bg-green-50 text-green-800 rounded-xl hover:bg-green-100 transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
-                  {rentalActionInProgress === 'returned' ? 'Processing...' : 'Yes, Item Returned'}
+                  {rentalActionInProgress === 'returned' ? 'Processing...' : 'Yes, Confirm'}
                 </button>
               </div>
             </div>
@@ -10511,37 +12070,100 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isPickedUpConfirmOpen && selectedPendingRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Picked Up</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Picked Up
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={() => setIsPickedUpConfirmOpen(false)}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close picked up confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                Confirm that this customer has already picked up the gown.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Are you sure you want to confirm that this gown has been <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>Picked Up</span> by the customer?
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '40px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedPendingRental.gownName}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                    <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                    <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedPendingRental.customerName}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={() => setIsPickedUpConfirmOpen(false)}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
                   Cancel
                 </button>
@@ -10554,10 +12176,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setRentalActionInProgress('picked-up');
                     setRentalStatusError(null);
                     try {
-                      await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, 'active');
+                      const updated = await rentalAPI.rentalAPI.updateRentalStatus(token, selectedPendingRental.id, 'active');
                       setAdminRentals((prev) =>
                         prev.map((r) =>
-                          r.id === selectedPendingRental.id ? { ...r, status: 'active' } : r
+                          r.id === selectedPendingRental.id ? updated : r
                         )
                       );
                       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
@@ -10571,9 +12193,29 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       setRentalActionInProgress(null);
                     }
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-cyan-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
-                  {rentalActionInProgress === 'picked-up' ? 'Processing...' : 'Yes, Mark as Picked Up'}
+                  {rentalActionInProgress === 'picked-up' ? 'Processing...' : 'Yes, Confirm'}
                 </button>
               </div>
             </div>
@@ -10581,10 +12223,38 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isRejectRentalConfirmOpen && selectedPendingRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Rejection</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)',
+                overflow: 'hidden'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Rejection
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#b91c1c', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
@@ -10593,43 +12263,86 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setRejectRentalReason('');
                     setRejectRentalError(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close rejection confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#b91c1c',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                {selectedPendingRental.status === 'for_payment' || selectedPendingRental.status === 'paid_for_confirmation'
-                  ? 'Please provide a reason before rejecting this payment.'
-                  : 'Please provide a reason before rejecting this rental request.'}
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Please provide a reason before rejecting this rental request. This action cannot be undone.
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #fee2e2', 
+                  backgroundColor: 'rgba(254, 242, 242, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#b91c1c', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Impacted</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedPendingRental.gownName}</p>
+                  <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedPendingRental.customerName}</p>
+                </div>
               </div>
 
-              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for rejection *</label>
-              <textarea
-                value={rejectRentalReason}
-                onChange={(e) => {
-                  setRejectRentalReason(e.target.value);
-                  if (rejectRentalError) setRejectRentalError(null);
-                }}
-                rows={4}
-                placeholder="State why this rental is being rejected"
-                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
-                disabled={rentalStatusUpdating}
-              />
+              <div style={{ marginBottom: '32px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: '#9C8B7A', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                  Reason for Rejection *
+                </label>
+                <textarea
+                  value={rejectRentalReason}
+                  onChange={(e) => {
+                    setRejectRentalReason(e.target.value);
+                    if (rejectRentalError) setRejectRentalError(null);
+                  }}
+                  rows={4}
+                  placeholder="State why this rental request is being rejected"
+                  style={{
+                    width: '100%',
+                    padding: '16px 20px',
+                    borderRadius: '20px',
+                    border: '1px solid #E8DCC8',
+                    outline: 'none',
+                    fontSize: '14px',
+                    color: '#3D2B1F',
+                    backgroundColor: '#fff',
+                    transition: 'all 0.2s',
+                    resize: 'none'
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = '#D4AF37';
+                    e.currentTarget.style.boxShadow = '0 0 0 4px rgba(212, 175, 55, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  disabled={rentalStatusUpdating}
+                />
+              </div>
 
               {rejectRentalError && (
-                <p className="mt-3 text-sm text-red-600">{rejectRentalError}</p>
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {rejectRentalError}
+                </p>
               )}
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
@@ -10638,9 +12351,22 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setRejectRentalReason('');
                     setRejectRentalError(null);
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
-                  Cancel
+                  Go Back
                 </button>
                 <button
                   type="button"
@@ -10660,13 +12386,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setRejectRentalError(null);
 
                     try {
-                      await rentalAPI.rentalAPI.updateRentalStatus(
+                      const updated = await rentalAPI.rentalAPI.updateRentalStatus(
                         token,
                         selectedPendingRental.id,
                         'cancelled',
                         trimmedReason
                       );
-                      setAdminRentals((prev) => prev.filter((r) => r.id !== selectedPendingRental.id));
+                      setAdminRentals((prev) =>
+                        prev.map((r) =>
+                          r.id === selectedPendingRental.id ? updated : r
+                        )
+                      );
                       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
                       setIsRejectRentalConfirmOpen(false);
                       setRejectRentalReason('');
@@ -10681,7 +12411,27 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       setRentalActionInProgress(null);
                     }
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#b91c1c',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(185, 28, 28, 0.2)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#991b1b';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#b91c1c';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   {rentalActionInProgress === 'reject' ? 'Rejecting...' : 'Confirm Reject'}
                 </button>
@@ -10691,42 +12441,102 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isApproveRentalConfirmOpen && selectedPendingRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">
-                  {selectedPendingRental.status === 'paid_for_confirmation' ? 'Confirm Pickup Scheduling' : 'Confirm Approval'}
-                </h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Approval
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={() => setIsApproveRentalConfirmOpen(false)}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close approval confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                {selectedPendingRental.status === 'paid_for_confirmation'
-                  ? 'This will confirm the submitted payment and move the rental to For Pickup.'
-                  : 'This will approve the rental request and move it to For Payment.'}
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Are you sure you want to advance this order to <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>
+                  {selectedPendingRental.status === 'paid_for_confirmation' ? 'For Pickup' : 'For Payment'}
+                </span>?
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Rental</p>
-                <p className="font-medium text-[#3D2B1F]">{selectedPendingRental.gownName}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingRental.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Reference ID: {selectedPendingRental.referenceId || selectedPendingRental.id}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '40px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Order Reference</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{selectedPendingRental.gownName}</p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#6B5D4F' }}>
+                    <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                    <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedPendingRental.customerName}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={() => setIsApproveRentalConfirmOpen(false)}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
                   Cancel
                 </button>
@@ -10734,11 +12544,31 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   disabled={rentalStatusUpdating}
                   onClick={handleConfirmApproveRental}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   {rentalActionInProgress === 'approve'
                     ? 'Processing...'
-                    : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Yes, Schedule Pickup' : 'Yes, Approve')}
+                    : (selectedPendingRental.status === 'paid_for_confirmation' ? 'Yes, Confirm' : 'Yes, Approve')}
                 </button>
               </div>
             </div>
@@ -10746,10 +12576,37 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isApproveAppointmentConfirmOpen && selectedPendingAppointment && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Appointment Approval</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Approval
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
@@ -10757,45 +12614,62 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setIsApproveAppointmentConfirmOpen(false);
                     setSelectedPendingAppointment(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close appointment approval confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                This will approve the appointment request and move it to Scheduled.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Are you sure you want to approve this appointment and move it to <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>Scheduled</span>?
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
-                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedPendingAppointment.type)}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedPendingAppointment.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Date: {selectedPendingAppointment.date}</p>
-                <p className="text-sm text-[#6B5D4F]">Time: {selectedPendingAppointment.time}</p>
-                <p className="text-sm text-[#6B5D4F]">Branch: {selectedPendingAppointment.branch}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Appointment Details</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{getAppointmentTypeLabel(selectedPendingAppointment.type)}</p>
+                    <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedPendingAppointment.customerName}</p>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', pt: '4px', borderTop: '1px solid #E8DCC8/30' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
+                      <Calendar style={{ width: '14px', height: '14px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '13px' }}>{selectedPendingAppointment.date}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
+                      <Clock style={{ width: '14px', height: '14px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '13px' }}>{selectedPendingAppointment.time}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {selectedPendingAppointment.notes && (
-                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                  <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Additional Comments</p>
-                  <p className="text-sm text-[#6B5D4F]">{selectedPendingAppointment.notes}</p>
-                </div>
-              )}
-
-              {selectedPendingAppointment.rescheduleReason && (
-                <div className="rounded-xl border border-orange-200 bg-orange-50 p-4 mb-4">
-                  <p className="text-xs text-orange-700 uppercase tracking-wide mb-2">Rescheduled</p>
-                  <p className="text-sm text-orange-900">{selectedPendingAppointment.rescheduleReason}</p>
-                </div>
-              )}
-
               {adminAppointmentsError && appointmentStatusUpdatingId === selectedPendingAppointment.id && (
-                <p className="text-red-600 text-sm mb-3">{adminAppointmentsError}</p>
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {adminAppointmentsError}
+                </p>
               )}
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
@@ -10803,7 +12677,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setIsApproveAppointmentConfirmOpen(false);
                     setSelectedPendingAppointment(null);
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
                   Cancel
                 </button>
@@ -10811,7 +12698,27 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedPendingAppointment.id}
                   onClick={handleConfirmApproveAppointment}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   {appointmentStatusUpdatingId === selectedPendingAppointment.id ? 'Approving...' : 'Yes, Approve'}
                 </button>
@@ -10821,10 +12728,37 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isCompleteAppointmentConfirmOpen && selectedScheduledAppointment && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Appointment Completion</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Completion
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
@@ -10832,31 +12766,62 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setIsCompleteAppointmentConfirmOpen(false);
                     setSelectedScheduledAppointment(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close appointment completion confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                This will mark the appointment as completed and move it to the archive.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Are you sure you want to mark this appointment as <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>Completed</span>?
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
-                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedScheduledAppointment.type)}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedScheduledAppointment.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Date: {selectedScheduledAppointment.date}</p>
-                <p className="text-sm text-[#6B5D4F]">Time: {selectedScheduledAppointment.time}</p>
-                <p className="text-sm text-[#6B5D4F]">Branch: {selectedScheduledAppointment.branch}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Appointment Details</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div>
+                    <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{getAppointmentTypeLabel(selectedScheduledAppointment.type)}</p>
+                    <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedScheduledAppointment.customerName}</p>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', pt: '4px', borderTop: '1px solid #E8DCC8/30' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
+                      <Calendar style={{ width: '14px', height: '14px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '13px' }}>{selectedScheduledAppointment.date}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
+                      <Clock style={{ width: '14px', height: '14px', opacity: 0.6 }} />
+                      <span style={{ fontSize: '13px' }}>{selectedScheduledAppointment.time}</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {adminAppointmentsError && appointmentStatusUpdatingId === selectedScheduledAppointment.id && (
-                <p className="text-red-600 text-sm mb-3">{adminAppointmentsError}</p>
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {adminAppointmentsError}
+                </p>
               )}
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
@@ -10864,7 +12829,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setIsCompleteAppointmentConfirmOpen(false);
                     setSelectedScheduledAppointment(null);
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
                   Cancel
                 </button>
@@ -10872,7 +12850,27 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedScheduledAppointment.id}
                   onClick={handleConfirmCompleteAppointment}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-green-800 rounded-xl hover:bg-[#F2EADF] transition-colors font-semibold shadow-sm disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   {appointmentStatusUpdatingId === selectedScheduledAppointment.id ? 'Completing...' : 'Yes, Complete'}
                 </button>
@@ -10882,10 +12880,38 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isCancelAppointmentConfirmOpen && selectedCancelAppointment && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Cancellation</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)',
+                overflow: 'hidden'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Cancellation
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#b91c1c', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
@@ -10895,43 +12921,86 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setAppointmentCancelReason('');
                     setAppointmentCancelError(null);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors disabled:opacity-50"
-                  aria-label="Close appointment cancellation confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#b91c1c',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fef2f2'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                Please provide a reason before cancelling this appointment.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Please provide a reason before cancelling this appointment. This action cannot be undone.
               </p>
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-4">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Appointment</p>
-                <p className="font-medium text-[#3D2B1F]">{getAppointmentTypeLabel(selectedCancelAppointment.type)}</p>
-                <p className="text-sm text-[#6B5D4F]">Customer: {selectedCancelAppointment.customerName}</p>
-                <p className="text-sm text-[#6B5D4F]">Date: {selectedCancelAppointment.date}</p>
-                <p className="text-sm text-[#6B5D4F]">Time: {selectedCancelAppointment.time}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #fee2e2', 
+                  backgroundColor: 'rgba(254, 242, 242, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#b91c1c', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Appointment Impacted</p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{getAppointmentTypeLabel(selectedCancelAppointment.type)}</p>
+                  <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedCancelAppointment.customerName}</p>
+                </div>
               </div>
 
-              <label className="block text-sm text-[#6B5D4F] mb-2">Reason for cancellation *</label>
-              <textarea
-                value={appointmentCancelReason}
-                onChange={(e) => {
-                  setAppointmentCancelReason(e.target.value);
-                  if (appointmentCancelError) setAppointmentCancelError(null);
-                }}
-                rows={4}
-                placeholder="State why this appointment is being cancelled"
-                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors resize-none"
-                disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
-              />
+              <div style={{ marginBottom: '32px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: '800', color: '#9C8B7A', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
+                  Reason for Cancellation *
+                </label>
+                <textarea
+                  value={appointmentCancelReason}
+                  onChange={(e) => {
+                    setAppointmentCancelReason(e.target.value);
+                    if (appointmentCancelError) setAppointmentCancelError(null);
+                  }}
+                  rows={4}
+                  placeholder="State why this appointment is being cancelled"
+                  style={{
+                    width: '100%',
+                    padding: '16px 20px',
+                    borderRadius: '20px',
+                    border: '1px solid #E8DCC8',
+                    outline: 'none',
+                    fontSize: '14px',
+                    color: '#3D2B1F',
+                    backgroundColor: '#fff',
+                    transition: 'all 0.2s',
+                    resize: 'none'
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = '#D4AF37';
+                    e.currentTarget.style.boxShadow = '0 0 0 4px rgba(212, 175, 55, 0.1)';
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                  disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
+                />
+              </div>
 
               {appointmentCancelError && (
-                <p className="mt-3 text-sm text-red-600">{appointmentCancelError}</p>
+                <p style={{ color: '#b91c1c', fontSize: '13px', marginBottom: '24px', padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2' }}>
+                  {appointmentCancelError}
+                </p>
               )}
 
-              <div className="mt-6 flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
@@ -10941,15 +13010,48 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setAppointmentCancelReason('');
                     setAppointmentCancelError(null);
                   }}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium disabled:opacity-50"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
-                  Cancel
+                  Go Back
                 </button>
                 <button
                   type="button"
                   disabled={appointmentStatusUpdatingId === selectedCancelAppointment.id}
                   onClick={handleConfirmCancelAppointment}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-red-100 text-[#B86A6A] rounded-xl hover:bg-red-200 transition-colors font-semibold disabled:opacity-50"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#b91c1c',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(185, 28, 28, 0.2)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#991b1b';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#b91c1c';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
                   {appointmentStatusUpdatingId === selectedCancelAppointment.id ? 'Cancelling...' : 'Confirm Cancel'}
                 </button>
@@ -10960,11 +13062,36 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
         {/* Rental Follow Up Modal */}
         {showNotificationModal && selectedRental && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8">
-              <div className="flex justify-between items-start mb-6">
-                <h3 className="text-2xl font-light">Send Follow Up</h3>
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
+          >
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '460px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <h3 style={{ fontSize: '28px', fontWeight: '400', color: '#1a1a1a', fontFamily: 'serif' }}>
+                  Send Follow Up
+                </h3>
                 <button
+                  type="button"
                   onClick={() => {
                     setIsSendReminderConfirmOpen(false);
                     setIsReminderSentSuccessOpen(false);
@@ -10972,94 +13099,120 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     setSelectedRental(null);
                     setNotificationMethod('both');
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <div className="space-y-6">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
                 {notificationError && (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2', color: '#b91c1c', fontSize: '13px' }}>
                     {notificationError}
                   </div>
                 )}
 
-                {/* Rental Info */}
-                <div className="bg-[#FAF7F0] p-4 rounded-lg">
-                  <h4 className="font-medium mb-2">{selectedRental.gownName}</h4>
-                  <div className="space-y-1 text-sm text-[#6B5D4F]">
+                {/* Rental Info Card */}
+                <div 
+                  style={{ 
+                    backgroundColor: '#FAF7F0', 
+                    borderRadius: '20px', 
+                    padding: '24px',
+                    border: '1px solid #E8DCC8'
+                  }}
+                >
+                  <h4 style={{ fontSize: '18px', fontWeight: '700', color: '#1a1a1a', marginBottom: '8px' }}>
+                    {selectedRental.gownName}
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', color: '#6B5D4F', fontSize: '14px' }}>
                     <p>Customer: {selectedRental.customer}</p>
-                    <p>{selectedRental.status === 'pending' ? 'Status: Pending Rental Request' : `Due Date: ${selectedRental.dueDate}`}</p>
-                    {selectedRental.status === 'pending' && (
-                      <p>Requested End Date: {selectedRental.dueDate}</p>
-                    )}
+                    <p>
+                      {selectedRental.status === 'pending' 
+                        ? 'Status: Pending Rental Request' 
+                        : `Due Date: ${selectedRental.dueDate}`}
+                    </p>
                     {selectedRental.status === 'active' && selectedRental.daysLate > 0 && (
-                      <p className="text-red-600 font-medium">
+                      <p style={{ color: '#b91c1c', fontWeight: '600', marginTop: '4px' }}>
                         {selectedRental.daysLate} {selectedRental.daysLate === 1 ? 'day' : 'days'} late • ₱{(selectedRental.daysLate * RENTAL_LATE_FEE_PER_DAY).toLocaleString()} late fee
                       </p>
                     )}
                   </div>
                 </div>
 
-                {/* Notification Method */}
+                {/* Notification Method Selection */}
                 <div>
-                  <label className="block text-sm text-[#6B5D4F] mb-3">Select Notification Method</label>
-                  <p className="mb-3 text-xs text-[#8A7763]">Choose whether to send the follow up by SMS, email, or both.</p>
-                  <div className="space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => setNotificationMethod('sms')}
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
-                        notificationMethod === 'sms'
-                          ? 'border-[#D4AF37] bg-[#FAF7F0]'
-                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                      }`}
-                    >
-                      <MessageSquare className="w-5 h-5 text-[#D4AF37]" />
-                      <div className="text-left">
-                        <p className="font-medium">SMS Only</p>
-                        <p className="text-xs text-[#6B5D4F]">Send via text message</p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setNotificationMethod('email')}
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
-                        notificationMethod === 'email'
-                          ? 'border-[#D4AF37] bg-[#FAF7F0]'
-                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                      }`}
-                    >
-                      <Mail className="w-5 h-5 text-[#D4AF37]" />
-                      <div className="text-left">
-                        <p className="font-medium">Email Only</p>
-                        <p className="text-xs text-[#6B5D4F]">Send via email</p>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setNotificationMethod('both')}
-                      className={`w-full p-4 rounded-lg border-2 transition-colors flex items-center gap-3 ${
-                        notificationMethod === 'both'
-                          ? 'border-[#D4AF37] bg-[#FAF7F0]'
-                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                      }`}
-                    >
-                      <Send className="w-5 h-5 text-[#D4AF37]" />
-                      <div className="text-left">
-                        <p className="font-medium">SMS & Email</p>
-                        <p className="text-xs text-[#6B5D4F]">Send via both channels</p>
-                      </div>
-                    </button>
+                  <label style={{ display: 'block', fontSize: '15px', color: '#6B5D4F', marginBottom: '8px', fontWeight: '500' }}>
+                    Select Notification Method
+                  </label>
+                  <p style={{ fontSize: '13px', color: '#9C8B7A', marginBottom: '20px' }}>
+                    Choose whether to send the follow up by SMS, email, or both.
+                  </p>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {[
+                      { id: 'sms', label: 'SMS Only', desc: 'Send via text message', icon: MessageSquare },
+                      { id: 'email', label: 'Email Only', desc: 'Send via email', icon: Mail },
+                      { id: 'both', label: 'SMS & Email', desc: 'Send via both channels', icon: Send }
+                    ].map((method) => {
+                      const Icon = method.icon;
+                      const isSelected = notificationMethod === method.id;
+                      return (
+                        <button
+                          key={method.id}
+                          type="button"
+                          onClick={() => setNotificationMethod(method.id as any)}
+                          style={{
+                            width: '100%',
+                            padding: '16px 20px',
+                            borderRadius: '16px',
+                            border: `2px solid ${isSelected ? '#D4AF37' : '#E8DCC8'}`,
+                            backgroundColor: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '16px',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s',
+                            boxShadow: isSelected ? '0 4px 12px rgba(212, 175, 55, 0.1)' : 'none'
+                          }}
+                          onMouseOver={(e) => {
+                            if (!isSelected) e.currentTarget.style.borderColor = '#D4AF37';
+                          }}
+                          onMouseOut={(e) => {
+                            if (!isSelected) e.currentTarget.style.borderColor = '#E8DCC8';
+                          }}
+                        >
+                          <div style={{ 
+                            padding: '10px', 
+                            borderRadius: '12px', 
+                            backgroundColor: isSelected ? 'rgba(212, 175, 55, 0.1)' : '#FAF7F0',
+                            color: '#D4AF37'
+                          }}>
+                            <Icon style={{ width: '20px', height: '20px' }} />
+                          </div>
+                          <div style={{ textAlign: 'left' }}>
+                            <p style={{ fontSize: '15px', fontWeight: '700', color: '#1a1a1a' }}>{method.label}</p>
+                            <p style={{ fontSize: '12px', color: '#6B5D4F' }}>{method.desc}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex gap-3 pt-4">
+                {/* Footer Buttons */}
+                <div style={{ display: 'flex', gap: '16px', pt: '8px' }}>
                   <button
+                    type="button"
                     onClick={() => {
                       setIsSendReminderConfirmOpen(false);
                       setIsReminderSentSuccessOpen(false);
@@ -11068,17 +13221,61 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       setNotificationMethod('both');
                       setNotificationError(null);
                     }}
-                    className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                    style={{
+                      flex: 1,
+                      padding: '16px',
+                      backgroundColor: 'white',
+                      color: '#6B5D4F',
+                      borderRadius: '16px',
+                      border: '1px solid #E8DCC8',
+                      fontWeight: '700',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#FAF7F0';
+                      e.currentTarget.style.borderColor = '#1a1a1a';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = 'white';
+                      e.currentTarget.style.borderColor = '#E8DCC8';
+                    }}
                   >
                     Cancel
                   </button>
                   <button
+                    type="button"
                     onClick={handleSendNotification}
                     disabled={notificationSending}
-                    className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2"
+                    style={{
+                      flex: 1.2,
+                      padding: '16px',
+                      backgroundColor: '#1a1a1a',
+                      color: 'white',
+                      borderRadius: '16px',
+                      border: 'none',
+                      fontWeight: '700',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      boxShadow: '0 8px 20px rgba(0, 0, 0, 0.1)',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseOver={(e) => {
+                      e.currentTarget.style.backgroundColor = '#000';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                    }}
+                    onMouseOut={(e) => {
+                      e.currentTarget.style.backgroundColor = '#1a1a1a';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
                   >
-                    <Send className="w-5 h-5" />
-                    Send Follow Up
+                    <Send style={{ width: '18px', height: '18px' }} />
+                    {notificationSending ? 'Sending...' : 'Send Follow Up'}
                   </button>
                 </div>
               </div>
@@ -11087,69 +13284,136 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isSendReminderConfirmOpen && selectedRental && (
-          <div
-            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-            style={{ zIndex: 60 }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm send follow up"
-            onClick={() => {
-              setIsSendReminderConfirmOpen(false);
-              setShowNotificationModal(true);
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
             }}
           >
-            <div
-              className="bg-white rounded-2xl max-w-md w-full p-8 max-h-[90vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '440px',
+                width: '100%',
+                padding: '40px',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
             >
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="text-2xl font-light">Confirm Send Follow Up</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+                <div style={{ position: 'relative' }}>
+                  <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '4px' }}>
+                    Confirm Send
+                  </h3>
+                  <div style={{ height: '6px', width: '48px', backgroundColor: '#D4AF37', borderRadius: '100px' }}></div>
+                </div>
                 <button
                   type="button"
                   onClick={() => {
                     setIsSendReminderConfirmOpen(false);
                     setShowNotificationModal(true);
                   }}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
-                  aria-label="Close send reminder confirmation"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '24px', height: '24px' }} />
                 </button>
               </div>
 
-              <p className="text-sm text-[#6B5D4F] mb-4">
-                Follow up will be sent to {selectedRental.customer} via {notificationMethodText}.
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                A follow-up message will be sent to <span style={{ color: '#D4AF37', fontWeight: 'bold' }}>{selectedRental.customer}</span> via {notificationMethodText}.
               </p>
 
               {notificationError && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', borderRadius: '12px', border: '1px solid #fee2e2', color: '#b91c1c', fontSize: '13px', marginBottom: '24px' }}>
                   {notificationError}
                 </div>
               )}
 
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
-                <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-2">Message</p>
-                <p className="text-sm text-[#3D2B1F] leading-relaxed">{reminderMessage}</p>
+              <div 
+                style={{ 
+                  borderRadius: '24px', 
+                  border: '1px solid #E8DCC8', 
+                  backgroundColor: 'rgba(250, 247, 240, 0.5)', 
+                  padding: '24px', 
+                  marginBottom: '32px',
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                }}
+              >
+                <p style={{ fontSize: '10px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.15em', marginBottom: '16px' }}>Message Preview</p>
+                <p style={{ fontSize: '14px', color: '#3D2B1F', lineHeight: '1.6', fontStyle: 'italic' }}>
+                  "{reminderMessage}"
+                </p>
               </div>
 
-              <div className="flex gap-3">
+              <div style={{ display: 'flex', gap: '16px' }}>
                 <button
                   type="button"
                   onClick={() => {
                     setIsSendReminderConfirmOpen(false);
                     setShowNotificationModal(true);
                   }}
-                  className="flex-1 px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                  style={{
+                    flex: 1,
+                    padding: '16px',
+                    backgroundColor: '#FAF7F0',
+                    color: '#6B5D4F',
+                    borderRadius: '100px',
+                    border: '1px solid #E8DCC8',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#F2EADF'}
+                  onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#FAF7F0'}
                 >
-                  Cancel
+                  Go Back
                 </button>
                 <button
                   type="button"
                   onClick={handleConfirmSendNotification}
                   disabled={notificationSending}
-                  className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
+                  style={{
+                    flex: 1.2,
+                    padding: '16px',
+                    backgroundColor: '#1a1a1a',
+                    color: 'white',
+                    borderRadius: '100px',
+                    border: 'none',
+                    fontWeight: 'bold',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 10px 20px rgba(0, 0, 0, 0.1)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#000';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#1a1a1a';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                  }}
                 >
-                  {notificationSending ? 'Sending...' : 'Send Follow Up'}
+                  {notificationSending ? 'Sending...' : 'Confirm & Send'}
                 </button>
               </div>
             </div>
@@ -11157,27 +13421,77 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         )}
 
         {isReminderSentSuccessOpen && selectedRental && (
-          <div
-            className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-            style={{ zIndex: 60 }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Follow up sent"
-            onClick={handleDismissReminderSentSuccess}
+          <div 
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px'
+            }}
           >
-            <div
-              className="bg-white rounded-2xl max-w-md w-full p-8"
-              onClick={(e) => e.stopPropagation()}
+            <div 
+              style={{
+                backgroundColor: 'white',
+                borderRadius: '32px',
+                maxWidth: '400px',
+                width: '100%',
+                padding: '40px',
+                textAlign: 'center',
+                boxShadow: '0 25px 80px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(232, 220, 200, 0.3)'
+              }}
             >
-              <h3 className="text-2xl font-light mb-3">Follow Up Sent</h3>
-              <p className="text-sm text-[#6B5D4F] mb-6">
-                Follow up has been sent to {selectedRental.customer} via {notificationMethodText}.
+              <div style={{ 
+                width: '64px', 
+                height: '64px', 
+                backgroundColor: '#f0fdf4', 
+                borderRadius: '50%', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                margin: '0 auto 24px',
+                color: '#16a34a'
+              }}>
+                <Send style={{ width: '32px', height: '32px' }} />
+              </div>
+              
+              <h3 style={{ fontSize: '24px', fontWeight: '800', color: '#1a1a1a', marginBottom: '12px' }}>
+                Follow Up Sent
+              </h3>
+              
+              <p style={{ color: '#6B5D4F', marginBottom: '32px', lineHeight: '1.6', fontSize: '15px' }}>
+                Follow up has been sent to <span style={{ fontWeight: 'bold', color: '#1a1a1a' }}>{selectedRental.customer}</span> via {notificationMethodText}.
               </p>
 
               <button
                 type="button"
                 onClick={handleDismissReminderSentSuccess}
-                className="w-full px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors"
+                style={{
+                  width: '100%',
+                  padding: '16px',
+                  backgroundColor: '#1a1a1a',
+                  color: 'white',
+                  borderRadius: '100px',
+                  border: 'none',
+                  fontWeight: 'bold',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  boxShadow: '0 8px 20px rgba(0, 0, 0, 0.1)',
+                  transition: 'all 0.2s'
+                }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.backgroundColor = '#000';
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.backgroundColor = '#1a1a1a';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }}
               >
                 Okay
               </button>

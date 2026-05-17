@@ -11,7 +11,7 @@ import { isElevatedRole } from '../utils/roles.js';
 
 const MILLISECONDS_PER_DAY = 1000 * 60 * 60 * 24;
 const RENTAL_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
-const NON_ACTIVE_RENTAL_STATUSES = ['cancelled', 'completed'];
+const NON_ACTIVE_RENTAL_STATUSES = ['cancelled', 'completed', 'item_lost'];
 const RENTAL_AVAILABILITY_WINDOW_DAYS = 365;
 const EXPIRED_PENDING_RENTAL_REASON = 'Rental request was not approved in time.';
 
@@ -721,7 +721,7 @@ export async function updateRentalStatus(req, res) {
     const { status } = req.body;
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
 
-    const allowed = ['for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'cancelled', 'completed'];
+    const allowed = ['for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'cancelled', 'completed', 'item_lost'];
     if (!allowed.includes(status)) {
       return res.status(400).json({ message: 'Invalid status value.' });
     }
@@ -737,9 +737,10 @@ export async function updateRentalStatus(req, res) {
       for_payment: ['paid_for_confirmation', 'cancelled'],
       paid_for_confirmation: ['for_pickup', 'cancelled'],
       for_pickup: ['active', 'cancelled'],
-      active: ['completed', 'cancelled'],
+      active: ['completed', 'cancelled', 'item_lost'],
       completed: [],
       cancelled: [],
+      item_lost: [],
     };
 
     const next = allowedTransitions[rental.status] || [];
@@ -750,7 +751,8 @@ export async function updateRentalStatus(req, res) {
     }
 
     const requiresRejectionReason =
-      status === 'cancelled' && ['pending', 'for_payment', 'paid_for_confirmation'].includes(rental.status);
+      (status === 'cancelled' && ['pending', 'for_payment', 'paid_for_confirmation'].includes(rental.status)) ||
+      status === 'item_lost';
 
     if (requiresRejectionReason && !reason) {
       return res.status(400).json({ message: 'Rejection reason is required.' });
@@ -758,9 +760,21 @@ export async function updateRentalStatus(req, res) {
 
     const previousStatus = rental.status;
     rental.status = status;
-    if (status === 'cancelled') {
+    if (status === 'cancelled' || status === 'item_lost') {
       rental.rejectionReason = reason || rental.rejectionReason || null;
       rental.rejectedAt = new Date();
+
+      if (status === 'item_lost') {
+        const product = await ProductDetail.findById(rental.productId);
+        if (product) {
+          product.stock = Math.max(0, (product.stock || 1) - 1);
+          if (product.stock === 0) {
+            product.status = 'maintenance'; // Or some other appropriate status for out of stock/lost
+          }
+          await product.save();
+          emitAdminDashboardUpdate({ entity: 'inventory', action: 'stock-updated', id: String(product._id) });
+        }
+      }
     }
 
     await rental.save();
@@ -780,7 +794,7 @@ export async function updateRentalStatus(req, res) {
           status,
           name: rental.customerName || '',
           itemOrServiceOrDesign: rental.gownName || 'Rental Item',
-          cancellationReason: status === 'cancelled' ? rental.rejectionReason || '' : '',
+          cancellationReason: (status === 'cancelled' || status === 'item_lost') ? rental.rejectionReason || '' : '',
           date: rental.pickupScheduleDate
             ? new Date(rental.pickupScheduleDate).toISOString().slice(0, 10)
             : '',

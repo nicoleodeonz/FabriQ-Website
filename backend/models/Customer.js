@@ -63,6 +63,10 @@ const CustomerAccountSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  mustChangePassword: {
+    type: Boolean,
+    default: false
+  },
   status: {
     type: String,
     enum: ['pending_verification', 'active', 'archived'],

@@ -164,6 +164,7 @@ export async function createUser(req, res) {
               preferredBranch: normalizedPreferredBranch,
             }
           : {}),
+        mustChangePassword: true,
         status: 'active'
       });
 
@@ -230,6 +231,7 @@ export async function createUser(req, res) {
       email: normalizedEmail,
       password: resolvedPassword,
       phoneNumber: normalizedPhone,
+      mustChangePassword: true,
       status: 'active'
     });
 

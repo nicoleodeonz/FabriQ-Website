@@ -11,6 +11,7 @@ interface AuthResponse {
     phoneNumber?: string;
     phoneVerified?: boolean;
     phoneVerifiedAt?: string | null;
+    mustChangePassword?: boolean;
   };
 }
 

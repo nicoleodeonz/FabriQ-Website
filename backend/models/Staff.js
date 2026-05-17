@@ -62,6 +62,10 @@ const StaffAccountSchema = new mongoose.Schema({
     enum: ['active', 'archived'],
     default: 'active'
   },
+  mustChangePassword: {
+    type: Boolean,
+    default: false
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

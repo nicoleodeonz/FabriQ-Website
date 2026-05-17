@@ -1,5 +1,5 @@
 import { X, Eye, EyeOff } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { authAPI } from '../services/authAPI';
 
@@ -335,6 +335,23 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     password: getFieldErrors('password', passwordValue, passwordValue),
     confirmPassword: isSignUp ? getFieldErrors('confirmPassword', confirmPassword, passwordValue) : [],
   });
+
+  const isSignUpFormValid = useMemo(() => {
+    if (!isSignUp) return email.trim().length > 0 && password.length > 0;
+
+    const nextErrors = buildErrors(password);
+    const hasErrors = Object.values(nextErrors).some((arr) => arr.length > 0);
+
+    return (
+      !hasErrors &&
+      firstName.trim().length > 0 &&
+      lastName.trim().length > 0 &&
+      email.trim().length > 0 &&
+      password.length > 0 &&
+      confirmPassword.length > 0 &&
+      isPhoneVerified
+    );
+  }, [isSignUp, email, password, firstName, lastName, confirmPassword, isPhoneVerified, buildErrors]);
 
   const handleFirstNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFirstName(e.target.value);
@@ -852,17 +869,19 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                   )}
                   <button
                     type="submit"
-                    disabled={isSubmitting || (isSignUp && !isPhoneVerified)}
+                    disabled={isSubmitting || (isSignUp && !isSignUpFormValid)}
                     className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
-                      isSubmitting || (isSignUp && !isPhoneVerified) ? 'opacity-50 cursor-not-allowed' : ''
+                      isSubmitting || (isSignUp && !isSignUpFormValid) ? 'opacity-50 cursor-not-allowed' : ''
                     }`}
                   >
                     {isSubmitting
                       ? 'Processing…'
                       : isSignUp
-                        ? isPhoneVerified
+                        ? isSignUpFormValid
                           ? 'Send Verification Code'
-                          : 'Verify Phone Number First'
+                          : isPhoneVerified
+                            ? 'Complete All Fields'
+                            : 'Verify Phone Number First'
                         : 'Sign in'}
                   </button>
                 </>
@@ -966,7 +985,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                   type="checkbox"
                   checked={hasAcceptedTerms}
                   onChange={(event) => setHasAcceptedTerms(event.target.checked)}
-                  disabled={isSubmitting || !hasScrolledTermsToBottom}
+                  disabled={isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid}
                   className="mt-1 h-4 w-4 accent-[#1A1A1A]"
                 />
                 <span className="text-sm italic leading-6 text-[#3D2B1F] underline underline-offset-2">
@@ -992,13 +1011,13 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                   <button
                     type="button"
                     onClick={() => void submitSignUpRequest()}
-                    disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified}
+                    disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid}
                     className={`w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-colors ${
-                      isSubmitting || !hasAcceptedTerms || !isPhoneVerified ? 'cursor-not-allowed opacity-50' : ''
+                      isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 'cursor-not-allowed opacity-50' : ''
                     }`}
                     style={{ backgroundColor: '#1A1A1A', color: '#FFFFFF' }}
                   >
-                    {isSubmitting ? 'Sending Verification Code…' : isPhoneVerified ? 'Continue' : 'Verify Phone First'}
+                    {isSubmitting ? 'Sending Verification Code…' : isSignUpFormValid ? 'Continue' : 'Complete Form First'}
                   </button>
                 </div>
               </div>

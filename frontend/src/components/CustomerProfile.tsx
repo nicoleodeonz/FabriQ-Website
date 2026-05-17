@@ -43,11 +43,11 @@ interface OrderHistory {
 }
 
 type HistoryTypeFilter = 'all' | OrderHistory['type'];
-type HistoryStatusFilter = 'all' | 'Completed' | 'Cancelled' | 'Upcoming' | 'Pending';
+type HistoryStatusFilter = 'all' | 'Completed' | 'Cancelled' | 'Upcoming' | 'Pending' | 'Item Lost';
 
 const HISTORY_PAGE_SIZE = 4;
 const HISTORY_TYPE_FILTER_OPTIONS: Exclude<HistoryTypeFilter, 'all'>[] = ['Rental', 'Appointment'];
-const HISTORY_STATUS_FILTER_OPTIONS: Exclude<HistoryStatusFilter, 'all'>[] = ['Completed', 'Cancelled', 'Upcoming', 'Pending'];
+const HISTORY_STATUS_FILTER_OPTIONS: Exclude<HistoryStatusFilter, 'all'>[] = ['Completed', 'Cancelled', 'Upcoming', 'Pending', 'Item Lost'];
 
 interface CustomerProfileProps {
   onLogout: () => void;
@@ -1227,7 +1227,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                 item.status === 'Completed'
                   ? 'bg-green-100 text-green-800'
-                  : item.status === 'Cancelled'
+                  : (item.status === 'Cancelled' || item.status === 'Item Lost')
                     ? 'bg-red-100 text-red-700'
                     : 'bg-blue-100 text-blue-800'
               }`}>
@@ -1715,7 +1715,7 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
                     </span>
                   </div>
                 )}
-                {selectedHistoryRental.status === 'cancelled' && selectedHistoryRental.rejectionReason && (
+                {(selectedHistoryRental.status === 'cancelled' || selectedHistoryRental.status === 'item_lost') && selectedHistoryRental.rejectionReason && (
                   <div className="flex justify-between gap-4">
                     <span className="text-[#6B5D4F]">Rejection Reason</span>
                     <span className="text-right font-medium text-black">{selectedHistoryRental.rejectionReason}</span>

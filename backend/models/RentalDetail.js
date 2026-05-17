@@ -78,7 +78,7 @@ const RentalDetailSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'completed', 'cancelled'],
+    enum: ['pending', 'for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'completed', 'cancelled', 'item_lost'],
     default: 'pending',
   },
   totalPrice: {

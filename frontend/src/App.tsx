@@ -11,6 +11,7 @@ import { Footer } from './components/Footer';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { ForgotPasswordModal } from './components/ForgotPasswordModal';
+import { ChangePasswordModal } from './components/ChangePasswordModal.tsx';
 import type { GownDetails } from './components/GownDetailsModal';
 import { authAPI } from './services/authAPI';
 import { customerAPI } from './services/customerAPI';
@@ -93,6 +94,7 @@ type CurrentUser = {
   phoneNumber?: string;
   phoneVerified?: boolean;
   phoneVerifiedAt?: string | null;
+  mustChangePassword?: boolean;
 };
 
 function readStoredAuth() {
@@ -119,6 +121,7 @@ function readStoredAuth() {
       phoneNumber: parsedUser.phoneNumber ? String(parsedUser.phoneNumber).trim() : undefined,
       phoneVerified: Boolean(parsedUser.phoneVerified),
       phoneVerifiedAt: parsedUser.phoneVerifiedAt ? String(parsedUser.phoneVerifiedAt) : null,
+      mustChangePassword: parsedUser.mustChangePassword === true,
     };
 
     if (!user.id || !user.email || !user.role) {
@@ -216,6 +219,7 @@ export default function App() {
   const [showAuth, setShowAuth] = useState(false);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showForceChangePasswordModal, setShowForceChangePasswordModal] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
   const favoriteGownsRef = useRef<FavoriteGown[]>([]);
 
@@ -467,6 +471,10 @@ export default function App() {
     setShowAuth(false);
     setPendingView(null);
     setAppView('home', { history: 'replace', selectedGownId: null });
+
+    if (user.mustChangePassword) {
+      setShowForceChangePasswordModal(true);
+    }
   };
 
   const handleSignIn = async (email: string, password: string) => {
@@ -526,6 +534,20 @@ export default function App() {
     if (message) {
       toast.success(message);
     }
+  };
+
+  const handleForcePasswordChange = async (currentPassword: string, newPassword: string) => {
+    if (!authToken) {
+      throw new Error('Unable to change password without an active session.');
+    }
+
+    const result = await authAPI.changePassword(authToken, {
+      currentPassword,
+      newPassword,
+    });
+
+    setShowForceChangePasswordModal(false);
+    handleForceReauth(result.message);
   };
 
   const loadFavoriteGowns = async (token: string) => {
@@ -642,7 +664,7 @@ export default function App() {
     const recordId = String(notification.metadata?.recordId || '').trim();
     const notificationTitle = String(notification.title || '').trim().toLowerCase();
     const notificationItemLabel = String(notification.itemLabel || '').trim().toLowerCase();
-    const isHistoricalRentalNotification = notification.status === 'completed' || notification.status === 'cancelled';
+    const isHistoricalRentalNotification = notification.status === 'completed' || notification.status === 'cancelled' || notification.status === 'item_lost';
     const isHistoricalAppointmentNotification = notification.status === 'completed' || notification.status === 'cancelled';
     const isHistoricalBespokeNotification = notification.status === 'completed' || notification.status === 'rejected';
     const isPhoneVerifiedNotification =
@@ -819,6 +841,15 @@ export default function App() {
           setShowForgotPassword(false);
           setShowAuth(true);
         }}
+      />
+
+      <ChangePasswordModal
+        isOpen={showForceChangePasswordModal}
+        isForced
+        userRole={currentUser?.role}
+        onSubmit={handleForcePasswordChange}
+        onLogout={handleLogout}
+        onClose={() => setShowForceChangePasswordModal(false)}
       />
 
       <Toaster />
