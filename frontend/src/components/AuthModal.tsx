@@ -980,13 +980,17 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                 </div>
               </div>
 
-              <label className="flex items-start gap-3 rounded-md border border-[#D8CCBA] bg-[#F2EBE0] px-4 py-3 text-left">
+              <label className={`flex items-start gap-3 rounded-md border px-4 py-3 text-left transition-all ${
+                isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid
+                  ? 'border-[#E8DCC8] bg-[#FAF7F0] opacity-50'
+                  : 'border-[#D8CCBA] bg-[#F2EBE0]'
+              }`}>
                 <input
                   type="checkbox"
                   checked={hasAcceptedTerms}
                   onChange={(event) => setHasAcceptedTerms(event.target.checked)}
                   disabled={isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid}
-                  className="mt-1 h-4 w-4 accent-[#1A1A1A]"
+                  className="mt-1 h-4 w-4 accent-[#1A1A1A] disabled:opacity-50"
                 />
                 <span className="text-sm italic leading-6 text-[#3D2B1F] underline underline-offset-2">
                   I agree to the terms, conditions, and policies stated above
@@ -1012,10 +1016,13 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                     type="button"
                     onClick={() => void submitSignUpRequest()}
                     disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid}
-                    className={`w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-colors ${
-                      isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 'cursor-not-allowed opacity-50' : ''
-                    }`}
-                    style={{ backgroundColor: '#1A1A1A', color: '#FFFFFF' }}
+                    className="w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-opacity"
+                    style={{
+                      backgroundColor: '#1A1A1A',
+                      color: '#FFFFFF',
+                      opacity: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 0.5 : 1,
+                      cursor: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 'not-allowed' : 'pointer'
+                    }}
                   >
                     {isSubmitting ? 'Sending Verification Code…' : isSignUpFormValid ? 'Continue' : 'Complete Form First'}
                   </button>
