@@ -11596,7 +11596,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       <Users style={{ width: '16px', height: '16px', opacity: 0.6 }} />
                       <span style={{ fontSize: '14px', fontWeight: '500' }}>{selectedCustomOrder.customerName}</span>
                     </div>
-                    <div style={{ pt: '4px' }}>
+                    <div style={{ paddingTop: '4px' }}>
                       <p style={{ fontSize: '9px', color: '#9C8B7A', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '4px' }}>Reference ID</p>
                       <p style={{ fontSize: '13px', fontWeight: '600', color: '#3D2B1F', fontFamily: 'monospace' }}>{selectedCustomOrder.referenceId || selectedCustomOrder.id || selectedCustomOrder._id || 'N/A'}</p>
                     </div>
@@ -12650,7 +12650,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{getAppointmentTypeLabel(selectedPendingAppointment.type)}</p>
                     <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedPendingAppointment.customerName}</p>
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', pt: '4px', borderTop: '1px solid #E8DCC8/30' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', paddingTop: '4px', borderTop: '1px solid #E8DCC8/30' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
                       <Calendar style={{ width: '14px', height: '14px', opacity: 0.6 }} />
                       <span style={{ fontSize: '13px' }}>{selectedPendingAppointment.date}</span>
@@ -12802,7 +12802,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     <p style={{ fontWeight: '700', fontSize: '18px', color: '#3D2B1F' }}>{getAppointmentTypeLabel(selectedScheduledAppointment.type)}</p>
                     <p style={{ fontSize: '14px', fontWeight: '500', color: '#6B5D4F' }}>Customer: {selectedScheduledAppointment.customerName}</p>
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', pt: '4px', borderTop: '1px solid #E8DCC8/30' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', paddingTop: '4px', borderTop: '1px solid #E8DCC8/30' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#6B5D4F' }}>
                       <Calendar style={{ width: '14px', height: '14px', opacity: 0.6 }} />
                       <span style={{ fontSize: '13px' }}>{selectedScheduledAppointment.date}</span>
@@ -13210,7 +13210,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 </div>
 
                 {/* Footer Buttons */}
-                <div style={{ display: 'flex', gap: '16px', pt: '8px' }}>
+                <div style={{ display: 'flex', gap: '16px', paddingTop: '8px' }}>
                   <button
                     type="button"
                     onClick={() => {
