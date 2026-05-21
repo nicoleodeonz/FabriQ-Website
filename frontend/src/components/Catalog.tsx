@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, Heart, Calendar, MapPin, Star } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { GownDetailsModal } from './GownDetailsModal';
-import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
+import { getPublicInventory, INVENTORY_UPDATED_EVENT, recordGownClick } from '../services/inventoryAPI';
 import type { InventoryItem, InventoryRating } from '../services/inventoryAPI';
 
 type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin';
@@ -338,7 +338,10 @@ export function Catalog({ setCurrentView, initialCategory, isLoggedIn, isAdmin, 
             <div
               key={gown.id}
               className="group bg-white overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => setSelectedGown(gown)}
+              onClick={() => {
+                recordGownClick(gown.id).catch(err => console.error('Failed to record gown click:', err));
+                setSelectedGown(gown);
+              }}
             >
               {/* Image Container */}
               <div className="relative aspect-[3/4] overflow-hidden bg-[#F5F1E8]">

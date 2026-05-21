@@ -7,7 +7,7 @@ import autoTable from 'jspdf-autotable';
 import { Bar } from 'react-chartjs-2';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
-import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
+import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary, BranchClickAnalysisItem } from '../services/inventoryAPI';
 import { GownDetailsModal } from './GownDetailsModal';
 import type { GownDetails } from './GownDetailsModal';
 import * as usersAPI from '../services/usersAPI';
@@ -308,6 +308,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   
   // Inventory State
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [branchClickAnalysis, setBranchClickAnalysis] = useState<BranchClickAnalysisItem[]>([]);
+  const [branchClickAnalysisLoading, setBranchClickAnalysisLoading] = useState(false);
   const [branchStats, setBranchStats] = useState<BranchPerformanceStats[]>([]);
   const [branchSummary, setBranchSummary] = useState<BranchPerformanceSummary>({
     totalProducts: 0,
@@ -610,6 +612,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   // Load inventory from DB on mount
   useEffect(() => {
     loadInventory();
+    loadBranchClickAnalysis();
     loadUsers();
     loadAdminRentals();
     loadAdminAppointments();
@@ -790,6 +793,18 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       setInventoryError(err instanceof Error ? err.message : 'Failed to load inventory');
     } finally {
       setInventoryLoading(false);
+    }
+  }
+
+  async function loadBranchClickAnalysis() {
+    setBranchClickAnalysisLoading(true);
+    try {
+      const analysis = await inventoryAPI.getBranchClickAnalysis(token);
+      setBranchClickAnalysis(analysis);
+    } catch (err) {
+      console.error('Failed to load branch click analysis:', err);
+    } finally {
+      setBranchClickAnalysisLoading(false);
     }
   }
 
@@ -2805,6 +2820,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       ...item,
       fill: rentedItemPalette[index % rentedItemPalette.length],
     }));
+  const mostClickedItems = inventory
+    .filter((item) => matchesSelectedBranch(item.branch, selectedBranch))
+    .map((item) => ({
+      name: item.name,
+      count: item.clickCount || 0,
+      inventoryItem: item,
+    }))
+    .slice()
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, 5)
+    .map((item, index) => ({
+      ...item,
+      fill: rentedItemPalette[index % rentedItemPalette.length],
+    }));
   const itemsPerCategory = useMemo(() => (
     Object.entries(
       inventory.reduce<Record<string, number>>((counts, item) => {
@@ -3061,6 +3090,90 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
     },
   }), [leastRentedItems]);
+  const mostClickedItemsChartData = useMemo(() => ({
+    labels: mostClickedItems.map((item) => item.name),
+    datasets: [
+      {
+        label: 'Clicks',
+        data: mostClickedItems.map((item) => item.count),
+        backgroundColor: mostClickedItems.map((item) => item.fill),
+        borderRadius: 10,
+        borderSkipped: false as const,
+        maxBarThickness: 26,
+      },
+    ],
+  }), [mostClickedItems]);
+  const mostClickedItemsChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: (_event, elements) => {
+      const clickedIndex = elements[0]?.index;
+      if (clickedIndex === undefined) return;
+
+      const selectedItem = mostClickedItems[clickedIndex]?.inventoryItem;
+      if (selectedItem) {
+        setHoverPreviewItem(selectedItem);
+      }
+    },
+    onHover: (event, elements) => {
+      const target = event.native?.target;
+      if (target instanceof HTMLCanvasElement) {
+        target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      }
+    },
+    plugins: {
+      legend: {
+        display: false,
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          title: (items: TooltipItem<'bar'>[]) => `Item: ${items[0]?.label || ''}`,
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} click${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        grid: {
+          color: '#E8DCC8',
+          borderDash: [4, 4],
+        },
+        border: {
+          display: false,
+        },
+        ticks: {
+          color: '#6B5D4F',
+          precision: 0,
+          font: {
+            size: 12,
+          },
+        },
+      },
+      y: {
+        grid: {
+          display: false,
+        },
+        border: {
+          color: '#E8DCC8',
+        },
+        ticks: {
+          color: '#6B5D4F',
+          font: {
+            size: 12,
+          },
+        },
+      },
+    },
+  }), [mostClickedItems]);
   const salesThisWeek = adminRentals
     .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, currentWeekStart, now))
     .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
@@ -3554,6 +3667,114 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         image,
       };
     };
+    const renderMostClickedItemsChartImage = (
+      items: Array<{ name: string; count: number; fill: string }>
+    ) => {
+      if (items.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: items.map((item) => item.name),
+          datasets: [
+            {
+              label: 'Clicks',
+              data: items.map((item) => item.count),
+              backgroundColor: items.map((item) => item.fill),
+              borderRadius: 12,
+              borderSkipped: false,
+              maxBarThickness: 44,
+            },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: {
+              display: false,
+            },
+            tooltip: {
+              enabled: false,
+            },
+          },
+          layout: {
+            padding: {
+              top: 18,
+              right: 20,
+              bottom: 8,
+              left: 8,
+            },
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              grid: {
+                color: '#D8C7AE',
+                lineWidth: 1.5,
+              },
+              border: {
+                display: false,
+              },
+              ticks: {
+                color: '#6B5D4F',
+                precision: 0,
+                font: {
+                  size: 20,
+                },
+              },
+            },
+            y: {
+              grid: {
+                display: false,
+              },
+              border: {
+                color: '#D8C7AE',
+              },
+              ticks: {
+                color: '#6B5D4F',
+                font: {
+                  size: 20,
+                },
+              },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-most-clicked-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: 'Most Clicked Items',
+        narrativeTitle: 'Most Clicked Items',
+        image,
+      };
+    };
     const renderItemsPerCategoryChartImage = (items: Array<{ category: string; count: number; fill: string }>) => {
       if (items.length === 0) {
         return null;
@@ -3795,6 +4016,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       })
       .sort((left, right) => left.count - right.count || left.name.localeCompare(right.name))
       .slice(0, 5);
+    const mostClickedItemsForExport = inventory
+      .filter((item) => matchesStoreOverviewExportBranch(item.branch))
+      .map((item, index) => ({
+        name: item.name,
+        count: item.clickCount || 0,
+        fill: ['#D4AF37', '#B86A6A', '#6E8B78', '#7A8FB3', '#A27F5D'][index % 5],
+      }))
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+      .slice(0, 5);
     const itemsPerCategoryForExport = inventory
       .filter((item) => matchesStoreOverviewExportBranch(item.branch))
       .reduce<Record<string, number>>((counts, item) => {
@@ -3866,6 +4096,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         createNarrativeChart('Items per Category', itemsPerCategoryChartItemsForExport.map((entry) => ({ label: entry.category, value: entry.count }))),
         createNarrativeChart('Most Rented Items', mostRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
         createNarrativeChart('Least Rented Items', leastRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
+        createNarrativeChart('Most Clicked Items', mostClickedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
       ],
     };
     const narrative = await requestAnalyticsNarrative(reportPayload);
@@ -3907,6 +4138,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     });
     if (leastRentedChartImage) {
       chartImages.push(leastRentedChartImage);
+    }
+    const mostClickedChartImage = renderMostClickedItemsChartImage(mostClickedItemsForExport);
+    if (mostClickedChartImage) {
+      chartImages.push(mostClickedChartImage);
     }
 
     pdfDocument.setFont('times', 'normal');
@@ -6217,6 +6452,101 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       </div>
                     </div>
                   )}
+                </div>
+
+                <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Most Clicked Items</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        Top five clicked items in the catalog.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {mostClickedItems.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Bar data={mostClickedItemsChartData} options={mostClickedItemsChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No click data is available for the most clicked items chart yet.</p>
+                    )}
+                  </div>
+                  {mostClickedItems.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-3" style={{ marginTop: '20px' }}>
+                      <p className="text-sm font-medium text-[#6B5D4F]">View Items:</p>
+                      <div className="flex flex-wrap gap-3" style={{ marginLeft: '12px' }}>
+                        {mostClickedItems.map((item) => (
+                          <button
+                            key={item.name}
+                            type="button"
+                            onClick={() => {
+                              if (item.inventoryItem) {
+                                setHoverPreviewItem(item.inventoryItem);
+                              }
+                            }}
+                            disabled={!item.inventoryItem}
+                            className="rounded-full border border-[#E8DCC8] bg-white px-4 py-2 text-sm text-[#3D2B1F] transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0] disabled:cursor-default disabled:opacity-60"
+                          >
+                            {item.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex items-start justify-between gap-6">
+                    <div>
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Branch Click Analysis</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">
+                        See which gowns get clicks from customers of other branches (possible relocation suggestions).
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {branchClickAnalysisLoading ? (
+                      <p className="text-sm text-[#6B5D4F]">Loading branch click analysis...</p>
+                    ) : branchClickAnalysis.length > 0 ? (
+                      <div className="space-y-4">
+                        {branchClickAnalysis.map((item, index) => (
+                          <div key={item.gownName} className="bg-white rounded-xl border border-[#E8DCC8] p-4">
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <p className="font-medium text-[#1A1A1A]">{item.gownName}</p>
+                                <p className="text-sm text-[#6B5D4F]">
+                                  Currently at: <span className="font-medium">{item.gownBranch}</span>
+                                </p>
+                                <p className="text-sm text-[#6B5D4F]">
+                                  <span className="text-[#D4AF37] font-medium">{item.mismatchedClicks}</span> clicks from other branches
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs text-[#6B5D4F] mb-2">Customer Branch Clicks:</p>
+                                <div className="flex flex-wrap gap-2 justify-end">
+                                  {Object.entries(item.customerBranchClicks).map(([branch, count]) => (
+                                    <span
+                                      key={branch}
+                                      className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                        branch === item.gownBranch
+                                          ? 'bg-[#E8DCC8] text-[#1A1A1A]'
+                                          : 'bg-[#D4AF37] text-white'
+                                      }`}
+                                    >
+                                      {branch}: {count}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No branch click analysis data available yet (needs customer clicks with preferred branch).</p>
+                    )}
+                  </div>
                 </div>
               </>
             )}

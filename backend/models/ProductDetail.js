@@ -109,6 +109,11 @@ const ProductDetailSchema = new mongoose.Schema({
     min: 0,
     default: 1
   },
+  clickCount: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
   deletedAt: {
     type: Date,
     default: null

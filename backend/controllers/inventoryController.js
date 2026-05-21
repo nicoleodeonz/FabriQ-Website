@@ -2,6 +2,8 @@ import ProductDetail from '../models/ProductDetail.js';
 import Review from '../models/Review.js';
 import AdminAction from '../models/AdminAction.js';
 import RentalDetail from '../models/RentalDetail.js';
+import CustomerBehavior from '../models/CustomerBehavior.js';
+import CustomerAccount from '../models/Customer.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { storeUploadedAsset, storeUploadedImage } from '../services/mediaStorageService.js';
@@ -97,6 +99,10 @@ function normalizeProductResponse(req, product) {
     ? plainProduct.images.map((entry) => toPublicUrl(req, entry)).filter(Boolean)
     : (plainProduct.image ? [plainProduct.image] : []);
   plainProduct.model3dUrl = toPublicUrl(req, plainProduct.model3dUrl);
+  
+  if (plainProduct.clickCount === undefined || plainProduct.clickCount === null) {
+    plainProduct.clickCount = 0;
+  }
 
   return plainProduct;
 }
@@ -710,5 +716,100 @@ export async function restoreProduct(req, res) {
   } catch (err) {
     console.error('restoreProduct error:', err);
     res.status(500).json({ message: 'Failed to restore product' });
+  }
+}
+
+export async function recordClick(req, res) {
+  try {
+    const { gownId } = req.params;
+    const gown = await ProductDetail.findById(gownId);
+    if (!gown) {
+      return res.status(404).json({ message: 'Gown not found' });
+    }
+
+    let customerBranchPreference = null;
+    let customerId = null;
+
+    if (req.user && req.user.role === 'customer') {
+      const customer = await CustomerAccount.findById(req.user.id);
+      if (customer) {
+        customerBranchPreference = customer.preferredBranch;
+        customerId = req.user.id;
+      }
+    }
+
+    await CustomerBehavior.create({
+      customerId,
+      gownId: gown._id,
+      gownName: gown.name,
+      gownBranch: gown.branch,
+      customerBranchPreference,
+      action: 'click',
+      timestamp: new Date()
+    });
+
+    await ProductDetail.findByIdAndUpdate(
+      gownId,
+      { $inc: { clickCount: 1 }, updatedAt: new Date() },
+      { new: true }
+    );
+
+    res.json({ success: true, message: 'Click recorded' });
+  } catch (err) {
+    console.error('recordClick error:', err);
+    res.status(500).json({ message: 'Failed to record click' });
+  }
+}
+
+export async function getBranchClickAnalysis(req, res) {
+  try {
+    if (!isElevatedRole(req.user.role)) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const behaviors = await CustomerBehavior.find({
+      action: 'click',
+      customerBranchPreference: { $ne: null }
+    }).lean();
+
+    const analysis = behaviors.reduce((acc, behavior) => {
+      const gownName = behavior.gownName;
+      const gownBranch = behavior.gownBranch;
+      const customerBranch = behavior.customerBranchPreference;
+
+      if (!acc[gownName]) {
+        acc[gownName] = {
+          gownName,
+          gownBranch,
+          customerBranchClicks: {}
+        };
+      }
+
+      if (!acc[gownName].customerBranchClicks[customerBranch]) {
+        acc[gownName].customerBranchClicks[customerBranch] = 0;
+      }
+
+      acc[gownName].customerBranchClicks[customerBranch]++;
+
+      return acc;
+    }, {});
+
+    const analysisArray = Object.values(analysis)
+      .map(item => {
+        const mismatchedClicks = Object.entries(item.customerBranchClicks)
+          .filter(([branch]) => branch !== item.gownBranch)
+          .reduce((sum, [, count]) => sum + count, 0);
+        return {
+          ...item,
+          mismatchedClicks
+        };
+      })
+      .sort((a, b) => b.mismatchedClicks - a.mismatchedClicks)
+      .slice(0, 10);
+
+    res.json({ analysis: analysisArray });
+  } catch (err) {
+    console.error('getBranchClickAnalysis error:', err);
+    res.status(500).json({ message: 'Failed to get branch click analysis' });
   }
 }

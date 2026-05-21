@@ -12,13 +12,17 @@ import {
   deleteProduct,
   restoreProduct,
   uploadImage,
-  upload3DModel
+  upload3DModel,
+  recordClick,
+  getBranchClickAnalysis
 } from '../controllers/inventoryController.js';
 import { upload, upload3DModel as upload3DModelFile } from '../config/upload.js';
 
 const router = express.Router();
 
 router.get('/public', getPublicInventory);
+router.post('/:gownId/click', recordClick);
+router.get('/branch-click-analysis', authenticate, getBranchClickAnalysis);
 router.get('/', authenticate, getInventory);
 router.get('/archive', authenticate, getArchivedProducts);
 router.get('/branch-performance', authenticate, getBranchPerformance);

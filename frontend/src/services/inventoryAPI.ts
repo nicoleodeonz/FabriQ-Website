@@ -29,6 +29,7 @@ export interface InventoryItem {
   rating?: number;
   ratings?: InventoryRating[];
   stock?: number;
+  clickCount?: number;
   deletedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -210,4 +211,39 @@ export async function upload3DModel(token: string, file: File): Promise<string> 
   }
 
   return String(uploadData?.secure_url || uploadData?.url || '');
+}
+
+export interface BranchClickAnalysisItem {
+  gownName: string;
+  gownBranch: string;
+  customerBranchClicks: Record<string, number>;
+  mismatchedClicks: number;
+}
+
+export async function recordGownClick(gownId: string): Promise<void> {
+  const url = `${API_BASE}/${gownId}/click`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+  const data = await parseJsonSafe(res);
+  if (!res.ok) {
+    throw new Error(data?.message || `Failed to record click: ${res.status}`);
+  }
+}
+
+export async function getBranchClickAnalysis(token: string): Promise<BranchClickAnalysisItem[]> {
+  const url = `${API_BASE}/branch-click-analysis`;
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
+  const data = await parseJsonSafe(res);
+  if (!res.ok) {
+    throw new Error(data?.message || `Failed to get branch click analysis: ${res.status}`);
+  }
+  return data?.analysis || [];
 }
