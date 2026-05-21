@@ -15,6 +15,7 @@
     "migrate:cloudinary-rental-receipts": "node migrate_rental_receipts_to_cloudinary.js"
   },
   "dependencies": {
+    "axios": "^1.16.1",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.9.0",
     "cors": "^2.8.5",

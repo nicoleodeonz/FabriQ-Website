@@ -8,6 +8,7 @@ import { sendNotificationAcrossChannels } from '../services/messageDeliveryServi
 import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { toPublicUrl } from '../utils/media.js';
 import { isElevatedRole } from '../utils/roles.js';
+import { createPaymentLink, retrievePaymentLink, getPaymentsByPaymentLinkId, retrieveCheckoutSession, retrievePaymentIntent } from '../services/paymongoService.js';
 
 const MILLISECONDS_PER_DAY = 1000 * 60 * 60 * 24;
 const RENTAL_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
@@ -503,6 +504,170 @@ export async function submitRentalPayment(req, res) {
   } catch (error) {
     console.error('submitRentalPayment error:', error);
     return res.status(500).json({ message: 'Failed to submit payment.' });
+  }
+}
+
+export async function createPaymongoPaymentLink(req, res) {
+  try {
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can create payment links.' });
+    }
+
+    const { id } = req.params;
+    const { successUrl, cancelUrl } = req.body || {};
+
+    const rental = await RentalDetail.findOne({ _id: id, customerId: req.user.id });
+
+    if (!rental) {
+      return res.status(404).json({ message: 'Rental not found.' });
+    }
+
+    if (rental.status !== 'for_payment') {
+      return res.status(400).json({ message: `Payment cannot be created while rental is ${rental.status}.` });
+    }
+
+    const paymentAmount = Math.max(0, Number(rental.totalPrice || 0) - Number(rental.downpayment || 0));
+    const description = `Payment for ${rental.gownName} (${rental.referenceId || rental._id})`;
+    
+    const result = await createPaymentLink({
+      amount: paymentAmount,
+      description,
+      referenceNumber: String(rental.referenceId || rental._id),
+      successUrl: successUrl || `${req.protocol}://${req.get('host')}/payment/success`,
+      cancelUrl: cancelUrl || `${req.protocol}://${req.get('host')}/payment/cancel`,
+    });
+
+    if (!result.success) {
+      return res.status(500).json({ message: result.error });
+    }
+
+    return res.json({
+      success: true,
+      paymentLinkUrl: result.paymentLinkUrl,
+      paymentLinkId: result.paymentLinkId,
+    });
+  } catch (error) {
+    console.error('createPaymongoPaymentLink error:', error);
+    return res.status(500).json({ message: 'Failed to create payment link.' });
+  }
+}
+
+export async function verifyPaymongoPayment(req, res) {
+  try {
+    console.log('=== verifyPaymongoPayment CALLED ===');
+    console.log('User role:', req.user?.role);
+    console.log('Rental ID:', req.params?.id);
+    console.log('Payment Link ID:', req.body?.paymentLinkId);
+
+    if (req.user.role !== 'customer') {
+      return res.status(403).json({ message: 'Only customers can verify payments.' });
+    }
+
+    const { id } = req.params;
+    const { paymentLinkId } = req.body || {};
+
+    if (!paymentLinkId) {
+      return res.status(400).json({ message: 'paymentLinkId is required.' });
+    }
+
+    const rental = await RentalDetail.findOne({ _id: id, customerId: req.user.id });
+    console.log('Rental found:', rental);
+
+    if (!rental) {
+      return res.status(404).json({ message: 'Rental not found.' });
+    }
+
+    if (rental.status !== 'for_payment') {
+      return res.status(400).json({ message: `Payment cannot be verified while rental is ${rental.status}.` });
+    }
+
+    const sessionResult = await retrieveCheckoutSession(paymentLinkId);
+    console.log('Session result:', sessionResult);
+    if (!sessionResult.success) {
+      return res.status(500).json({ message: sessionResult.error });
+    }
+
+    const paymentsResult = await getPaymentsByPaymentLinkId(paymentLinkId);
+    console.log('Payments result:', paymentsResult);
+    if (!paymentsResult.success) {
+      return res.status(500).json({ message: paymentsResult.error });
+    }
+
+    const successfulPayment = paymentsResult.payments.find(
+      (payment) => payment.attributes?.status === 'paid'
+    );
+
+    let isPaid = sessionResult.checkoutSession.attributes?.payment_status === 'paid' || !!successfulPayment;
+    let paymentIntentSuccess = false;
+
+    // If we have a payment intent, check its status too
+    if (!isPaid && sessionResult.checkoutSession.attributes?.payment_intent?.id) {
+      const intentResult = await retrievePaymentIntent(sessionResult.checkoutSession.attributes.payment_intent.id);
+      console.log('Payment intent result:', intentResult);
+      if (intentResult.success && intentResult.paymentIntent.attributes?.status === 'succeeded') {
+        isPaid = true;
+        paymentIntentSuccess = true;
+      }
+    }
+
+    console.log('Session attributes:', sessionResult.checkoutSession.attributes);
+    console.log('Session payment_status:', sessionResult.checkoutSession.attributes?.payment_status);
+    console.log('Successful payment found:', successfulPayment);
+    console.log('Payment intent success:', paymentIntentSuccess);
+    console.log('Is paid:', isPaid);
+    console.log('Is paid:', isPaid);
+
+    if (!isPaid) {
+      return res.json({
+        success: false,
+        message: 'Payment not yet successful. Please check Paymongo for details.',
+      });
+    }
+
+    const paymentAmount = Math.max(0, Number(rental.totalPrice || 0) - Number(rental.downpayment || 0));
+    rental.paymentSubmittedAt = new Date();
+    rental.paymentAmountPaid = paymentAmount;
+    rental.paymentReferenceNumber = (successfulPayment?.id || sessionResult.checkoutSession.attributes?.payment_intent?.id || paymentLinkId);
+    rental.paymentReceiptFilename = `Paymongo_${(successfulPayment?.id || sessionResult.checkoutSession.attributes?.payment_intent?.id || paymentLinkId)}`;
+    rental.paymentReceiptUrl = null;
+    rental.status = 'for_pickup';
+
+    await rental.save();
+    console.log('Rental updated, new status:', rental.status);
+    
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
+    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
+
+    try {
+      const deliveryResult = await sendNotificationAcrossChannels({
+        email: rental.customerEmail || rental.email || '',
+        phoneNumber: rental.contactNumber || '',
+        payload: {
+          type: 'rental',
+          recordId: String(rental._id || ''),
+          customerId: String(rental.customerId || ''),
+          status: rental.status,
+          name: rental.customerName || '',
+          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          dateType: 'Time Sent',
+          location: rental.branch || '',
+        },
+      });
+
+      if (!deliveryResult?.email?.delivered && !deliveryResult?.sms?.delivered) {
+        console.warn('rental payment notification not delivered:', deliveryResult);
+      }
+    } catch (notificationError) {
+      console.error('rental payment notification error:', notificationError);
+    }
+
+    return res.json({
+      success: true,
+      rental: await mapRentalWithProductImage(req, rental.toJSON()),
+    });
+  } catch (error) {
+    console.error('verifyPaymongoPayment error:', error);
+    return res.status(500).json({ message: 'Failed to verify payment.' });
   }
 }
 

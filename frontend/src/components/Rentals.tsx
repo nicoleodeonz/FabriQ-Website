@@ -405,12 +405,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [selectedPaymentRental, setSelectedPaymentRental] = useState<Rental | null>(null);
   const [isPayNowConfirmOpen, setIsPayNowConfirmOpen] = useState(false);
-  const [isPaymentInstructionsModalOpen, setIsPaymentInstructionsModalOpen] = useState(false);
-  const [isSubmitPaymentConfirmOpen, setIsSubmitPaymentConfirmOpen] = useState(false);
-  const [paymentReferenceId, setPaymentReferenceId] = useState('');
-  const [paymentReceiptFile, setPaymentReceiptFile] = useState<File | null>(null);
-  const [paymentSubmitError, setPaymentSubmitError] = useState('');
-  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
   const [isSchedulePickupModalOpen, setIsSchedulePickupModalOpen] = useState(false);
   const [isSchedulePickupConfirmOpen, setIsSchedulePickupConfirmOpen] = useState(false);
   const [selectedSchedulePickupRental, setSelectedSchedulePickupRental] = useState<Rental | null>(null);
@@ -425,8 +421,6 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     isReviewModalOpen ||
     isSubmitReviewConfirmOpen ||
     isPayNowConfirmOpen ||
-    isPaymentInstructionsModalOpen ||
-    isSubmitPaymentConfirmOpen ||
     isSchedulePickupModalOpen ||
     isSchedulePickupConfirmOpen;
   const touchedFieldsRef = useRef<Partial<Record<RentalField, boolean>>>({});
@@ -538,6 +532,74 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
       isMounted = false;
     };
   }, [loadMyRentals]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let hasVerified = false;
+
+    const verifyPendingPayment = async () => {
+      if (hasVerified) return;
+      console.log('=== verifyPendingPayment CALLED ===');
+      const pendingPaymentRaw = localStorage.getItem('pendingPaymongoPayment');
+      console.log('pendingPaymentRaw from localStorage:', pendingPaymentRaw);
+      
+      if (!pendingPaymentRaw) return;
+
+      try {
+        const pendingPayment = JSON.parse(pendingPaymentRaw);
+        console.log('Parsed pendingPayment:', pendingPayment);
+        const { rentalId, paymentLinkId } = pendingPayment;
+        console.log('Rental ID:', rentalId, 'Payment Link ID:', paymentLinkId);
+
+        const result = await rentalAPI.verifyPaymongoPayment(token, rentalId, { paymentLinkId });
+        console.log('verifyPaymongoPayment result:', result);
+
+        if (!isMounted) return;
+        hasVerified = true;
+
+        if (result.success && result.rental) {
+          setRentals((prev) => prev.map((item) =>
+            String(item.id) === String(rentalId) ? { ...item, ...result.rental } : item
+          ));
+          localStorage.removeItem('pendingPaymongoPayment');
+          // Clean up the URL param after processing
+          const url = new URL(window.location.href);
+          url.searchParams.delete('payment');
+          window.history.replaceState(null, '', url.toString());
+        } else if (!result.success && result.message) {
+          console.warn('Payment verification:', result.message);
+          // If the rental is already paid_for_confirmation or for_pickup, we should still clear localStorage
+          if (result.message.includes('paid_for_confirmation') || result.message.includes('for_pickup')) {
+            localStorage.removeItem('pendingPaymongoPayment');
+            const url = new URL(window.location.href);
+            url.searchParams.delete('payment');
+            window.history.replaceState(null, '', url.toString());
+          }
+        }
+      } catch (err) {
+        console.error('Error verifying pending payment:', err);
+        hasVerified = true;
+      }
+    };
+
+    const hasReturnParam = new URLSearchParams(window.location.search).has('payment');
+    const hasPending = !!localStorage.getItem('pendingPaymongoPayment');
+
+    if (token && !rentalsLoading && (hasReturnParam || hasPending)) {
+      void verifyPendingPayment();
+    }
+
+    const handleHashChange = () => {
+      if (token && !rentalsLoading) void verifyPendingPayment();
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, [token, rentalsLoading]);
 
   useEffect(() => {
     const eventSource = createCustomerActivityEventSource(token);
@@ -2529,186 +2591,51 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsPayNowConfirmOpen(false);
-                    setIsPaymentInstructionsModalOpen(true);
-                  }}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors"
-                >
-                  Yes, Proceed
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isPaymentInstructionsModalOpen && selectedPaymentRental && (
-                      <div
-                        className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-                        role="dialog"
-                        aria-label="Payment Instructions"
-                        onClick={() => setIsPaymentInstructionsModalOpen(false)}
-                      >
-                        <div
-                          className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-start justify-between mb-4">
-                            <h3 className="text-2xl font-light text-black">Payment Instructions</h3>
-                            <button
-                              type="button"
-                              onClick={() => setIsPaymentInstructionsModalOpen(false)}
-                              className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors"
-                              aria-label="Close payment instructions"
-                            >
-                              <X className="w-5 h-5" />
-                            </button>
-                          </div>
-
-                          <div className="mb-6 space-y-2 text-sm">
-                            <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4">
-                              <div className="mb-2 font-medium text-black">Pay to any of the following:</div>
-                              <div className="mb-1"><span className="font-semibold">Gcash:</span> 09123123123</div>
-                              <div className="mb-1"><span className="font-semibold">BDO Account:</span> 1234 5678 9123 1234</div>
-                              <div className="mb-1"><span className="font-semibold">BPI Account:</span> 1234 1234 1234 1234</div>
-                            </div>
-                          </div>
-
-                          <form className="space-y-4" onSubmit={async (e) => {
-                            e.preventDefault();
-                            setPaymentSubmitError('');
-
-                            const normalizedReferenceId = paymentReferenceId.trim().toUpperCase();
-                            if (!/^[A-Z0-9]+$/.test(normalizedReferenceId)) {
-                              setPaymentSubmitError('Reference ID must contain only letters and numbers.');
-                              return;
-                            }
-
-                            setPaymentReferenceId(normalizedReferenceId);
-                            setIsSubmitPaymentConfirmOpen(true);
-                          }}>
-                            <div>
-                              <label className="block text-sm text-[#6B5D4F] mb-2">Reference ID *</label>
-                              <input
-                                type="text"
-                                required
-                                value={paymentReferenceId}
-                                onChange={e => setPaymentReferenceId(e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase())}
-                                className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
-                                pattern="[A-Za-z0-9]+"
-                                placeholder="Enter reference number from your payment"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm text-[#6B5D4F] mb-2">Upload Payment Receipt *</label>
-                              <input
-                                type="file"
-                                accept="image/*"
-                                required
-                                onChange={e => {
-                                  if (e.target.files && e.target.files[0]) {
-                                    setPaymentReceiptFile(e.target.files[0]);
-                                  } else {
-                                    setPaymentReceiptFile(null);
-                                  }
-                                }}
-                                className="w-full px-4 py-2 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors bg-white file:mr-4 file:rounded-md file:border-0 file:bg-[#F4E7D6] file:px-4 file:py-2 file:text-[#5C4936] file:transition-colors hover:file:bg-[#EEDCC8]"
-                              />
-                              {paymentReceiptFile && (
-                                <div className="mt-2 text-xs text-[#6B5D4F]">Selected: {paymentReceiptFile.name}</div>
-                              )}
-                            </div>
-                            {paymentSubmitError && (
-                              <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="status" aria-live="polite">
-                                {paymentSubmitError}
-                              </div>
-                            )}
-                            <button
-                              type="submit"
-                              disabled={isSubmittingPayment}
-                              className="w-full py-3 bg-black text-[#FAF7F0] rounded-lg hover:bg-[#D4AF37] hover:text-black transition-colors disabled:opacity-50"
-                            >
-                              {isSubmittingPayment ? 'Submitting...' : 'Submit Payment'}
-                            </button>
-                          </form>
-                        </div>
-                      </div>
-                    )}
-
-        {isSubmitPaymentConfirmOpen && selectedPaymentRental && (
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirm payment submission"
-            onClick={() => {
-              if (!isSubmittingPayment) setIsSubmitPaymentConfirmOpen(false);
-            }}
-          >
-            <div
-              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh]"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Submit Payment</h3>
-              <p className="text-sm text-[#6B5D4F] mb-6">
-                Are you sure you want to submit this payment proof?
-              </p>
-
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6 space-y-2 text-sm">
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Reference ID</span>
-                  <span className="text-right font-medium text-black">{paymentReferenceId}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Receipt</span>
-                  <span className="text-right font-medium text-black">{paymentReceiptFile ? paymentReceiptFile.name : 'No file selected'}</span>
-                </div>
-              </div>
-
-              <div className="flex flex-row items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsSubmitPaymentConfirmOpen(false)}
-                  disabled={isSubmittingPayment}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
+                  disabled={isPaymentProcessing}
                   onClick={async () => {
-                    setPaymentSubmitError('');
-                    setIsSubmittingPayment(true);
+                    if (!selectedPaymentRental) return;
+                    
+                    setIsPaymentProcessing(true);
+                    setPaymentError('');
+                    
                     try {
-                      if (!selectedPaymentRental || !paymentReceiptFile) {
-                        throw new Error('Please provide payment reference and receipt image.');
-                      }
-
-                      const updated = await rentalAPI.submitRentalPayment(token, selectedPaymentRental.id, {
-                        referenceId: paymentReferenceId,
-                        receiptFile: paymentReceiptFile,
+                      const result = await rentalAPI.createPaymongoPaymentLink(token, selectedPaymentRental.id, {
+                        successUrl: window.location.origin + '/?payment=success#/rentals',
+                        cancelUrl: window.location.origin + '/?payment=cancelled#/rentals',
                       });
-
-                      setRentals((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)));
-                      setSelectedRentalDetails((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
-
-                      setIsSubmittingPayment(false);
-                      setIsSubmitPaymentConfirmOpen(false);
-                      setIsPaymentInstructionsModalOpen(false);
-                      setPaymentReferenceId('');
-                      setPaymentReceiptFile(null);
+                      
+                      if (result.success && result.paymentLinkUrl) {
+                        setIsPayNowConfirmOpen(false);
+                        localStorage.setItem('pendingPaymongoPayment', JSON.stringify({
+                          rentalId: selectedPaymentRental.id,
+                          paymentLinkId: result.paymentLinkId
+                        }));
+                        window.location.href = result.paymentLinkUrl;
+                      } else {
+                        throw new Error('Failed to create payment link');
+                      }
                     } catch (error) {
-                      setPaymentSubmitError(error instanceof Error ? error.message : 'Failed to submit payment.');
-                      setIsSubmitPaymentConfirmOpen(false);
-                      setIsSubmittingPayment(false);
+                      setPaymentError(error instanceof Error ? error.message : 'Failed to create payment link.');
+                    } finally {
+                      setIsPaymentProcessing(false);
                     }
                   }}
-                  disabled={isSubmittingPayment}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSubmittingPayment ? 'Submitting...' : 'Yes, Submit'}
+                  {isPaymentProcessing ? 'Processing...' : 'Yes, Proceed'}
                 </button>
               </div>
+              {paymentError && (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" aria-live="polite">
+                  <div className="font-medium mb-1">Payment Service Not Available</div>
+                  <p className="text-xs text-amber-700">
+                    {paymentError}
+                  </p>
+                  <p className="text-xs text-amber-600 mt-2">
+                    Please contact the administrator to set up Paymongo integration.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

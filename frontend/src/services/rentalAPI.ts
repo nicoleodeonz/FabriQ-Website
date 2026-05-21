@@ -82,6 +82,27 @@ export interface SchedulePickupPayload {
   pickupTime: string;
 }
 
+export interface CreatePaymongoLinkPayload {
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface CreatePaymongoLinkResponse {
+  success: boolean;
+  paymentLinkUrl: string;
+  paymentLinkId: string;
+}
+
+export interface VerifyPaymongoPaymentPayload {
+  paymentLinkId: string;
+}
+
+export interface VerifyPaymongoPaymentResponse {
+  success: boolean;
+  message?: string;
+  rental?: RentalDetail;
+}
+
 export interface RentalAvailabilityParams {
   gownId: string;
   startDate?: string;
@@ -287,5 +308,51 @@ export const rentalAPI = {
     }
 
     return data.review;
+  },
+
+  createPaymongoPaymentLink: async (
+    token: string,
+    id: string,
+    payload: CreatePaymongoLinkPayload
+  ): Promise<CreatePaymongoLinkResponse> => {
+    const response = await fetch(`${API_BASE_URL}/rentals/${id}/paymongo-link`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const body = await parseJsonSafe(response);
+      throw new Error(getErrorMessage('Failed to create payment link', body));
+    }
+
+    const data = await parseJsonSafe(response);
+    return data;
+  },
+
+  verifyPaymongoPayment: async (
+    token: string,
+    id: string,
+    payload: VerifyPaymongoPaymentPayload
+  ): Promise<VerifyPaymongoPaymentResponse> => {
+    const response = await fetch(`${API_BASE_URL}/rentals/${id}/paymongo-verify`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const body = await parseJsonSafe(response);
+      throw new Error(getErrorMessage('Failed to verify payment', body));
+    }
+
+    const data = await parseJsonSafe(response);
+    return data;
   },
 };
