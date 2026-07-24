@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, MapPin, ChevronRight, X, Star, CheckCircle2 } from 'lucide-react';
+import { Calendar, MapPin, ChevronRight, X, Star, CheckCircle2, Package, TrendingUp, Users, Eye } from 'lucide-react';
 import { customerAPI } from '../services/customerAPI';
 import { getPublicInventory, INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
 import type { InventoryItem } from '../services/inventoryAPI';
@@ -396,6 +396,7 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
   const [latestSubmittedRental, setLatestSubmittedRental] = useState<Rental | null>(null);
   const [isRentalDetailsOpen, setIsRentalDetailsOpen] = useState(false);
   const [selectedRentalDetails, setSelectedRentalDetails] = useState<Rental | null>(null);
+  const [rentalModalTab, setRentalModalTab] = useState<'order' | 'payment' | 'customer'>('order');
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [selectedReviewRental, setSelectedReviewRental] = useState<Rental | null>(null);
   const [reviewScore, setReviewScore] = useState(0);
@@ -2151,165 +2152,446 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
 
         {isRentalDetailsOpen && selectedRentalDetails && (
           <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-            role="dialog"
-            aria-label="Rental details"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             onClick={() => setIsRentalDetailsOpen(false)}
           >
             <div
-              className="bg-white rounded-2xl max-w-lg w-full p-8 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-3xl w-full max-w-4xl flex flex-col overflow-hidden shadow-2xl"
+              style={{ height: '78vh' }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-start justify-between mb-6">
-                <h3 className="text-2xl font-light text-black">Rental Details</h3>
-                <button
-                  type="button"
-                  onClick={() => setIsRentalDetailsOpen(false)}
-                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors"
-                  aria-label="Close rental details"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {selectedRentalDetails.gownImage && (
-                <div className="mb-6 overflow-hidden rounded-xl border border-[#E8DCC8] bg-[#FAF7F0]">
-                  <ImageWithFallback
-                    src={selectedRentalDetails.gownImage}
-                    alt={selectedRentalDetails.gownName}
-                    className="h-56 w-full object-cover"
-                  />
-                </div>
-              )}
-
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 space-y-3 text-sm">
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Gown</span>
-                  <span className="text-right font-medium text-black">{selectedRentalDetails.gownName}</span>
-                </div>
-                {selectedRentalDetails.sku && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">SKU</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.sku}</span>
+              {/* Fixed Header */}
+              <div
+                style={{
+                  padding: '24px 40px',
+                  borderBottom: '1px solid #E8DCC8',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  backgroundColor: 'white',
+                  zIndex: 10,
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <h3
+                      style={{
+                        fontSize: '24px',
+                        fontWeight: '700',
+                        color: '#1a1a1a',
+                        letterSpacing: '-0.02em',
+                        fontFamily: 'serif'
+                      }}
+                    >
+                      Rental Details
+                    </h3>
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: '-8px',
+                        left: '0',
+                        width: '40px',
+                        height: '3px',
+                        backgroundColor: '#D4AF37',
+                        borderRadius: '2px'
+                      }}
+                    />
                   </div>
-                )}
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Status</span>
-                  <span className="text-right font-medium text-black">
+                  <span
+                    style={{
+                      padding: '6px 16px',
+                      fontSize: '11px',
+                      fontWeight: '800',
+                      borderRadius: '100px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.1em',
+                      border: '1px solid currentColor',
+                      backgroundColor: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    className={getRentalStatusBadgeClasses(selectedRentalDetails.status)}
+                  >
                     {getRentalStatusLabel(selectedRentalDetails)}
                   </span>
                 </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Schedule</span>
-                  <span className="text-right font-medium text-black">
-                    {selectedRentalDetails.startDate} to {selectedRentalDetails.endDate}
-                  </span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Branch</span>
-                  <span className="text-right font-medium text-black">{selectedRentalDetails.branch}</span>
-                </div>
-                {selectedRentalDetails.eventType && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Event Type</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.eventType}</span>
-                  </div>
-                )}
-                <div className="flex justify-between gap-4 pt-2 border-t border-[#E8DCC8]">
-                  <span className="text-[#6B5D4F]">Total Price</span>
-                  <span className="text-right font-medium text-black">₱{selectedRentalDetails.totalPrice.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Downpayment</span>
-                  <span className="text-right font-medium text-black">₱{selectedRentalDetails.downpayment.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between gap-4">
-                  <span className="text-[#6B5D4F]">Reference ID</span>
-                  <span className="text-right font-medium text-black">{selectedRentalDetails.referenceId || selectedRentalDetails.id}</span>
-                </div>
-                {hasRentalStatus(selectedRentalDetails.status, 'for_pickup') && !selectedRentalDetails.pickupScheduleDate && !selectedRentalDetails.pickupScheduleTime && (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    Please schedule your pickup.
-                  </div>
-                )}
-                {selectedRentalDetails.paymentSubmittedAt && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Paid At</span>
-                    <span className="text-right font-medium text-black">{new Date(selectedRentalDetails.paymentSubmittedAt).toLocaleString()}</span>
-                  </div>
-                )}
-                {typeof selectedRentalDetails.paymentAmountPaid === 'number' && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Amount Paid</span>
-                    <span className="text-right font-medium text-black">₱{selectedRentalDetails.paymentAmountPaid.toLocaleString()}</span>
-                  </div>
-                )}
-                {selectedRentalDetails.paymentReferenceNumber && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Payment Ref #</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.paymentReferenceNumber}</span>
-                  </div>
-                )}
-                {selectedRentalDetails.paymentReceiptFilename && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Receipt Image</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.paymentReceiptFilename}</span>
-                  </div>
-                )}
-                {selectedRentalDetails.pickupScheduleDate && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Pickup Date</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.pickupScheduleDate}</span>
-                  </div>
-                )}
-                {selectedRentalDetails.pickupScheduleTime && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Pickup Time</span>
-                    <span className="text-right font-medium text-black">
-                      {pickupTimeOptions.find((option) => option.value === selectedRentalDetails.pickupScheduleTime)?.label || selectedRentalDetails.pickupScheduleTime}
-                    </span>
-                  </div>
-                )}
-                {(selectedRentalDetails.status === 'cancelled' || selectedRentalDetails.status === 'item_lost') && selectedRentalDetails.rejectionReason && (
-                  <div className="flex justify-between gap-4">
-                    <span className="text-[#6B5D4F]">Rejection Reason</span>
-                    <span className="text-right font-medium text-black">{selectedRentalDetails.rejectionReason}</span>
-                  </div>
-                )}
+                <button
+                  onClick={() => setIsRentalDetailsOpen(false)}
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.color = '#1a1a1a';
+                    e.currentTarget.style.transform = 'rotate(90deg)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = '#6B5D4F';
+                    e.currentTarget.style.transform = 'rotate(0deg)';
+                  }}
+                  aria-label="Close modal"
+                >
+                  <X style={{ width: '22px', height: '22px' }} />
+                </button>
               </div>
 
-              <div className="mt-6 flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (hasRentalStatus(selectedRentalDetails.status, 'for_payment')) {
-                      setSelectedPaymentRental(selectedRentalDetails);
-                      setIsRentalDetailsOpen(false);
-                      setIsPayNowConfirmOpen(true);
-                      return;
-                    }
-                    setIsRentalDetailsOpen(false);
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto bg-white">
+                {/* Tab Navigation */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '40px',
+                    padding: '0 40px',
+                    borderBottom: '1px solid #F2EADF',
+                    backgroundColor: '#FAF7F0/30'
                   }}
-                  className="flex-1 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
                 >
-                  {hasRentalStatus(selectedRentalDetails.status, 'for_payment') ? 'Pay now' : 'Close'}
+                  {[
+                    { id: 'order', label: 'Order', icon: Package },
+                    { id: 'payment', label: 'Payment', icon: TrendingUp }
+                  ].map((tab) => {
+                    const isActive = rentalModalTab === tab.id;
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setRentalModalTab(tab.id as any)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '16px 0',
+                          fontSize: '14px',
+                          fontWeight: isActive ? '700' : '500',
+                          color: isActive ? '#1a1a1a' : '#9C8B7A',
+                          borderBottom: `2px solid ${isActive ? '#D4AF37' : 'transparent'}`,
+                          cursor: 'pointer',
+                          transition: 'all 0.3s',
+                          backgroundColor: 'transparent',
+                          borderTop: 'none',
+                          borderLeft: 'none',
+                          borderRight: 'none',
+                          outline: 'none'
+                        }}
+                      >
+                        <Icon style={{ width: '18px', height: '18px', opacity: isActive ? 1 : 0.6 }} />
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 240px',
+                    gap: '32px',
+                    alignItems: 'start',
+                  }}
+                  className="p-8"
+                >
+                  {/* Left Column: Details (Tabbed) */}
+                  <div className="space-y-8">
+                    {rentalModalTab === 'order' && (
+                      /* Order Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Package className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Rental Information</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm">
+                          <div className="mb-6">
+                            <p className="text-2xl font-semibold text-[#3D2B1F]">{selectedRentalDetails.gownName}</p>
+                            <div className="h-1 w-12 bg-[#D4AF37] mt-2 rounded-full"></div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-y-6 gap-x-10">
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Start Date</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedRentalDetails.startDate}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">End Date</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedRentalDetails.endDate}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Branch</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedRentalDetails.branch}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Event Type</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedRentalDetails.eventType || 'N/A'}</p>
+                            </div>
+                            {selectedRentalDetails.sku && (
+                              <div>
+                                <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">SKU</p>
+                                <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedRentalDetails.sku}</p>
+                              </div>
+                            )}
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Reference ID</p>
+                              <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedRentalDetails.referenceId || selectedRentalDetails.id}</p>
+                            </div>
+                          </div>
+
+                          {(selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime) && (
+                            <div className="mt-8 space-y-3 pt-6 border-t border-[#E8DCC8]/30">
+                              <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                                <span className="text-[#6B5D4F] text-sm font-medium">Pickup Schedule</span>
+                                <span className="text-xs font-bold px-3 py-1 rounded-full bg-green-50 text-green-700 border border-green-100">
+                                  {selectedRentalDetails.pickupScheduleDate} at {pickupTimeOptions.find((option) => option.value === selectedRentalDetails.pickupScheduleTime)?.label || selectedRentalDetails.pickupScheduleTime}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}
+
+                    {rentalModalTab === 'payment' && (
+                      /* Payment Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <TrendingUp className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wider">Payment Details</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm space-y-6">
+                          <div className="grid grid-cols-2 gap-6">
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Downpayment</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-lg text-[#3D2B1F] font-bold min-h-[40px] flex items-center">
+                                ₱{selectedRentalDetails.downpayment.toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Total Price</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-lg text-[#D4AF37] font-bold min-h-[40px] flex items-center">
+                                ₱{selectedRentalDetails.totalPrice.toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+                          {selectedRentalDetails.paymentSubmittedAt && (
+                            <div className="space-y-4 pt-4 border-t border-[#E8DCC8]/30">
+                              <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                  <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Paid At</p>
+                                  <p className="text-sm text-[#3D2B1F] font-medium">
+                                    {new Date(selectedRentalDetails.paymentSubmittedAt).toLocaleString()}
+                                  </p>
+                                </div>
+                                {selectedRentalDetails.paymentReferenceNumber && (
+                                  <div>
+                                    <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Reference Number</p>
+                                    <p className="text-sm text-[#3D2B1F] font-mono font-medium">
+                                      {selectedRentalDetails.paymentReferenceNumber}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                              {selectedRentalDetails.paymentReceiptUrl && (
+                                <div>
+                                  <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Payment Receipt</p>
+                                  <a
+                                    href={selectedRentalDetails.paymentReceiptUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block"
+                                  >
+                                    <div className="rounded-xl border border-[#E8DCC8]/30 overflow-hidden bg-white aspect-video flex items-center justify-center">
+                                      <ImageWithFallback
+                                        src={selectedRentalDetails.paymentReceiptUrl}
+                                        alt="Payment receipt"
+                                        className="w-full h-full object-contain"
+                                      />
+                                    </div>
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}
+                  </div>
+
+                  {/* Right Column: Gown Image */}
+                  <div className="sticky top-0">
+                    <div className="flex items-center justify-between gap-2 mb-6">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-5 h-5 text-[#D4AF37]" />
+                        <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Gown Preview</h4>
+                      </div>
+                    </div>
+
+                    {selectedRentalDetails.gownImage ? (
+                      <div className="w-full">
+                        <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
+                          <ImageWithFallback
+                            src={selectedRentalDetails.gownImage}
+                            alt={selectedRentalDetails.gownName}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-[#D8C8B2] bg-[#FAF7F0] flex flex-col items-center justify-center text-center p-6">
+                        <Package className="w-8 h-8 text-[#D8C8B2] mb-3" />
+                        <p className="text-xs text-[#8A7A69] font-medium px-2">
+                          No gown image available.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Fixed Footer: Actions */}
+              <div
+                style={{
+                  padding: '24px 40px',
+                  borderTop: '1px solid #E8DCC8',
+                  backgroundColor: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '40px',
+                  zIndex: 30,
+                  boxShadow: '0 -15px 40px rgba(0,0,0,0.03)'
+                }}
+              >
+                <button
+                  onClick={() => setIsRentalDetailsOpen(false)}
+                  style={{
+                    padding: '14px 36px',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    color: '#7F6D5C',
+                    backgroundColor: '#FAF7F0',
+                    borderRadius: '18px',
+                    border: '1px solid #E8DCC8',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#F2EADF';
+                    e.currentTarget.style.borderColor = '#D8C8B2';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                  }}
+                >
+                  Close Details
                 </button>
 
-                {hasRentalStatus(selectedRentalDetails.status, 'for_pickup') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPickupScheduleError('');
-                      setSelectedSchedulePickupRental(selectedRentalDetails);
-                      setPickupScheduleTime(selectedRentalDetails.pickupScheduleTime || '08:00');
-                      setIsRentalDetailsOpen(false);
-                      setIsSchedulePickupModalOpen(true);
+                {(selectedRentalDetails.status === 'cancelled' || selectedRentalDetails.status === 'item_lost') && selectedRentalDetails.rejectionReason && (
+                  <div
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#fef2f2',
+                      borderRadius: '16px',
+                      padding: '12px 24px',
+                      border: '1px solid #fee2e2',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
                     }}
-                    className="flex-1 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] hover:text-black"
                   >
-                    <span>{selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Reschedule Pickup' : 'Schedule Pickup'}</span>
-                  </button>
+                    <span style={{ fontSize: '10px', fontWeight: '800', color: '#b91c1c', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {selectedRentalDetails.status === 'item_lost' ? 'Reason for Item Lost' : 'Reason for Cancellation'}
+                    </span>
+                    <p style={{ fontSize: '13px', color: '#7f1d1d', fontWeight: '500', margin: 0 }}>
+                      {selectedRentalDetails.rejectionReason}
+                    </p>
+                  </div>
                 )}
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  {hasRentalStatus(selectedRentalDetails.status, 'for_payment') && (
+                    <button
+                      onClick={() => {
+                        setSelectedPaymentRental(selectedRentalDetails);
+                        setIsRentalDetailsOpen(false);
+                        setIsPayNowConfirmOpen(true);
+                      }}
+                      style={{
+                        padding: '14px 48px',
+                        borderRadius: '18px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.3s',
+                        backgroundColor: '#D4AF37',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 15px rgba(212, 175, 55, 0.3)'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#B48F27';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(212, 175, 55, 0.4)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#D4AF37';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 4px 15px rgba(212, 175, 55, 0.3)';
+                      }}
+                    >
+                      Pay Now
+                    </button>
+                  )}
+                  {hasRentalStatus(selectedRentalDetails.status, 'for_pickup') && (
+                    <button
+                      onClick={() => {
+                        setPickupScheduleError('');
+                        setSelectedSchedulePickupRental(selectedRentalDetails);
+                        setPickupScheduleTime(selectedRentalDetails.pickupScheduleTime || '08:00');
+                        setIsRentalDetailsOpen(false);
+                        setIsSchedulePickupModalOpen(true);
+                      }}
+                      style={{
+                        padding: '14px 48px',
+                        borderRadius: '18px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.3s',
+                        backgroundColor: '#1a1a1a',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 15px rgba(0, 0, 0, 0.15)'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#D4AF37';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(212, 175, 55, 0.4)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#1a1a1a';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.15)';
+                      }}
+                    >
+                      {selectedRentalDetails.pickupScheduleDate && selectedRentalDetails.pickupScheduleTime ? 'Reschedule Pickup' : 'Schedule Pickup'}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

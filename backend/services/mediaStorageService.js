@@ -176,3 +176,38 @@ export async function storeUploadedAsset(file, options = {}) {
     throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
   }
 }
+
+export async function storeAssetFromLocalPath(filePath, options = {}) {
+  const config = ensureCloudinaryConfigured();
+  if (!config.isConfigured) {
+    throw new Error('Cloudinary is not configured.');
+  }
+
+  const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
+  const resourceType = options.resourceType || 'raw';
+
+  try {
+    const uploadOptions = {
+      folder: targetFolder,
+      resource_type: resourceType,
+      use_filename: true,
+      unique_filename: true,
+      overwrite: false,
+    };
+
+    const result = resourceType === 'raw'
+      ? await cloudinary.uploader.upload_large(filePath, {
+          ...uploadOptions,
+          chunk_size: 6 * 1024 * 1024,
+        })
+      : await cloudinary.uploader.upload(filePath, uploadOptions);
+
+    return {
+      storage: 'cloudinary',
+      url: result.secure_url,
+      publicId: result.public_id,
+    };
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
+  }
+}

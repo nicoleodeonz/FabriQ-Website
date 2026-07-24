@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Ruler, ChevronRight, CheckCircle2, Calendar, X } from 'lucide-react';
+import { Upload, Ruler, ChevronRight, CheckCircle2, Calendar, X, Package, Edit, Users, Eye, Mail, Phone } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { customerAPI } from '../services/customerAPI';
 import { buildApiUrl } from '../services/apiConfig';
@@ -103,6 +103,7 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
   const [isMissingPhoneModalOpen, setIsMissingPhoneModalOpen] = useState(false);
   const [isOrderDetailsOpen, setIsOrderDetailsOpen] = useState(false);
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<CustomOrder | null>(null);
+  const [customOrderModalTab, setCustomOrderModalTab] = useState<'order' | 'notes' | 'customer'>('order');
   const [isScheduleConsultationModalOpen, setIsScheduleConsultationModalOpen] = useState(false);
   const [isConfirmScheduleConsultationOpen, setIsConfirmScheduleConsultationOpen] = useState(false);
   const [selectedScheduleOrder, setSelectedScheduleOrder] = useState<CustomOrder | null>(null);
@@ -1129,113 +1130,454 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
         )}
 
         {isOrderDetailsOpen && selectedOrderDetails && (
-          <div
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Custom order details"
-            onClick={() => setIsOrderDetailsOpen(false)}
-          >
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setIsOrderDetailsOpen(false)}>
             <div
-              ref={modalRef}
-              tabIndex={-1}
-              className="bg-white rounded-2xl w-full px-6 pt-10 pb-4 overflow-y-auto"
-              style={{ maxWidth: '750px', height: '75vh' }}
+              className="bg-white rounded-3xl w-full max-w-4xl flex flex-col overflow-hidden shadow-2xl"
+              style={{ height: '78vh' }}
               onClick={(e) => e.stopPropagation()}
+              ref={modalRef}
             >
-              <div style={{ height: '20px' }} />
-              <div className="flex justify-between items-start mb-6 pl-4 pr-2">
-                <div className="pr-4">
-                  <div className="flex items-center gap-3" style={{ paddingLeft: '32px', paddingTop: '16px' }}>
-                    <h3 className="text-2xl font-light text-black">Custom Order Details</h3>
-                    <span className={`inline-block px-3 py-1 text-xs rounded-full font-medium ${getStatusBadgeClass(selectedOrderDetails.status)}`}>
-                      {getStatusLabel(selectedOrderDetails.status)}
-                    </span>
+              {/* Fixed Header */}
+              <div 
+                style={{
+                  padding: '24px 40px',
+                  borderBottom: '1px solid #E8DCC8',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  backgroundColor: 'white',
+                  zIndex: 10,
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <h3 
+                      style={{ 
+                        fontSize: '24px', 
+                        fontWeight: '700', 
+                        color: '#1a1a1a',
+                        letterSpacing: '-0.02em',
+                        fontFamily: 'serif'
+                      }}
+                    >
+                      Custom Order Details
+                    </h3>
+                    <div 
+                      style={{ 
+                        position: 'absolute', 
+                        bottom: '-8px', 
+                        left: '0', 
+                        width: '40px', 
+                        height: '3px', 
+                        backgroundColor: '#D4AF37',
+                        borderRadius: '2px'
+                      }}
+                    />
                   </div>
+                  <span 
+                    style={{ 
+                      padding: '6px 16px', 
+                      fontSize: '11px', 
+                      fontWeight: '800', 
+                      borderRadius: '100px', 
+                      textTransform: 'uppercase', 
+                      letterSpacing: '0.1em',
+                      border: '1px solid currentColor',
+                      backgroundColor: 'white',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    className={getStatusBadgeClass(selectedOrderDetails.status)}
+                  >
+                    {getStatusLabel(selectedOrderDetails.status)}
+                  </span>
                 </div>
                 <button
-                  type="button"
                   onClick={() => setIsOrderDetailsOpen(false)}
-                  className="p-2 rounded-lg hover:bg-[#FAF7F0] transition-colors"
-                  aria-label="Close custom order details"
+                  style={{
+                    padding: '10px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: '#6B5D4F',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.color = '#1a1a1a';
+                    e.currentTarget.style.transform = 'rotate(90deg)';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = '#6B5D4F';
+                    e.currentTarget.style.transform = 'rotate(0deg)';
+                  }}
+                  aria-label="Close modal"
                 >
-                  <X className="w-5 h-5" />
+                  <X style={{ width: '22px', height: '22px' }} />
                 </button>
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(0, 1fr) 340px',
-                  gap: '6px',
-                  alignItems: 'start',
-                }}
-              >
-                <div className="min-w-0 flex-1 space-y-5" style={{ paddingLeft: '32px' }}>
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-2">Order</p>
-                    <p className="text-lg font-medium text-[#3D2B1F]">{selectedOrderDetails.orderType || 'Custom Order'}</p>
-                    <div className="mt-3 grid gap-2 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Event Date:</span> {selectedOrderDetails.eventDate || 'Not set'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Branch:</span> {selectedOrderDetails.branch || 'No branch selected'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Budget:</span> {formatCustomOrderBudget(selectedOrderDetails.budget)}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Order Reference ID:</span> {selectedOrderDetails.referenceId || selectedOrderDetails.id || selectedOrderDetails._id || 'N/A'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Design Consultation:</span> {getConsultationDisplay(selectedOrderDetails)}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Fitting Appointment:</span> {getFittingDisplay(selectedOrderDetails)}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Customer</p>
-                    <div className="grid gap-2 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Name:</span> {selectedOrderDetails.customerName}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Email:</span> {selectedOrderDetails.email || 'No email'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Phone:</span> {selectedOrderDetails.contactNumber || 'No phone'}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#FAF7F0] p-5 rounded-xl mt-6">
-                    <p className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wide mb-3">Design Notes</p>
-                    <div className="space-y-3 text-sm text-[#6B5D4F]">
-                      <p><span className="font-medium text-[#3D2B1F]">Preferred Colors:</span> {selectedOrderDetails.preferredColors || 'None provided'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Fabric Preference:</span> {selectedOrderDetails.fabricPreference || 'None provided'}</p>
-                      <p><span className="font-medium text-[#3D2B1F]">Special Requests:</span> {selectedOrderDetails.specialRequests || 'None provided'}</p>
-                    </div>
-                  </div>
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto bg-white">
+                {/* Tab Navigation */}
+                <div 
+                  style={{ 
+                    display: 'flex', 
+                    gap: '40px', 
+                    padding: '0 40px', 
+                    borderBottom: '1px solid #F2EADF',
+                    backgroundColor: '#FAF7F0/30'
+                  }}
+                >
+                  {[
+                    { id: 'order', label: 'Order', icon: Package },
+                    { id: 'notes', label: 'Notes', icon: Edit },
+                    { id: 'customer', label: 'Customer', icon: Users }
+                  ].map((tab) => {
+                    const isActive = customOrderModalTab === tab.id;
+                    const Icon = tab.icon;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setCustomOrderModalTab(tab.id as any)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '16px 0',
+                          fontSize: '14px',
+                          fontWeight: isActive ? '700' : '500',
+                          color: isActive ? '#1a1a1a' : '#9C8B7A',
+                          borderBottom: `2px solid ${isActive ? '#D4AF37' : 'transparent'}`,
+                          cursor: 'pointer',
+                          transition: 'all 0.3s',
+                          backgroundColor: 'transparent',
+                          borderTop: 'none',
+                          borderLeft: 'none',
+                          borderRight: 'none',
+                          outline: 'none'
+                        }}
+                      >
+                        <Icon style={{ width: '18px', height: '18px', opacity: isActive ? 1 : 0.6 }} />
+                        {tab.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                <div style={{ width: '180px' }} className="space-y-5">
-                  <div className="bg-[#FAF7F0] p-4 rounded-xl flex flex-col">
-                    <p className="text-xs text-[#9C8B7A] uppercase tracking-wide mb-3">Design Inspiration</p>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 240px',
+                    gap: '32px',
+                    alignItems: 'start',
+                  }}
+                  className="p-8"
+                >
+                  {/* Left Column: Details (Tabbed) */}
+                  <div className="space-y-8">
+                    {customOrderModalTab === 'order' && (
+                      /* Order Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Package className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Order Information</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm">
+                          <div className="mb-6">
+                            <p className="text-2xl font-semibold text-[#3D2B1F]">{selectedOrderDetails.orderType || 'Custom Order'}</p>
+                            <div className="h-1 w-12 bg-[#D4AF37] mt-2 rounded-full"></div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-y-6 gap-x-10">
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Event Date</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedOrderDetails.eventDate || 'Not set'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Branch</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{selectedOrderDetails.branch || 'No branch selected'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Budget</p>
+                              <p className="font-semibold text-[#3D2B1F] text-base">{formatCustomOrderBudget(selectedOrderDetails.budget)}</p>
+                            </div>
+                            <div>
+                              <p className="text-[#9C8B7A] text-xs font-bold uppercase tracking-wider mb-1.5">Reference ID</p>
+                              <p className="font-medium text-[#3D2B1F] font-mono text-base">{selectedOrderDetails.referenceId || selectedOrderDetails.id || selectedOrderDetails._id || 'N/A'}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-8 space-y-3 pt-6 border-t border-[#E8DCC8]/30">
+                            <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                              <span className="text-[#6B5D4F] text-sm font-medium">Design Consultation</span>
+                              <span className={`text-xs font-bold px-3 py-1 rounded-full ${(selectedOrderDetails.consultationDate && selectedOrderDetails.consultationTime) ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-[#FAF7F0] text-[#9C8B7A] border border-[#E8DCC8]/50'}`}>
+                                {selectedOrderDetails.consultationDate
+                                  ? `${selectedOrderDetails.consultationDate}${selectedOrderDetails.consultationTime ? ` at ${(selectedOrderDetails as any).consultationTime || ''}` : ''}`
+                                  : 'Not scheduled yet'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between items-center p-3 bg-white/50 rounded-xl border border-[#E8DCC8]/30">
+                              <span className="text-[#6B5D4F] text-sm font-medium">Fitting Appointment</span>
+                              <span className={`text-xs font-bold px-3 py-1 rounded-full ${(selectedOrderDetails.fittingDate && selectedOrderDetails.fittingTime) ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-[#FAF7F0] text-[#9C8B7A] border border-[#E8DCC8]/50'}`}>
+                                {selectedOrderDetails.fittingDate
+                                  ? `${selectedOrderDetails.fittingDate}${selectedOrderDetails.fittingTime ? ` at ${(selectedOrderDetails as any).fittingTime || ''}` : ''}`
+                                  : 'Not scheduled yet'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {customOrderModalTab === 'notes' && (
+                      /* Design Notes Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Edit className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-sm font-bold text-[#7F6D5C] uppercase tracking-wider">Design Notes</h4>
+                        </div>
+                        <div className="bg-[#FAF7F0] p-6 rounded-2xl border border-[#E8DCC8]/50 shadow-sm space-y-6">
+                          <div className="grid grid-cols-2 gap-6">
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Preferred Colors</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[40px] flex items-center">
+                                {selectedOrderDetails.preferredColors || 'None provided'}
+                              </div>
+                            </div>
+                            <div>
+                              <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Fabric Preference</p>
+                              <div className="bg-white p-3 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[40px] flex items-center">
+                                {selectedOrderDetails.fabricPreference || 'None provided'}
+                              </div>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-[#9C8B7A] uppercase tracking-wider mb-2">Special Requests</p>
+                            <div className="bg-white p-4 rounded-xl border border-[#E8DCC8]/30 text-sm text-[#3D2B1F] font-medium min-h-[80px] leading-relaxed">
+                              {selectedOrderDetails.specialRequests || 'No special requests provided'}
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {customOrderModalTab === 'customer' && (
+                      /* Customer Section */
+                      <section className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                        <div className="flex items-center gap-2 mb-4">
+                          <Users className="w-5 h-5 text-[#D4AF37]" />
+                          <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Customer Details</h4>
+                        </div>
+                        <div 
+                          style={{ 
+                            backgroundColor: '#FAF7F0',
+                            padding: '32px',
+                            borderRadius: '24px',
+                            border: '1px solid rgba(232, 220, 200, 0.5)',
+                            boxShadow: '0 4px 15px rgba(0,0,0,0.02)'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                            <div 
+                              style={{ 
+                                width: '64px', 
+                                height: '64px', 
+                                borderRadius: '50%', 
+                                backgroundColor: '#E8DCC8', 
+                                display: 'flex', 
+                                alignItems: 'center', 
+                                justifyContent: 'center', 
+                                color: '#7F6D5C', 
+                                fontSize: '24px', 
+                                fontWeight: '700', 
+                                border: '3px solid white', 
+                                boxShadow: '0 4px 10px rgba(0,0,0,0.05)',
+                                flexShrink: 0
+                              }}
+                            >
+                              {selectedOrderDetails.customerName.charAt(0)}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <p style={{ fontSize: '20px', fontWeight: '700', color: '#3D2B1F', marginBottom: '8px' }}>
+                                {selectedOrderDetails.customerName}
+                              </p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                  <Mail style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                  <span style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {selectedOrderDetails.email || 'No email provided'}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#6B5D4F' }}>
+                                  <Phone style={{ width: '16px', height: '16px', opacity: 0.6 }} />
+                                  <span style={{ fontSize: '14px' }}>
+                                    {selectedOrderDetails.contactNumber || 'No phone provided'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {/* Status Specific Messages (Show regardless of tab if applicable) */}
+                    {selectedOrderDetails.status === 'rejected' && selectedOrderDetails.rejectionReason && (
+                      <div className="space-y-3 pt-2">
+                        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                          <p className="text-[10px] font-bold uppercase text-red-600 mb-1">Reason for Rejection</p>
+                          <p className="text-sm text-red-700 whitespace-pre-wrap">{selectedOrderDetails.rejectionReason}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Column: Image Inspiration */}
+                  <div className="sticky top-0">
+                    <div className="flex items-center justify-between gap-2 mb-6">
+                      <div className="flex items-center gap-2">
+                        <Eye className="w-5 h-5 text-[#D4AF37]" />
+                        <h4 className="text-xs font-bold text-[#7F6D5C] uppercase tracking-wider">Inspiration</h4>
+                      </div>
+                    </div>
+
                     {selectedOrderDetails.designImageUrl ? (
-                      <div
-                        className="rounded-xl border border-[#E8DCC8] bg-white overflow-y-auto overflow-x-hidden"
-                        style={{ height: '400px', width: '300px' }}
-                      >
-                        <ImageWithFallback
-                          src={selectedOrderDetails.designImageUrl}
-                          alt={`${selectedOrderDetails.orderType || 'Custom order'} inspiration`}
-                          className="block w-full object-contain bg-white"
-                          style={{ height: '600px' }}
-                        />
+                      <div className="w-full">
+                        <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
+                          <ImageWithFallback
+                            src={selectedOrderDetails.designImageUrl}
+                            alt="Inspiration"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
                       </div>
                     ) : (
-                      <div className="flex-1 min-h-[12rem] rounded-xl border border-dashed border-[#D8C8B2] bg-white/60 flex items-center justify-center text-sm text-[#8A7A69] text-center px-6">
-                        No design inspiration image was provided for this custom order.
+                      <div className="w-full aspect-[3/4] rounded-2xl border-2 border-dashed border-[#D8C8B2] bg-[#FAF7F0] flex flex-col items-center justify-center text-center p-6">
+                        <Package className="w-8 h-8 text-[#D8C8B2] mb-3" />
+                        <p className="text-xs text-[#8A7A69] font-medium px-2">
+                          No design inspiration provided.
+                        </p>
                       </div>
                     )}
                   </div>
                 </div>
               </div>
 
-              {selectedOrderDetails.status === 'rejected' && selectedOrderDetails.rejectionReason && (
-                <div className="mt-6 px-8">
-                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                    <p className="font-semibold uppercase tracking-wide text-red-600">Reason for Rejection</p>
-                    <p className="mt-1 whitespace-pre-wrap">{selectedOrderDetails.rejectionReason}</p>
-                  </div>
+              {/* Fixed Footer: Actions */}
+              <div 
+                style={{ 
+                  padding: '24px 40px',
+                  borderTop: '1px solid #E8DCC8',
+                  backgroundColor: 'white',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '40px',
+                  zIndex: 30,
+                  boxShadow: '0 -15px 40px rgba(0,0,0,0.03)'
+                }}
+              >
+                <button
+                  onClick={() => setIsOrderDetailsOpen(false)}
+                  style={{
+                    padding: '14px 36px',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    color: '#7F6D5C',
+                    backgroundColor: '#FAF7F0',
+                    borderRadius: '18px',
+                    border: '1px solid #E8DCC8',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.backgroundColor = '#F2EADF';
+                    e.currentTarget.style.borderColor = '#D8C8B2';
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.backgroundColor = '#FAF7F0';
+                    e.currentTarget.style.borderColor = '#E8DCC8';
+                  }}
+                >
+                  Close Details
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  {selectedOrderDetails.status === 'design-approval' && (
+                    <button
+                      onClick={() => {
+                        openScheduleConsultationModal(selectedOrderDetails);
+                      }}
+                      style={{
+                        padding: '14px 48px',
+                        borderRadius: '18px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.3s',
+                        backgroundColor: '#D4AF37',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 15px rgba(212, 175, 55, 0.3)'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#B48F27';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(212, 175, 55, 0.4)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#D4AF37';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 4px 15px rgba(212, 175, 55, 0.3)';
+                      }}
+                    >
+                      Schedule Consultation
+                    </button>
+                  )}
+                  {selectedOrderDetails.status === 'fitting' && (
+                    <button
+                      onClick={() => {
+                        openScheduleFittingModal(selectedOrderDetails);
+                      }}
+                      style={{
+                        padding: '14px 48px',
+                        borderRadius: '18px',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        transition: 'all 0.3s',
+                        backgroundColor: '#1a1a1a',
+                        color: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 15px rgba(0, 0, 0, 0.15)'
+                      }}
+                      onMouseOver={(e) => {
+                        e.currentTarget.style.backgroundColor = '#D4AF37';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                        e.currentTarget.style.boxShadow = '0 6px 20px rgba(212, 175, 55, 0.4)';
+                      }}
+                      onMouseOut={(e) => {
+                        e.currentTarget.style.backgroundColor = '#1a1a1a';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                        e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.15)';
+                      }}
+                    >
+                      Schedule Fitting
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
         )}
