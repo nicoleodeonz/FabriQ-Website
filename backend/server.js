@@ -14,6 +14,7 @@ import appointmentRoutes from './routes/appointments.js';
 import customOrderRoutes from './routes/customOrders.js';
 import notificationRoutes from './routes/notifications.js';
 import realtimeRoutes from './routes/realtime.js';
+import chatMessageRoutes from './routes/chatMessages.js';
 
 loadEnvironment();
 
@@ -74,6 +75,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/custom-orders', customOrderRoutes);
 app.use('/api/realtime', realtimeRoutes);
+app.use('/api/chat-messages', chatMessageRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {

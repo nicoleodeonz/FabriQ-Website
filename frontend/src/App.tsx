@@ -6,6 +6,7 @@ import { CustomOrders } from './components/CustomOrders';
 import { Appointments } from './components/Appointments';
 import { CustomerProfile } from './components/CustomerProfile';
 import AdminDashboard from './components/AdminDashboard';
+import AdminMessages from './components/AdminMessages';
 import { Navigation } from './components/Navigation';
 import { Footer } from './components/Footer';
 import { LandingPage } from './components/LandingPage';
@@ -18,10 +19,11 @@ import { customerAPI } from './services/customerAPI';
 import { getPublicInventory } from './services/inventoryAPI';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
+import { FloatingChat } from './components/FloatingChat';
 import type { InventoryRating } from './services/inventoryAPI';
 import type { CustomerNotificationEntry } from './services/notificationAPI';
 
-export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin';
+export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin' | 'messages';
 
 export type FavoriteGown = GownDetails;
 
@@ -33,6 +35,7 @@ const VIEW_SEGMENTS: Record<View, string> = {
   appointments: 'appointments',
   profile: 'profile',
   admin: 'admin',
+  messages: 'messages',
 };
 
 const SEGMENT_TO_VIEW = Object.entries(VIEW_SEGMENTS).reduce<Record<string, View>>((accumulator, [view, segment]) => {
@@ -40,7 +43,7 @@ const SEGMENT_TO_VIEW = Object.entries(VIEW_SEGMENTS).reduce<Record<string, View
   return accumulator;
 }, {});
 
-const PROTECTED_VIEWS = new Set<View>(['rentals', 'custom-orders', 'appointments', 'profile', 'admin']);
+const PROTECTED_VIEWS = new Set<View>(['rentals', 'custom-orders', 'appointments', 'profile', 'admin', 'messages']);
 
 function parseHashRoute(hash: string) {
   const normalizedHash = hash.replace(/^#\/?/, '');
@@ -350,7 +353,7 @@ export default function App() {
   useEffect(() => {
     const applyHashRoute = () => {
       const route = parseHashRoute(window.location.hash);
-      const hasAccess = route.view === 'admin'
+      const hasAccess = (route.view === 'admin' || route.view === 'messages')
         ? isLoggedIn && isAdmin
         : !PROTECTED_VIEWS.has(route.view) || isLoggedIn;
 
@@ -397,7 +400,7 @@ export default function App() {
   };
 
   const navigateProtected = (view: View) => {
-    if (view === 'admin' && !isAdmin) {
+    if ((view === 'admin' || view === 'messages') && !isAdmin) {
       toast.error('Admin or staff access required.');
       return;
     }
@@ -423,7 +426,7 @@ export default function App() {
     view: View,
     options?: { selectedGownId?: string | null; selectedAppointmentType?: string | null }
   ) => {
-    if (view === 'admin' && !isAdmin) {
+    if ((view === 'admin' || view === 'messages') && !isAdmin) {
       toast.error('Admin or staff access required.');
       return;
     }
@@ -713,7 +716,12 @@ export default function App() {
     setAppView('custom-orders', { selectedGownId: null, selectedAppointmentType: null });
   };
 
-  if (showLanding) return <LandingPage onComplete={handleLandingComplete} />;
+  if (showLanding) return (
+    <>
+      <LandingPage onComplete={handleLandingComplete} />
+      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} />}
+    </>
+  );
 
   return (
     <div className="min-h-screen bg-[#FAF7F0]">
@@ -808,8 +816,15 @@ export default function App() {
         {currentView === 'admin' && isAdmin && authToken && currentUser && (
           <AdminDashboard token={authToken} currentUser={currentUser} />
         )}
+        {currentView === 'messages' && isAdmin && authToken && currentUser && (
+          <AdminMessages
+            token={authToken}
+            currentUser={currentUser}
+            onBack={() => setAppView('admin')}
+          />
+        )}
       </main>
-      {currentView !== 'admin' && (
+      {currentView !== 'admin' && currentView !== 'messages' && (
         <Footer
           isAdmin={isAdmin}
           onSelectCatalogCategory={navigateToCatalogCategory}
@@ -853,6 +868,7 @@ export default function App() {
       />
 
       <Toaster />
+      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} />}
     </div>
   );
 }

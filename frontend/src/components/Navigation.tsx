@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { View } from '../App';
-import { Bell, BellDot, User, Settings, X } from 'lucide-react';
+import { Bell, BellDot, User, Settings, X, MessageSquare } from 'lucide-react';
 import { notificationAPI, type CustomerNotificationEntry } from '../services/notificationAPI';
+import { chatAPI } from '../services/chatAPI';
 
 const NOTIFICATION_POLL_INTERVAL_MS = 15000;
 
@@ -36,10 +37,12 @@ export function Navigation({
   const [customerNotifications, setCustomerNotifications] = useState<CustomerNotificationEntry[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationLoadError, setNotificationLoadError] = useState<string | null>(null);
+  const [adminUnreadChatCount, setAdminUnreadChatCount] = useState<number>(0);
   const notificationPanelRef = useRef<HTMLDivElement | null>(null);
-  const notificationActionShift: CSSProperties = { position: 'relative', left: '340px' };
-  const profileActionShift: CSSProperties = { position: 'relative', left: '315px' };
-  const adminActionShift: CSSProperties = { position: 'relative', left: '290px' };
+  const notificationActionShift: CSSProperties = { position: 'relative', left: '375px' };
+  const messagesActionShift: CSSProperties = { position: 'relative', left: '350px' };
+  const profileActionShift: CSSProperties = { position: 'relative', left: '325px' };
+  const adminActionShift: CSSProperties = { position: 'relative', left: '300px' };
 
   useEffect(() => {
     if (!showNotificationModal) {
@@ -132,6 +135,26 @@ export function Navigation({
     };
   }, [customerNotifications.length, notificationToken, showCustomerNotifications, showNotificationModal]);
 
+  useEffect(() => {
+    if (!isAdmin || !notificationToken) {
+      setAdminUnreadChatCount(0);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const n = await chatAPI.getAdminUnreadCount(notificationToken);
+        if (!cancelled) setAdminUnreadChatCount(Number.isFinite(n) ? n : 0);
+      } catch (_e) { /* ignore */ }
+    };
+    void load();
+    const intervalId = window.setInterval(() => { void load(); }, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isAdmin, notificationToken]);
+
   const filteredNotifications = notificationFilter === 'unread'
     ? customerNotifications.filter((notification) => !notification.readAt)
     : customerNotifications;
@@ -209,22 +232,26 @@ export function Navigation({
         { view: 'appointments', label: 'Book', protected: true }
       ];
 
-  const renderButton = (view: View, label: string, type?: 'profile' | 'admin' | 'notifications', style?: CSSProperties) => {
-    const isIconOnlyDesktop = type === 'profile' || type === 'admin' || type === 'notifications';
+  const renderButton = (view: View, label: string, type?: 'profile' | 'admin' | 'notifications' | 'messages', style?: CSSProperties) => {
+    const isIconOnlyDesktop = type === 'profile' || type === 'admin' || type === 'notifications' || type === 'messages';
     const hasUnreadNotifications = type === 'notifications' && unreadNotificationCount > 0;
+    const hasUnreadChats = type === 'messages' && adminUnreadChatCount > 0;
     const Icon = type === 'profile'
       ? User
       : type === 'admin'
         ? Settings
         : type === 'notifications'
           ? (hasUnreadNotifications ? BellDot : Bell)
-          : undefined;
+          : type === 'messages'
+            ? MessageSquare
+            : undefined;
 
     return (
       <button
         key={view}
         onClick={(event) => {
           if (type === 'profile') navigateProtected('profile');
+          else if (type === 'messages') navigateProtected('messages');
           else if (type === 'notifications') {
             event.stopPropagation();
             setShowNotificationModal((prev) => !prev);
@@ -249,6 +276,11 @@ export function Navigation({
             style={hasUnreadNotifications ? { color: '#D62828' } : undefined}
           >
             <Icon className="h-5 w-5" />
+            {hasUnreadChats && (
+              <span className="absolute -top-1.5 -right-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#D4AF37] px-1 text-[9px] font-bold text-white shadow-sm">
+                {adminUnreadChatCount > 99 ? '99+' : adminUnreadChatCount}
+              </span>
+            )}
           </span>
         )}
         {!isIconOnlyDesktop && label}
@@ -441,6 +473,7 @@ export function Navigation({
                 )}
               </div>
             )}
+            {isAdmin && renderButton('messages', '', 'messages', messagesActionShift)} {/* Message icon left of profile for admin */}
             {renderButton('profile', '', 'profile', profileActionShift)} {/* Profile icon only */}
             {isAdmin && renderButton('admin', '', 'admin', adminActionShift)} {/* Admin gear icon only if admin */}
           </div>
@@ -460,6 +493,7 @@ export function Navigation({
         <div className="md:hidden bg-[#FAF7F0] border-t border-[#E8DCC8] px-6 py-6 space-y-1">
           {navItems.map((item) => renderButton(item.view, item.label))}
           {showCustomerNotifications && renderButton('profile', 'Notifications', 'notifications')}
+          {isAdmin && renderButton('messages', 'Messages', 'messages')}
           {renderButton('profile', 'Profile', 'profile')} {/* Icon + text */}
           {isAdmin && renderButton('admin', 'Admin', 'admin')}       {/* Icon + text if admin */}
         </div>
