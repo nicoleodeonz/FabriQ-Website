@@ -170,13 +170,19 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
             <ul>
               {conversations.map((conv) => {
                 const isActive = conv.conversationId === selectedId;
+                const hasUnread = conv.unreadCount > 0;
                 return (
                   <li key={conv.conversationId}>
                     <button
                       onClick={() => void loadMessages(conv.conversationId)}
                       className={`w-full text-left pl-7 pr-7 py-4 border-b border-[#F0E6D2] transition-colors ${
-                        isActive ? 'bg-[#F9F4E8]' : 'hover:bg-[#FDFAF4]'
+                        isActive
+                          ? 'bg-[#F9F4E8]'
+                          : hasUnread
+                            ? 'bg-[#FFF8EC] hover:bg-[#FDF1DD]'
+                            : 'hover:bg-[#FDFAF4]'
                       }`}
+                      style={hasUnread && !isActive ? { boxShadow: 'inset 3px 0 0 #D4AF37' } : undefined}
                     >
                       <div className="flex items-stretch justify-between gap-4">
                         <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -185,12 +191,12 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <p className="truncate font-medium text-[#1a1a1a]">{conv.customerName || 'Guest Customer'}</p>
-                              {conv.unreadCount > 0 && (
-                                <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#D4AF37] px-1.5 text-[10px] font-semibold text-white">
-                                  {conv.unreadCount}
-                                </span>
-                              )}
+                              <p
+                                className="truncate text-[#1a1a1a]"
+                                style={{ fontWeight: hasUnread ? 700 : 400 }}
+                              >
+                                {conv.customerName || 'Guest Customer'}
+                              </p>
                             </div>
                           </div>
                         </div>
@@ -199,9 +205,10 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
                             style={{
                               fontSize: '12px',
                               lineHeight: 1,
-                              color: '#A79580',
+                              color: hasUnread ? '#6B5D4F' : '#A79580',
                               whiteSpace: 'nowrap',
                               paddingRight: '14px',
+                              fontWeight: hasUnread ? 700 : 400,
                             }}
                           >
                             {formatDateTimeLabel(conv.lastMessageAt)}

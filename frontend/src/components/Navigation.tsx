@@ -277,9 +277,18 @@ export function Navigation({
           >
             <Icon className="h-5 w-5" />
             {hasUnreadChats && (
-              <span className="absolute -top-1.5 -right-1.5 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#D4AF37] px-1 text-[9px] font-bold text-white shadow-sm">
-                {adminUnreadChatCount > 99 ? '99+' : adminUnreadChatCount}
-              </span>
+              <span
+                className="absolute inline-flex rounded-full shadow-sm"
+                style={{
+                  top: '-2px',
+                  right: '-2px',
+                  width: '9px',
+                  height: '9px',
+                  backgroundColor: '#D62828',
+                  border: '1.5px solid #FAF7F0',
+                  zIndex: 2,
+                }}
+              />
             )}
           </span>
         )}
