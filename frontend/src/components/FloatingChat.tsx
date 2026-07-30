@@ -13,6 +13,7 @@ interface FloatingChatProps {
   showTooltip?: boolean;
   customerId?: string;
   guestToken?: string;
+  onOpenContactModal?: () => void;
   user?: {
     id?: string;
     firstName?: string;
@@ -23,6 +24,7 @@ interface FloatingChatProps {
 }
 
 const GUEST_TOKEN_KEY = 'fabriq_chat_guest_token';
+const CONTACT_MODAL_REPLY = 'Please contact us through here';
 
 function ensureGuestToken(): string {
   let token = '';
@@ -38,7 +40,7 @@ function ensureGuestToken(): string {
   return token;
 }
 
-export function FloatingChat({ showTooltip = true, customerId, guestToken, user }: FloatingChatProps) {
+export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpenContactModal, user }: FloatingChatProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [tooltipDismissed, setTooltipDismissed] = useState(false);
   const [conversationId, setConversationId] = useState<string>('');
@@ -71,8 +73,12 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, user 
     if (!isOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('[data-shared-contact-modal="true"]')) {
+        return;
+      }
+
       if (chatPanelRef.current && !chatPanelRef.current.contains(event.target as Node)) {
-        const target = event.target as HTMLElement;
         if (!target.closest('[data-floating-chat-toggle]')) {
           setIsOpen(false);
         }
@@ -128,20 +134,44 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, user 
       else if (resolvedGuestToken) payload.guestToken = resolvedGuestToken;
 
       const result = await chatAPI.postChatMessage(payload);
-      if (result?.conversationId) setConversationId(result.conversationId);
-    } catch (err) {
-      console.error('[FloatingChat] Failed to persist chat message:', err);
-    }
+      const nextConversationId = result?.conversationId || conversationId;
+      if (nextConversationId) {
+        setConversationId(nextConversationId);
+      }
 
-    setTimeout(() => {
-      const autoReply: ChatMessage = {
-        id: `msg-${Date.now()}-reply`,
-        sender: 'admin',
-        text: 'Thank you for your message! Our team will get back to you shortly.',
-        timestamp: new Date(),
+      const botPayload = {
+        conversationId: nextConversationId,
+        customerId,
+        guestToken: resolvedGuestToken,
+        userQuery: text,
+        uid: resolvedUid,
+        name: resolvedName,
+        time: payload.time,
+        date: payload.date,
       };
-      setMessages((prev) => [...prev, autoReply]);
-    }, 1200);
+
+      const botReply = await chatAPI.postChatbotReply(botPayload);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}-reply`,
+          sender: 'admin',
+          text: botReply.message.text,
+          timestamp: new Date(),
+        },
+      ]);
+    } catch (err) {
+      console.error('[FloatingChat] Failed to persist chat message or get chatbot reply:', err);
+      setTimeout(() => {
+        const fallbackReply: ChatMessage = {
+          id: `msg-${Date.now()}-reply`,
+          sender: 'admin',
+          text: 'Thank you for your message! Our team will get back to you shortly.',
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, fallbackReply]);
+      }, 1200);
+    }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -156,6 +186,32 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, user 
     const minutes = `${date.getMinutes()}`.padStart(2, '0');
     return `${hours}:${minutes}`;
   };
+
+  const isContactModalReply = (text: string) => normalizeText(text).toLowerCase() === CONTACT_MODAL_REPLY.toLowerCase();
+
+  const renderMessageText = (message: ChatMessage) => {
+    if (message.sender === 'admin' && isContactModalReply(message.text)) {
+      return (
+        <p className="text-sm leading-5 whitespace-pre-wrap break-words">
+          Please contact us through{' '}
+          <button
+            type="button"
+            onClick={onOpenContactModal}
+            className="font-medium underline underline-offset-2"
+            style={{ color: '#C9A227' }}
+          >
+            here
+          </button>
+        </p>
+      );
+    }
+
+    return <p className="text-sm leading-5 whitespace-pre-wrap break-words">{message.text}</p>;
+  };
+
+  function normalizeText(value: string) {
+    return String(value || '').trim();
+  }
 
   return (
     <div
@@ -224,7 +280,7 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, user 
                         borderBottomLeftRadius: message.sender === 'user' ? '16px' : '4px',
                       }}
                     >
-                      <p className="text-sm leading-5">{message.text}</p>
+                      {renderMessageText(message)}
                       <p
                         className={`mt-1 text-right text-[10px] ${
                           message.sender === 'user' ? 'text-white/60' : 'text-[#8A7763]'

@@ -62,6 +62,17 @@ export interface PostChatMessagePayload {
   sender?: 'customer' | 'admin';
 }
 
+export interface PostChatbotReplyPayload {
+  conversationId?: string;
+  customerId?: string;
+  guestToken?: string;
+  userQuery: string;
+  uid?: string;
+  name?: string;
+  time?: string;
+  date?: string;
+}
+
 export interface PostAdminReplyPayload {
   text: string;
   adminId?: string;
@@ -116,6 +127,22 @@ export const chatAPI = {
       throw new Error(getErrorMessage('Failed to fetch conversation messages', body));
     }
     return (body as any)?.messages || [];
+  },
+
+  postChatbotReply: async (payload: PostChatbotReplyPayload): Promise<{ message: ChatMessageRecord; conversationId: string }> => {
+    const response = await fetch(`${API_BASE_URL}/chat-messages/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await parseJsonSafe(response);
+    if (!response.ok) {
+      throw new Error(getErrorMessage('Failed to get chatbot reply', body));
+    }
+    return {
+      message: (body as any)?.message as ChatMessageRecord,
+      conversationId: String((body as any)?.conversationId || ''),
+    };
   },
 
   postAdminReply: async (

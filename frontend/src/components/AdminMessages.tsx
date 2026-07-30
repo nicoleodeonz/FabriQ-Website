@@ -27,6 +27,12 @@ function formatDateLabel(ts: string | Date | null | undefined): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function formatDateTimeLabel(ts: string | Date | null | undefined): string {
+  const date = formatDateLabel(ts);
+  const time = formatTime(ts);
+  return [date, time].filter(Boolean).join(' ');
+}
+
 function fullName(u: AdminMessagesPageProps['currentUser']): string {
   if (!u) return 'Admin';
   return [u.firstName, u.lastName].filter(Boolean).join(' ') || 'Admin';
@@ -168,12 +174,12 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
                   <li key={conv.conversationId}>
                     <button
                       onClick={() => void loadMessages(conv.conversationId)}
-                      className={`w-full text-left pl-7 pr-5 py-4 border-b border-[#F0E6D2] transition-colors ${
+                      className={`w-full text-left pl-7 pr-7 py-4 border-b border-[#F0E6D2] transition-colors ${
                         isActive ? 'bg-[#F9F4E8]' : 'hover:bg-[#FDFAF4]'
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex items-stretch justify-between gap-4">
+                        <div className="flex min-w-0 flex-1 items-center gap-3">
                           <div className="ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#6B5D4F] text-white">
                             <UserIcon className="h-6 w-6" />
                           </div>
@@ -188,9 +194,18 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
                             </div>
                           </div>
                         </div>
-                        <div className="shrink-0 pt-0.5 text-right">
-                          <p className="text-[9px] leading-4 text-[#A79580]">{formatDateLabel(conv.lastMessageAt)}</p>
-                          <p className="text-[9px] leading-4 text-[#A79580]">{formatTime(conv.lastMessageAt)}</p>
+                        <div className="flex min-w-[112px] shrink-0 items-end justify-end text-right">
+                          <p
+                            style={{
+                              fontSize: '12px',
+                              lineHeight: 1,
+                              color: '#A79580',
+                              whiteSpace: 'nowrap',
+                              paddingRight: '14px',
+                            }}
+                          >
+                            {formatDateTimeLabel(conv.lastMessageAt)}
+                          </p>
                         </div>
                       </div>
                     </button>
@@ -243,24 +258,31 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
                 )}
                 {messages.map((msg) => {
                   const isAdmin = msg.sender === 'admin';
+                  const isAiResponse = msg.sender === 'system';
+                  const isReplyBubble = isAdmin || isAiResponse;
                   return (
-                    <div key={msg._id || (msg as any).id || msg.createdAt + msg.text} className="flex w-full" style={{ justifyContent: isAdmin ? 'flex-end' : 'flex-start' }}>
+                    <div key={msg._id || (msg as any).id || msg.createdAt + msg.text} className="flex w-full" style={{ justifyContent: isReplyBubble ? 'flex-end' : 'flex-start' }}>
                       <div
                         className={`max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${
-                          isAdmin
+                          isReplyBubble
                             ? 'bg-[#1a1a1a] text-white'
                             : 'bg-white text-[#1a1a1a] border border-[#E8DCC8]'
                         }`}
                         style={{
-                          borderBottomRightRadius: isAdmin ? '4px' : '16px',
-                          borderBottomLeftRadius: isAdmin ? '16px' : '4px',
+                          borderBottomRightRadius: isReplyBubble ? '4px' : '16px',
+                          borderBottomLeftRadius: isReplyBubble ? '16px' : '4px',
                         }}
                       >
                         {isAdmin && msg.adminName && (
                           <p className="mb-1 text-[10px] uppercase tracking-wide text-white/60">{msg.adminName}</p>
                         )}
                         <p className="text-sm leading-5 whitespace-pre-wrap break-words">{msg.text}</p>
-                        <p className={`mt-1 text-right text-[10px] ${isAdmin ? 'text-white/60' : 'text-[#8A7763]'}`}>
+                        {isAiResponse && (
+                          <p className="mt-2 text-right text-[10px] italic tracking-wide text-white/60">
+                            AI Response
+                          </p>
+                        )}
+                        <p className={`mt-1 text-right text-[10px] ${isReplyBubble ? 'text-white/60' : 'text-[#8A7763]'}`}>
                           {formatTime(msg.createdAt)}
                         </p>
                       </div>

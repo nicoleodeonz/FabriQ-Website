@@ -39,9 +39,9 @@ export function Navigation({
   const [notificationLoadError, setNotificationLoadError] = useState<string | null>(null);
   const [adminUnreadChatCount, setAdminUnreadChatCount] = useState<number>(0);
   const notificationPanelRef = useRef<HTMLDivElement | null>(null);
-  const notificationActionShift: CSSProperties = { position: 'relative', left: '375px' };
+  const notificationActionShift: CSSProperties = { position: 'relative', left: '350px' };
   const messagesActionShift: CSSProperties = { position: 'relative', left: '350px' };
-  const profileActionShift: CSSProperties = { position: 'relative', left: '325px' };
+  const profileActionShift: CSSProperties = { position: 'relative', left: '326px' };
   const adminActionShift: CSSProperties = { position: 'relative', left: '300px' };
 
   useEffect(() => {

@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 import { FloatingChat } from './components/FloatingChat';
 import type { InventoryRating } from './services/inventoryAPI';
 import type { CustomerNotificationEntry } from './services/notificationAPI';
+import { Instagram, Facebook, Mail, Phone, MapPin, X } from 'lucide-react';
 
 export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin' | 'messages';
 
@@ -223,6 +224,7 @@ export default function App() {
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showForceChangePasswordModal, setShowForceChangePasswordModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
   const favoriteGownsRef = useRef<FavoriteGown[]>([]);
 
@@ -719,7 +721,97 @@ export default function App() {
   if (showLanding) return (
     <>
       <LandingPage onComplete={handleLandingComplete} />
-      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} />}
+      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} onOpenContactModal={() => setShowContactModal(true)} />}
+      {showContactModal && (
+        <div
+          data-shared-contact-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Contact platforms"
+          onClick={() => setShowContactModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white p-8 text-[#3D2B1F] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-serif text-2xl">Contact Us</h3>
+                <p className="mt-2 text-sm leading-6 text-[#6B5D4F]">
+                  Reach <span className="font-serif text-base text-[#3D2B1F]">Hannah Vanessa</span> through any of these platforms.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                aria-label="Close contact modal"
+                className="rounded-full border border-[#E8DCC8] p-2 text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-[#1a1a1a]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <a
+                href="mailto:hannahvanessaexclusive@gmail.com"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Mail className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Email:</span> hannahvanessaexclusive@gmail.com
+                </span>
+              </a>
+
+              <a
+                href="tel:09175931093"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Phone className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Phone:</span> 0917 593 1093
+                </span>
+              </a>
+
+              <a
+                href="https://maps.app.goo.gl/G2H4ovryYRgzUyfQ7"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <MapPin className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Address:</span> Cadena de Amor, Taguig City, Philippines
+                </span>
+              </a>
+
+              <a
+                href="https://www.instagram.com/officialhvd/"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Instagram className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Instagram:</span> @officialhvd
+                </span>
+              </a>
+
+              <a
+                href="https://www.facebook.com/HannahVanessaExclusive/"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Facebook className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Facebook:</span> Hannah Vanessa Exclusive
+                </span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -829,7 +921,99 @@ export default function App() {
           isAdmin={isAdmin}
           onSelectCatalogCategory={navigateToCatalogCategory}
           onSelectService={navigateToFooterService}
+          onOpenContactModal={() => setShowContactModal(true)}
         />
+      )}
+
+      {showContactModal && (
+        <div
+          data-shared-contact-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Contact platforms"
+          onClick={() => setShowContactModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white p-8 text-[#3D2B1F] shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-serif text-2xl">Contact Us</h3>
+                <p className="mt-2 text-sm leading-6 text-[#6B5D4F]">
+                  Reach <span className="font-serif text-base text-[#3D2B1F]">Hannah Vanessa</span> through any of these platforms.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowContactModal(false)}
+                aria-label="Close contact modal"
+                className="rounded-full border border-[#E8DCC8] p-2 text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-[#1a1a1a]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <a
+                href="mailto:hannahvanessaexclusive@gmail.com"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Mail className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Email:</span> hannahvanessaexclusive@gmail.com
+                </span>
+              </a>
+
+              <a
+                href="tel:09175931093"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Phone className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Phone:</span> 0917 593 1093
+                </span>
+              </a>
+
+              <a
+                href="https://maps.app.goo.gl/G2H4ovryYRgzUyfQ7"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <MapPin className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Address:</span> Cadena de Amor, Taguig City, Philippines
+                </span>
+              </a>
+
+              <a
+                href="https://www.instagram.com/officialhvd/"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Instagram className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Instagram:</span> @officialhvd
+                </span>
+              </a>
+
+              <a
+                href="https://www.facebook.com/HannahVanessaExclusive/"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
+              >
+                <Facebook className="h-5 w-5 text-[#6B5D4F]" />
+                <span className="text-sm text-[#6B5D4F]">
+                  <span className="font-medium text-[#3D2B1F]">Facebook:</span> Hannah Vanessa Exclusive
+                </span>
+              </a>
+            </div>
+          </div>
+        </div>
       )}
 
       <AuthModal
@@ -868,7 +1052,7 @@ export default function App() {
       />
 
       <Toaster />
-      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} />}
+      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} onOpenContactModal={() => setShowContactModal(true)} />}
     </div>
   );
 }

@@ -1,11 +1,35 @@
 import ChatMessage from '../models/ChatMessage.js';
 import Customer from '../models/Customer.js';
 import { isElevatedRole } from '../utils/roles.js';
+import { generateGeminiChatReply } from '../services/geminiChatService.js';
 
 function buildConversationId(customerId, guestToken) {
   if (customerId) return `cust_${customerId}`;
   if (guestToken) return `guest_${guestToken}`;
   return `guest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function buildCustomerContext(customerId) {
+  let customerName = 'Guest Customer';
+  let customerEmail = '';
+  let customerPhone = '';
+  let preferredBranch = '';
+
+  if (customerId) {
+    try {
+      const cust = await Customer.findById(customerId).select('firstName lastName email phoneNumber preferredBranch');
+      if (cust) {
+        customerName = [cust.firstName, cust.lastName].filter(Boolean).join(' ').trim() || 'Customer';
+        customerEmail = cust.email || '';
+        customerPhone = cust.phoneNumber || '';
+        preferredBranch = cust.preferredBranch || '';
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+  }
+
+  return { customerName, customerEmail, customerPhone, preferredBranch };
 }
 
 export const postChatMessage = async (req, res) => {
@@ -72,6 +96,63 @@ export const postChatMessage = async (req, res) => {
   } catch (err) {
     console.error('[chatMessages::postChatMessage]', err);
     res.status(500).json({ message: 'Failed to send message' });
+  }
+};
+
+export const postChatbotReply = async (req, res) => {
+  try {
+    const {
+      conversationId: incomingConversationId,
+      customerId,
+      guestToken,
+      userQuery,
+      uid,
+      name,
+      time,
+      date,
+    } = req.body || {};
+
+    const normalizedQuery = String(userQuery || '').trim();
+    if (!normalizedQuery) {
+      return res.status(400).json({ message: 'userQuery is required' });
+    }
+
+    const conversationId = incomingConversationId || buildConversationId(customerId, guestToken);
+    const customerContext = await buildCustomerContext(customerId);
+    const conversationHistory = await ChatMessage.find({ conversationId }).sort({ createdAt: 1 }).lean();
+
+    const replyText = await generateGeminiChatReply({
+      customerId,
+      preferredBranch: customerContext.preferredBranch,
+      conversationHistory,
+      userQuery: normalizedQuery,
+    });
+
+    const resolvedUid = String(uid || customerId || guestToken || '').trim();
+    const resolvedName = String(name || customerContext.customerName || 'Chat Assistant').trim();
+    const resolvedTime = String(time || new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })).trim();
+    const resolvedDate = String(date || new Date().toISOString().slice(0, 10)).trim();
+
+    const record = new ChatMessage({
+      conversationId,
+      customerId: customerId || '',
+      customerName: customerContext.customerName,
+      customerEmail: customerContext.customerEmail,
+      customerPhone: customerContext.customerPhone,
+      sender: 'system',
+      uid: resolvedUid,
+      name: resolvedName,
+      chat: replyText,
+      time: resolvedTime,
+      date: resolvedDate,
+      text: replyText,
+    });
+    await record.save();
+
+    res.status(201).json({ ok: true, message: record.toObject(), conversationId });
+  } catch (err) {
+    console.error('[chatMessages::postChatbotReply]', err);
+    res.status(500).json({ message: err instanceof Error ? err.message : 'Failed to generate chatbot reply' });
   }
 };
 

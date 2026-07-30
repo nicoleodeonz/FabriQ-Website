@@ -1,4 +1,4 @@
-import { Instagram, Facebook, Mail, Phone, MapPin, ArrowRight, X } from 'lucide-react';
+import { Instagram, Facebook, Mail, ArrowRight } from 'lucide-react';
 import { useState } from 'react';
 
 type FooterServiceTarget = 'rentals' | 'custom-orders' | 'appointments' | 'measurements';
@@ -7,6 +7,7 @@ interface FooterProps {
   isAdmin: boolean;
   onSelectCatalogCategory: (category: string) => void;
   onSelectService: (service: FooterServiceTarget) => void;
+  onOpenContactModal: () => void;
 }
 
 const SHOP_CATEGORIES = [
@@ -23,10 +24,9 @@ const SERVICE_LINKS: Array<{ label: string; target: FooterServiceTarget }> = [
   { label: 'Measurements', target: 'measurements' },
 ];
 
-export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService }: FooterProps) {
+export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOpenContactModal }: FooterProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showContactModal, setShowContactModal] = useState(false);
   const [showLiveViewModal, setShowLiveViewModal] = useState(false);
   const [blockedActionLabel, setBlockedActionLabel] = useState('this footer action');
 
@@ -90,7 +90,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService }: Fo
       openAdminFooterPreview('contact viewing');
       return;
     }
-    setShowContactModal(true);
+    onOpenContactModal();
   };
 
   return (
@@ -220,96 +220,6 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService }: Fo
             </ul>
           </div>
         </div>
-
-        {showContactModal && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Contact platforms"
-            onClick={() => setShowContactModal(false)}
-          >
-            <div
-              className="w-full max-w-lg rounded-2xl bg-white p-8 text-[#3D2B1F] shadow-2xl"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="mb-6 flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="font-serif text-2xl">Contact Us</h3>
-                  <p className="mt-2 text-sm leading-6 text-[#6B5D4F]">
-                    Reach <span className="font-serif text-base text-[#3D2B1F]">Hannah Vanessa</span> through any of these platforms.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowContactModal(false)}
-                  aria-label="Close contact modal"
-                  className="rounded-full border border-[#E8DCC8] p-2 text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-[#1a1a1a]"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                <a
-                  href="mailto:hannahvanessaexclusive@gmail.com"
-                  className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-                >
-                  <Mail className="h-5 w-5 text-[#6B5D4F]" />
-                  <span className="text-sm text-[#6B5D4F]">
-                    <span className="font-medium text-[#3D2B1F]">Email:</span> hannahvanessaexclusive@gmail.com
-                  </span>
-                </a>
-
-                <a
-                  href="tel:09175931093"
-                  className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-                >
-                  <Phone className="h-5 w-5 text-[#6B5D4F]" />
-                  <span className="text-sm text-[#6B5D4F]">
-                    <span className="font-medium text-[#3D2B1F]">Phone:</span> 0917 593 1093
-                  </span>
-                </a>
-
-                <a
-                  href="https://maps.app.goo.gl/G2H4ovryYRgzUyfQ7"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-                >
-                  <MapPin className="h-5 w-5 text-[#6B5D4F]" />
-                  <span className="text-sm text-[#6B5D4F]">
-                    <span className="font-medium text-[#3D2B1F]">Address:</span> Cadena de Amor, Taguig City, Philippines
-                  </span>
-                </a>
-
-                <a
-                  href="https://www.instagram.com/officialhvd/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-                >
-                  <Instagram className="h-5 w-5 text-[#6B5D4F]" />
-                  <span className="text-sm text-[#6B5D4F]">
-                    <span className="font-medium text-[#3D2B1F]">Instagram:</span> @officialhvd
-                  </span>
-                </a>
-
-                <a
-                  href="https://www.facebook.com/HannahVanessaExclusive/"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-                >
-                  <Facebook className="h-5 w-5 text-[#6B5D4F]" />
-                  <span className="text-sm text-[#6B5D4F]">
-                    <span className="font-medium text-[#3D2B1F]">Facebook:</span> Hannah Vanessa Exclusive
-                  </span>
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
 
         {showLiveViewModal && (
           <div
