@@ -68,19 +68,7 @@ function clearResetFields(account) {
 }
 
 function buildCodeDeliveryMessage(baseMessage, codeDeliveryResult, code, codeLabel) {
-  if (IS_PRODUCTION || !codeDeliveryResult || codeDeliveryResult.delivered) {
-    return baseMessage;
-  }
-
-  if (codeDeliveryResult.reason === 'test-mode') {
-    return `${baseMessage} Dev mode is active. Use this ${codeLabel}: ${code}`;
-  }
-
-  if (codeDeliveryResult.reason === 'missing-config' || codeDeliveryResult.reason === 'disabled') {
-    return `${baseMessage} Email delivery is not configured locally. Use this ${codeLabel}: ${code}`;
-  }
-
-  return `${baseMessage} Use this ${codeLabel}: ${code}`;
+  return baseMessage;
 }
 
 function buildAdminName(email) {
