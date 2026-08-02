@@ -101,6 +101,8 @@ interface AdminDashboardProps {
 
 type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
 type DashboardRefreshScope = 'overview' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history' | null;
+type ExportFormat = 'pdf' | 'csv' | 'xls';
+const EXPORT_FORMAT_OPTIONS: ExportFormat[] = ['pdf', 'csv', 'xls'];
 
 type AddItemField =
   | 'name'
@@ -415,6 +417,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [restoringUserId, setRestoringUserId] = useState<string | null>(null);
   const [showUserExportModal, setShowUserExportModal] = useState(false);
   const [userExportFilter, setUserExportFilter] = useState<UserExportFilter>('all');
+  const [userExportFormat, setUserExportFormat] = useState<ExportFormat>('pdf');
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [newUserError, setNewUserError] = useState<string | null>(null);
@@ -427,6 +430,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [adminHistoryFromTime, setAdminHistoryFromTime] = useState('');
   const [adminHistoryToTime, setAdminHistoryToTime] = useState('');
   const [adminHistoryPage, setAdminHistoryPage] = useState(1);
+  const [showAdminHistoryExportModal, setShowAdminHistoryExportModal] = useState(false);
+  const [adminHistoryExportFormat, setAdminHistoryExportFormat] = useState<ExportFormat>('pdf');
   const [newUserForm, setNewUserForm] = useState<NewUserForm>({
     role: 'Customer',
     email: '',
@@ -439,6 +444,65 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const canViewUsers = !isCurrentUserStaff;
   const canViewAdminHistory = !isCurrentUserStaff;
   const dashboardTitle = isCurrentUserStaff ? 'Staff Dashboard' : 'Admin Dashboard';
+
+  const escapeCsvValue = (value: string) => {
+    const sanitized = String(value || '').replace(/"/g, '""');
+    return /[",\n\r]/.test(sanitized) ? `"${sanitized}"` : sanitized;
+  };
+
+  const createCsvContent = (headers: string[], rows: string[][]) => {
+    const lines = [headers.map(escapeCsvValue).join(','), ...rows.map((row) => row.map(escapeCsvValue).join(','))];
+    return lines.join('\r\n');
+  };
+
+  const createXlsContent = (headers: string[], rows: string[][]) => {
+    const buildRow = (cells: string[]) => `      <tr>${cells.map((cell) => `<td>${cell.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td>`).join('')}</tr>`;
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head><body><table border="1" cellpadding="5" cellspacing="0">\n${buildRow(headers)}\n${rows.map(buildRow).join('\n')}\n</table></body></html>`;
+  };
+
+  const saveFile = (content: string | Blob, filename: string, type: string) => {
+    const blob = content instanceof Blob ? content : new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const renderExportFormatOptions = (
+    selectedFormat: ExportFormat,
+    onChange: (format: ExportFormat) => void,
+    groupName: string,
+  ) => (
+    <div className="flex items-stretch gap-3">
+      {EXPORT_FORMAT_OPTIONS.map((formatOption) => {
+        const isSelected = selectedFormat === formatOption;
+        const label = formatOption.toUpperCase();
+
+        return (
+          <label
+            key={`${groupName}-${formatOption}`}
+            className={`flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+              isSelected
+                ? 'border-[#1a1a1a] bg-[#FAF7F0] text-[#1A1A1A]'
+                : 'border-[#E8DCC8] bg-white text-[#6B5D4F] hover:border-[#D4AF37] hover:text-[#1A1A1A]'
+            }`}
+          >
+            <input
+              type="radio"
+              name={groupName}
+              value={formatOption}
+              checked={isSelected}
+              onChange={() => onChange(formatOption)}
+              className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+            />
+            <span>{label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
 
   useEffect(() => {
     if (!assignedStaffBranch) {
@@ -500,6 +564,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [isGeneratingAnalyticsPdf, setIsGeneratingAnalyticsPdf] = useState(false);
   const [overviewExportBranchFilter, setOverviewExportBranchFilter] = useState<string>('All Branches');
   const [overviewExportTypeFilter, setOverviewExportTypeFilter] = useState<OverviewExportTypeFilter[]>([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+  const [overviewExportFormat, setOverviewExportFormat] = useState<ExportFormat>('pdf');
+  const [storeOverviewExportFormat, setStoreOverviewExportFormat] = useState<ExportFormat>('pdf');
+  const [inventoryExportFormat, setInventoryExportFormat] = useState<ExportFormat>('pdf');
   const [selectedStoreOverviewExportBranches, setSelectedStoreOverviewExportBranches] = useState<string[]>(['All Branches']);
   const [selectedInventoryExportBranches, setSelectedInventoryExportBranches] = useState<string[]>(['All Branches']);
   const [appointmentStatusUpdatingId, setAppointmentStatusUpdatingId] = useState<string | null>(null);
@@ -522,6 +589,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [showCustomOrderExportModal, setShowCustomOrderExportModal] = useState(false);
   const [selectedCustomOrderExportFilters, setSelectedCustomOrderExportFilters] = useState<CustomOrderExportSelectableFilter[]>([...CUSTOM_ORDER_FILTER_TABS]);
   const [selectedCustomOrderExportBranch, setSelectedCustomOrderExportBranch] = useState<string>('All Branches');
+  const [customOrderExportFormat, setCustomOrderExportFormat] = useState<ExportFormat>('pdf');
   const [customOrderStatusUpdatingId, setCustomOrderStatusUpdatingId] = useState<string | null>(null);
   const [selectedCustomOrder, setSelectedCustomOrder] = useState<AdminCustomOrderRecord | null>(null);
   const [customOrderModalTab, setCustomOrderModalTab] = useState<'order' | 'customer' | 'notes'>('order');
@@ -539,6 +607,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [showRentalExportModal, setShowRentalExportModal] = useState(false);
   const [selectedRentalExportFilters, setSelectedRentalExportFilters] = useState<RentalExportSelectableFilter[]>(['pending', 'active', 'for-payment', 'for-pickup', 'returns']);
   const [selectedRentalExportBranch, setSelectedRentalExportBranch] = useState<string>('All Branches');
+  const [rentalExportFormat, setRentalExportFormat] = useState<ExportFormat>('pdf');
+  const [appointmentExportFormat, setAppointmentExportFormat] = useState<ExportFormat>('pdf');
   const [selectedPendingRental, setSelectedPendingRental] = useState<AdminRentalDetail | null>(null);
   const [showPendingRentalModal, setShowPendingRentalModal] = useState(false);
   const [isApproveRentalConfirmOpen, setIsApproveRentalConfirmOpen] = useState(false);
@@ -573,6 +643,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     confirmUserArchive ||
     confirmUserRestore ||
     showUserExportModal ||
+    showAdminHistoryExportModal ||
     showAddUserModal ||
     showPendingRentalModal ||
     showOverviewExportModal ||
@@ -1750,11 +1821,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     }
   };
 
+  const openAdminHistoryExportModal = () => {
+    if (!canExportPdfs) return;
+
+    setAdminHistoryExportFormat('pdf');
+    setShowAdminHistoryExportModal(true);
+  };
+
   const handleSaveAdminHistoryAsPdf = async () => {
     if (!canExportPdfs) return;
 
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = filteredAdminHistory.map((entry) => [
       entry.adminLabel || 'Admin',
       entry.adminEmail || 'No email',
@@ -1762,19 +1839,44 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       entry.createdAt ? new Date(entry.createdAt).toLocaleString() : 'N/A',
       formatHistoryDetails(entry),
     ]);
+    const filenameBase = `activity-logs-report-${new Date().toISOString().slice(0, 10)}`;
+
+    if (adminHistoryExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Admin', 'Email', 'Action', 'Date / Time', 'Details'],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowAdminHistoryExportModal(false);
+      return;
+    }
+
+    if (adminHistoryExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Admin', 'Email', 'Action', 'Date / Time', 'Details'],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowAdminHistoryExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: 'admin-history',
-      reportTitle: 'Admin History Report',
+      reportTitle: 'Activity Logs Report',
       generatedAt,
       totals: {
         totalRecords: filteredAdminHistory.length,
       },
-      tables: [createNarrativeTable('Admin History', ['Admin', 'Email', 'Action', 'Date / Time', 'Details'], rows)],
+      tables: [createNarrativeTable('Activity Logs', ['Admin', 'Email', 'Action', 'Date / Time', 'Details'], rows)],
     });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
-    document.text('Admin History Report', 40, 44);
+    document.text('Activity Logs Report', 40, 44);
     document.setFontSize(10);
     document.setTextColor(107, 93, 79);
     document.text(`Generated: ${generatedAt}`, 40, 64);
@@ -1783,7 +1885,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     autoTable(document, {
       startY: 96,
       head: [['Admin', 'Email', 'Action', 'Date / Time', 'Details']],
-      body: rows.length > 0 ? rows : [['-', '', 'No admin history available for export.', '', '']],
+      body: rows.length > 0 ? rows : [['-', '', 'No activity logs available for export.', '', '']],
       theme: 'grid',
       styles: {
         fontSize: 8,
@@ -1806,10 +1908,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
     });
 
-    appendPdfSectionNarrative(document, narrative, 'Admin History Summary', getLastAutoTableFinalY(document, 96) + 20);
+    appendPdfSectionNarrative(document, narrative, 'Activity Logs Summary', getLastAutoTableFinalY(document, 96) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    document.save(`admin-history-report-${new Date().toISOString().slice(0, 10)}.pdf`);
+    document.save(`${filenameBase}.pdf`);
+    setShowAdminHistoryExportModal(false);
   };
 
   async function handleArchiveUser(user: User) {
@@ -2630,6 +2733,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
     setOverviewExportBranchFilter(selectedBranch === 'All Branches' ? 'All Branches' : getShortBranchLabel(selectedBranch));
     setOverviewExportTypeFilter([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
+    setOverviewExportFormat('pdf');
     setShowOverviewExportModal(true);
   };
   const openStoreOverviewExportModal = () => {
@@ -2640,6 +2744,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         ? ['All Branches']
         : [selectedBranch]
     );
+    setStoreOverviewExportFormat('pdf');
     setShowStoreOverviewExportModal(true);
   };
   const toggleStoreOverviewExportBranch = (branchOption: string) => {
@@ -2703,6 +2808,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         ? ['All Branches']
         : [selectedBranch]
     );
+    setInventoryExportFormat('pdf');
     setShowInventoryExportModal(true);
   };
   useEffect(() => {
@@ -3377,8 +3483,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const handleSaveOverviewKpisAsPdf = async () => {
     if (!canExportPdfs) return;
 
-    const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
     const exportItems = getOverviewExportItems(overviewExportBranchFilter, overviewExportTypeFilter);
     const activityRows = exportItems.map((activity) => [
       activity.timeLabel,
@@ -3388,6 +3492,32 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       activity.detail,
       activity.branch,
     ]);
+    const filenameBase = `todays-activities-${new Date().toISOString().slice(0, 10)}`;
+
+    if (overviewExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch'],
+        activityRows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowOverviewExportModal(false);
+      return;
+    }
+
+    if (overviewExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch'],
+        activityRows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowOverviewExportModal(false);
+      return;
+    }
+
+    const generatedAt = new Date().toLocaleString();
+    const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: 'todays-activities',
       reportTitle: "Today's Activity Report",
@@ -3441,7 +3571,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfFinalSummaryPage(document, narrative);
 
     setShowOverviewExportModal(false);
-    document.save(`todays-activities-${new Date().toISOString().slice(0, 10)}.pdf`);
+    document.save(`${filenameBase}.pdf`);
   };
   const handleSaveStoreOverviewAsPdf = async () => {
     if (!canExportPdfs || isGeneratingAnalyticsPdf) return;
@@ -4057,18 +4187,49 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     }
     const pesoSymbolImage = pesoCanvas.toDataURL('image/png');
     const summaryRows = [
-      ['Total Sales', totalSalesForExport.toLocaleString()],
+      ['Total Sales', `PHP ${totalSalesForExport.toLocaleString()}`],
       ['Number of Orders', numberOfOrdersForExport.toLocaleString()],
       ['New Customers', newCustomersForExport.toLocaleString()],
       ['Top Selling Item', `${topSellingNameForExport}${topSellingCountForExport > 0 ? ` (${topSellingCountForExport} rental${topSellingCountForExport === 1 ? '' : 's'})` : ''}`],
     ];
     const comparisonRows = storeOverviewComparisonData.map((entry) => [
       entry.fullBranch,
-      entry.revenue.toLocaleString(),
+      `PHP ${entry.revenue.toLocaleString()}`,
       entry.rents.toLocaleString(),
       entry.appointments.toLocaleString(),
       entry.bespoke.toLocaleString(),
     ]);
+    const tabularRows = [
+      ...summaryRows.map(([label, value]) => ['Summary Metrics', label, value, '', '', '']),
+      ...comparisonRows.map(([branch, revenue, rents, appointments, bespoke]) => ['Branch Comparison', branch, revenue, rents, appointments, bespoke]),
+      ...itemsPerCategoryChartItemsForExport.map((entry) => ['Items per Category', entry.category, entry.count.toLocaleString(), '', '', '']),
+      ...mostRentedItemsForExport.map((entry) => ['Most Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
+      ...leastRentedItemsForExport.map((entry) => ['Least Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
+      ...mostClickedItemsForExport.map((entry) => ['Most Clicked Items', entry.name, entry.count.toLocaleString(), '', '', '']),
+    ];
+    const filenameBase = `store-overview-${new Date().toISOString().slice(0, 10)}`;
+
+    if (storeOverviewExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Section', 'Label', 'Value', 'Value 2', 'Value 3', 'Value 4'],
+        tabularRows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowStoreOverviewExportModal(false);
+      return;
+    }
+
+    if (storeOverviewExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Section', 'Label', 'Value', 'Value 2', 'Value 3', 'Value 4'],
+        tabularRows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowStoreOverviewExportModal(false);
+      return;
+    }
     const reportPayload: AnalyticsNarrativePayload = {
       reportType: 'store-overview',
       reportTitle: 'Store Overview Report',
@@ -4275,7 +4436,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfFinalSummaryPage(pdfDocument, narrative, lastChartNarrativeEndY ? lastChartNarrativeEndY + 24 : undefined);
 
     setShowStoreOverviewExportModal(false);
-    pdfDocument.save(`store-overview-${new Date().toISOString().slice(0, 10)}.pdf`);
+    pdfDocument.save(`${filenameBase}.pdf`);
     } finally {
       setIsGeneratingAnalyticsPdf(false);
     }
@@ -4589,6 +4750,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     if (!canExportPdfs) return;
 
     setUserExportFilter(showArchivedUsersOnly ? 'all' : userFilter);
+    setUserExportFormat('pdf');
     setShowUserExportModal(true);
   };
 
@@ -4599,7 +4761,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const exportTitle = showArchivedUsersOnly ? 'Archived Users Report' : 'User Management Report';
     const filterLabel = getUserExportLabel(filter);
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((user) => [
       `${user.firstName} ${user.lastName}`.trim() || 'Unnamed User',
       user.email || 'No email',
@@ -4609,6 +4770,31 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       user.joinDate || 'Unknown',
       user.status === 'active' ? 'Active' : 'Archived',
     ]);
+    const filenameBase = `${showArchivedUsersOnly ? 'archived-users' : `users-${filter}`}-report-${new Date().toISOString().slice(0, 10)}`;
+
+    if (userExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Name', 'Email', 'Phone', 'Branch', 'Role', 'Joined', 'Status'],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowUserExportModal(false);
+      return;
+    }
+
+    if (userExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Name', 'Email', 'Phone', 'Branch', 'Role', 'Joined', 'Status'],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowUserExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: 'users',
       reportTitle: exportTitle,
@@ -4657,8 +4843,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfSectionNarrative(document, narrative, 'Users Summary', getLastAutoTableFinalY(document, 112) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    const filename = `${showArchivedUsersOnly ? 'archived-users' : `users-${filter}`}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.save(filename);
+    document.save(`${filenameBase}.pdf`);
     setShowUserExportModal(false);
   };
 
@@ -4715,7 +4900,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const exportTitle = inventoryView === 'archive' ? 'Archived Inventory Report' : 'Inventory Report';
     const statusHeader = inventoryView === 'archive' ? 'Deleted' : 'Status';
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const filenameBase = `${inventoryView === 'archive' ? 'archived' : 'inventory'}-report-${new Date().toISOString().slice(0, 10)}`;
     const rows = inventoryExportItems.map((item) => {
       const statusValue = inventoryView === 'archive'
         ? (item.deletedAt ? new Date(item.deletedAt).toLocaleString() : 'Unknown')
@@ -4731,6 +4916,30 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         statusValue,
       ];
     });
+
+    if (inventoryExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowInventoryExportModal(false);
+      return;
+    }
+
+    if (inventoryExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowInventoryExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: inventoryView === 'archive' ? 'inventory-archive' : 'inventory',
       reportTitle: exportTitle,
@@ -4779,9 +4988,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfSectionNarrative(document, narrative, 'Inventory Summary', getLastAutoTableFinalY(document, 112) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    const filename = `${inventoryView === 'archive' ? 'archived' : 'inventory'}-report-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.save(filename);
     setShowInventoryExportModal(false);
+    document.save(`${filenameBase}.pdf`);
   };
 
   const changeInventoryPage = (nextPage: number) => {
@@ -5081,6 +5289,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           ? ['pending', 'active', 'for-payment', 'for-pickup', 'returns']
           : [rentalViewFilter]
     );
+    setRentalExportFormat('pdf');
     setShowRentalExportModal(true);
   };
 
@@ -5093,7 +5302,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Rental Report' : 'Rental Management Report';
     const filterLabel = getRentalExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((rental) => {
       const isPendingReturn = 'customer' in rental && !('customerName' in rental);
       if (isPendingReturn) {
@@ -5131,6 +5339,31 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         `PHP ${Number(rental.totalPrice || 0).toLocaleString()}`,
       ];
     });
+    const filenameBase = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-rentals' : 'rentals-export'}-${new Date().toISOString().slice(0, 10)}`;
+
+    if (rentalExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount'],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowRentalExportModal(false);
+      return;
+    }
+
+    if (rentalExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount'],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowRentalExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: filters.length === 1 && filters[0] === 'archive' ? 'rentals-archive' : 'rentals',
       reportTitle: exportTitle,
@@ -5181,8 +5414,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfSectionNarrative(document, narrative, 'Rentals Summary', getLastAutoTableFinalY(document, 128) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-rentals' : 'rentals-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.save(filename);
+    document.save(`${filenameBase}.pdf`);
     setShowRentalExportModal(false);
   };
   const paginatedPendingRentalCards = filteredPendingRentalCards.slice(
@@ -5357,6 +5589,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           ? ['pending', 'scheduled']
           : [appointmentStatusFilter]
     );
+    setAppointmentExportFormat('pdf');
     setShowAppointmentExportModal(true);
   };
 
@@ -5367,7 +5600,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Appointment Report' : 'Appointment Management Report';
     const filterLabel = getAppointmentExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((appointment) => [
       appointment.referenceId || appointment.id,
       appointment.customerName,
@@ -5380,6 +5612,31 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       appointment.status.charAt(0).toUpperCase() + appointment.status.slice(1),
       appointment.selectedGownName || 'Not specified',
     ]);
+    const filenameBase = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-appointments' : 'appointments-export'}-${new Date().toISOString().slice(0, 10)}`;
+
+    if (appointmentExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown'],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowAppointmentExportModal(false);
+      return;
+    }
+
+    if (appointmentExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown'],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowAppointmentExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: filters.length === 1 && filters[0] === 'archive' ? 'appointments-archive' : 'appointments',
       reportTitle: exportTitle,
@@ -5430,8 +5687,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfSectionNarrative(document, narrative, 'Appointments Summary', getLastAutoTableFinalY(document, 128) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-appointments' : 'appointments-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.save(filename);
+    document.save(`${filenameBase}.pdf`);
     setShowAppointmentExportModal(false);
   };
 
@@ -5659,6 +5915,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           ? [...CUSTOM_ORDER_FILTER_TABS]
           : [customOrderStatusFilter]
     );
+    setCustomOrderExportFormat('pdf');
     setShowCustomOrderExportModal(true);
   };
 
@@ -5669,7 +5926,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     const exportTitle = filters.length === 1 && filters[0] === 'archive' ? 'Archived Custom Order Report' : 'Bespoke Management Report';
     const filterLabel = getCustomOrderExportLabel(filters);
     const generatedAt = new Date().toLocaleString();
-    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const rows = exportItems.map((order) => [
       order.referenceId || order.id || order._id || 'N/A',
       order.customerName || 'Unknown Customer',
@@ -5681,6 +5937,31 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       order.eventDate || 'Not set',
       formatCustomOrderBudget(order.budget),
     ]);
+    const filenameBase = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-custom-orders' : 'custom-orders-export'}-${new Date().toISOString().slice(0, 10)}`;
+
+    if (customOrderExportFormat === 'csv') {
+      const csvContent = createCsvContent(
+        ['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget'],
+        rows,
+      );
+
+      saveFile(csvContent, `${filenameBase}.csv`, 'text/csv;charset=utf-8;');
+      setShowCustomOrderExportModal(false);
+      return;
+    }
+
+    if (customOrderExportFormat === 'xls') {
+      const xlsContent = createXlsContent(
+        ['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget'],
+        rows,
+      );
+
+      saveFile(xlsContent, `${filenameBase}.xls`, 'application/vnd.ms-excel;charset=utf-8;');
+      setShowCustomOrderExportModal(false);
+      return;
+    }
+
+    const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
     const narrative = await requestAnalyticsNarrative({
       reportType: filters.length === 1 && filters[0] === 'archive' ? 'custom-orders-archive' : 'custom-orders',
       reportTitle: exportTitle,
@@ -5731,8 +6012,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     appendPdfSectionNarrative(document, narrative, 'Custom Orders Summary', getLastAutoTableFinalY(document, 128) + 20);
     appendPdfFinalSummaryPage(document, narrative);
 
-    const filename = `${filters.length === 1 && filters[0] === 'archive' ? 'archived-custom-orders' : 'custom-orders-export'}-${new Date().toISOString().slice(0, 10)}.pdf`;
-    document.save(filename);
+    document.save(`${filenameBase}.pdf`);
     setShowCustomOrderExportModal(false);
   };
 
@@ -6058,7 +6338,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   : 'border-transparent text-[#6B5D4F] hover:text-black'
               }`}
             >
-              Admin History
+              Activity Logs
             </button>
           )}
         </div>
@@ -6074,11 +6354,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     <button
                       type="button"
                       onClick={openOverviewExportModal}
-                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
-                      aria-label="Save overview KPIs as PDF"
+                      className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center"
+                      aria-label="Download overview KPIs as PDF"
+                      title="Download overview KPIs as PDF"
                     >
                       <Download className="w-5 h-5" />
-                      Save as PDF
                     </button>
                   )}
                   <button
@@ -6187,11 +6467,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       <button
                         type="button"
                         onClick={openStoreOverviewExportModal}
-                        className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2"
-                        aria-label="Save overview KPIs as PDF"
+                        className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center"
+                        aria-label="Download overview KPIs as PDF"
+                        title="Download overview KPIs as PDF"
                       >
                         <Download className="w-5 h-5" />
-                        Save as PDF
                       </button>
                     )}
                     <button
@@ -6564,11 +6844,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     type="button"
                     onClick={openInventoryExportModal}
                     disabled={inventoryLoading || archiveLoading || inventoryExportSourceItems.length === 0}
-                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    aria-label="Save inventory as PDF"
+                    className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Download inventory as PDF"
+                    title="Download inventory as PDF"
                   >
                     <Download className="w-5 h-5" />
-                    Save as PDF
                   </button>
                 )}
                 {(isArchiveView || !isCurrentUserStaff) && (
@@ -6782,11 +7062,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       type="button"
                       onClick={openRentalExportModal}
                       disabled={adminRentalsLoading || !canOpenRentalExportModal}
-                      className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      aria-label="Save rentals as PDF"
+                      className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Download rentals as PDF"
+                      title="Download rentals as PDF"
                     >
                       <Download className="w-5 h-5" />
-                      Save as PDF
                     </button>
                   )}
                 <button
@@ -7472,9 +7752,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
               className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Today's Activities as PDF</h3>
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Export Today's Activities</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which branch and activity type to include in the exported PDF.
+                Choose which branch, activity type, and file format to include in the export.
               </p>
 
               <div className="space-y-6 mb-6">
@@ -7535,6 +7815,41 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 </div>
               </div>
 
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Export Format
+                  </label>
+                  <div className="flex items-stretch gap-3">
+                    {(['pdf', 'csv', 'xls'] as ExportFormat[]).map((formatOption) => {
+                      const isSelected = overviewExportFormat === formatOption;
+                      const label = formatOption.toUpperCase();
+
+                      return (
+                        <label
+                          key={formatOption}
+                          className={`flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
+                            isSelected
+                              ? 'border-[#1a1a1a] bg-[#FAF7F0] text-[#1A1A1A]'
+                              : 'border-[#E8DCC8] bg-white text-[#6B5D4F] hover:border-[#D4AF37] hover:text-[#1A1A1A]'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="overview-export-format"
+                            value={formatOption}
+                            checked={isSelected}
+                            onChange={() => setOverviewExportFormat(formatOption)}
+                            className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                          />
+                          <span>{label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
               <div className="flex flex-row items-center gap-3">
                 <button
                   type="button"
@@ -7547,9 +7862,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={handleSaveOverviewKpisAsPdf}
                   disabled={!canExportPdfs || overviewExportItems.length === 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  aria-label={`Download overview ${overviewExportFormat.toUpperCase()}`}
+                  title={`Download overview ${overviewExportFormat.toUpperCase()}`}
                 >
-                  Save PDF
+                  <Download className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -7561,39 +7878,52 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose store overview branches for PDF export"
+            aria-label="Choose store overview export options"
             onClick={() => setShowStoreOverviewExportModal(false)}
           >
             <div
               className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Store Overview as PDF</h3>
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Store Overview</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose one or more branches to include in the exported PDF.
+                Choose one or more branches and the file format for this export.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {['All Branches', ...storeOverviewExportBranchOptions].map((branchOption) => (
-                  <label
-                    key={branchOption}
-                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
-                      selectedStoreOverviewExportBranches.includes(branchOption)
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      name={`store-overview-export-branch-${branchOption}`}
-                      value={branchOption}
-                      checked={selectedStoreOverviewExportBranches.includes(branchOption)}
-                      onChange={() => toggleStoreOverviewExportBranch(branchOption)}
-                      className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                    />
-                    <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+              <div className="space-y-4 mb-6">
+                <div className="space-y-3">
+                  {['All Branches', ...storeOverviewExportBranchOptions].map((branchOption) => (
+                    <label
+                      key={branchOption}
+                      className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                        selectedStoreOverviewExportBranches.includes(branchOption)
+                          ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        name={`store-overview-export-branch-${branchOption}`}
+                        value={branchOption}
+                        checked={selectedStoreOverviewExportBranches.includes(branchOption)}
+                        onChange={() => toggleStoreOverviewExportBranch(branchOption)}
+                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                      />
+                      <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Export Format
                   </label>
-                ))}
+                  {renderExportFormatOptions(
+                    storeOverviewExportFormat,
+                    setStoreOverviewExportFormat,
+                    'store-overview-export-format',
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -7608,9 +7938,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={handleSaveStoreOverviewAsPdf}
                   disabled={!canExportPdfs || storeOverviewComparisonData.length === 0 || isGeneratingAnalyticsPdf}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  aria-label={isGeneratingAnalyticsPdf ? 'Generating PDF export' : `Download store overview ${storeOverviewExportFormat.toUpperCase()}`}
+                  title={isGeneratingAnalyticsPdf ? 'Generating PDF export' : `Download store overview ${storeOverviewExportFormat.toUpperCase()}`}
                 >
-                  {isGeneratingAnalyticsPdf ? 'Generating...' : 'Save PDF'}
+                  {isGeneratingAnalyticsPdf ? 'Generating...' : <Download className="w-5 h-5" />}
                 </button>
               </div>
             </div>
@@ -7622,39 +7954,52 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose inventory branches for PDF export"
+            aria-label="Choose inventory export options"
             onClick={() => setShowInventoryExportModal(false)}
           >
             <div
               className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Inventory as PDF</h3>
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Inventory</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose one or more branches to include in the exported PDF.
+                Choose one or more branches and the file format for this export.
               </p>
 
-              <div className="space-y-3 mb-6">
-                {['All Branches', ...inventoryExportBranchOptions].map((branchOption) => (
-                  <label
-                    key={branchOption}
-                    className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
-                      selectedInventoryExportBranches.includes(branchOption)
-                        ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                        : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      name={`inventory-export-branch-${branchOption}`}
-                      value={branchOption}
-                      checked={selectedInventoryExportBranches.includes(branchOption)}
-                      onChange={() => toggleInventoryExportBranch(branchOption)}
-                      className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                    />
-                    <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+              <div className="space-y-4 mb-6">
+                <div className="space-y-3">
+                  {['All Branches', ...inventoryExportBranchOptions].map((branchOption) => (
+                    <label
+                      key={branchOption}
+                      className={`flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                        selectedInventoryExportBranches.includes(branchOption)
+                          ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        name={`inventory-export-branch-${branchOption}`}
+                        value={branchOption}
+                        checked={selectedInventoryExportBranches.includes(branchOption)}
+                        onChange={() => toggleInventoryExportBranch(branchOption)}
+                        className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                      />
+                      <span className="text-sm font-medium text-[#1a1a1a]">{branchOption}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Export Format
                   </label>
-                ))}
+                  {renderExportFormatOptions(
+                    inventoryExportFormat,
+                    setInventoryExportFormat,
+                    'inventory-export-format',
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -7669,9 +8014,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={handleSaveInventoryAsPdf}
                   disabled={!canExportPdfs || inventoryExportItems.length === 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  aria-label={`Download inventory ${inventoryExportFormat.toUpperCase()}`}
+                  title={`Download inventory ${inventoryExportFormat.toUpperCase()}`}
                 >
-                  Save PDF
+                  <Download className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -7683,16 +8030,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose rental export filters for PDF export"
+            aria-label="Choose rental export options"
             onClick={() => setShowRentalExportModal(false)}
           >
             <div
               className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Rentals as PDF</h3>
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Rentals</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which branch and rental statuses to include in the exported PDF.
+                Choose which branch, rental statuses, and file format to include in the export.
               </p>
 
               <div className="space-y-6 mb-6">
@@ -7747,6 +8094,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     ))}
                   </div>
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Export Format
+                  </label>
+                  {renderExportFormatOptions(
+                    rentalExportFormat,
+                    setRentalExportFormat,
+                    'rental-export-format',
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -7761,9 +8119,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={() => handleSaveRentalsAsPdf(selectedRentalExportFilters, selectedRentalExportBranch)}
                   disabled={!canExportPdfs || getRentalExportItems(selectedRentalExportFilters, selectedRentalExportBranch).length === 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  aria-label={`Download rentals ${rentalExportFormat.toUpperCase()}`}
+                  title={`Download rentals ${rentalExportFormat.toUpperCase()}`}
                 >
-                  Save PDF
+                  <Download className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -7780,11 +8140,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     type="button"
                     onClick={openAppointmentExportModal}
                     disabled={adminAppointmentsLoading || !canOpenAppointmentExportModal}
-                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    aria-label="Save appointments as PDF"
+                    className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Download appointments as PDF"
+                    title="Download appointments as PDF"
                   >
                     <Download className="w-5 h-5" />
-                    Save as PDF
                   </button>
                 )}
                 <button
@@ -8084,16 +8444,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
             aria-modal="true"
-            aria-label="Choose appointment export filters for PDF export"
+            aria-label="Choose appointment export options"
             onClick={() => setShowAppointmentExportModal(false)}
           >
             <div
               className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
               onClick={(event) => event.stopPropagation()}
             >
-              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Appointments as PDF</h3>
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Save Appointments</h3>
               <p className="text-sm text-[#6B5D4F] mb-6">
-                Choose which branch and appointment statuses to include in the exported PDF.
+                Choose which branch, appointment statuses, and file format to include in the export.
               </p>
 
               <div className="space-y-6 mb-6">
@@ -8148,6 +8508,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     ))}
                   </div>
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                    Export Format
+                  </label>
+                  {renderExportFormatOptions(
+                    appointmentExportFormat,
+                    setAppointmentExportFormat,
+                    'appointment-export-format',
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-row items-center gap-3">
@@ -8162,9 +8533,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={() => handleSaveAppointmentsAsPdf(selectedAppointmentExportFilters, selectedAppointmentExportBranch)}
                   disabled={!canExportPdfs || getAppointmentExportItems(selectedAppointmentExportFilters, selectedAppointmentExportBranch).length === 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  aria-label={`Download appointments ${appointmentExportFormat.toUpperCase()}`}
+                  title={`Download appointments ${appointmentExportFormat.toUpperCase()}`}
                 >
-                  Save PDF
+                  <Download className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -8181,11 +8554,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     type="button"
                     onClick={openCustomOrderExportModal}
                     disabled={adminCustomOrdersLoading || !canOpenCustomOrderExportModal}
-                    className="px-6 py-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    aria-label="Save custom orders as PDF"
+                    className="p-3 border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors rounded-lg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Download custom orders as PDF"
+                    title="Download custom orders as PDF"
                   >
                     <Download className="w-5 h-5" />
-                    Save as PDF
                   </button>
                 )}
                 <button
@@ -8252,16 +8625,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Choose bespoke export filters for PDF export"
+                aria-label="Choose bespoke export options"
                 onClick={() => setShowCustomOrderExportModal(false)}
               >
                 <div
                   className="bg-white rounded-2xl p-8 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto"
                   onClick={(event) => event.stopPropagation()}
                 >
-                  <h3 className="text-xl sm:text-2xl font-light mb-2">Save Custom Orders as PDF</h3>
+                  <h3 className="text-xl sm:text-2xl font-light mb-2">Save Custom Orders</h3>
                   <p className="text-sm text-[#6B5D4F] mb-6">
-                    Choose which branch and bespoke statuses to include in the exported PDF.
+                    Choose which branch, bespoke statuses, and file format to include in the export.
                   </p>
 
                   <div className="space-y-6 mb-6">
@@ -8316,6 +8689,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                         ))}
                       </div>
                     </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                        Export Format
+                      </label>
+                      {renderExportFormatOptions(
+                        customOrderExportFormat,
+                        setCustomOrderExportFormat,
+                        'custom-order-export-format',
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex flex-row items-center gap-3">
@@ -8330,9 +8714,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       type="button"
                       onClick={() => handleSaveCustomOrdersAsPdf(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch)}
                       disabled={!canExportPdfs || getCustomOrderExportItems(selectedCustomOrderExportFilters, selectedCustomOrderExportBranch).length === 0}
-                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                      aria-label={`Download custom orders ${customOrderExportFormat.toUpperCase()}`}
+                      title={`Download custom orders ${customOrderExportFormat.toUpperCase()}`}
                     >
-                      Save PDF
+                      <Download className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
@@ -8467,10 +8853,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   <button
                     onClick={openUserExportModal}
                     disabled={usersLoading || !canOpenUserExportModal}
-                    className="px-6 py-3 rounded-lg flex items-center gap-2 transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="p-3 rounded-lg flex items-center justify-center transition-colors border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black disabled:opacity-50 disabled:cursor-not-allowed"
+                    aria-label="Download users as PDF"
+                    title="Download users as PDF"
                   >
                     <Download className="w-5 h-5" />
-                    Save as PDF
                   </button>
                 )}
                 {!showArchivedUsersOnly && !isCurrentUserStaff && (
@@ -8705,42 +9092,55 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                   role="dialog"
                   aria-modal="true"
-                  aria-label="Choose account type filter for user PDF export"
+                  aria-label="Choose user export options"
                   onClick={() => setShowUserExportModal(false)}
                 >
                   <div
                     className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
                     onClick={(event) => event.stopPropagation()}
                   >
-                    <h3 className="text-xl sm:text-2xl font-light mb-2">Save Users as PDF</h3>
+                    <h3 className="text-xl sm:text-2xl font-light mb-2">Save Users</h3>
                     <p className="text-sm text-[#6B5D4F] mb-6">
-                      Choose which account type to include in the exported PDF.
+                      Choose which account type and file format to include in the export.
                     </p>
 
-                    <div className="space-y-3 mb-6">
-                      {userExportOptions.map((option) => (
-                        <label
-                          key={option.value}
-                          className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
-                            userExportFilter === option.value
-                              ? 'border-[#1a1a1a] bg-[#FAF7F0]'
-                              : 'border-[#E8DCC8] hover:border-[#D4AF37]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="radio"
-                              name="user-export-filter"
-                              value={option.value}
-                              checked={userExportFilter === option.value}
-                              onChange={() => setUserExportFilter(option.value)}
-                              className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                            />
-                            <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
-                          </div>
-                          <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                    <div className="space-y-4 mb-6">
+                      <div className="space-y-3">
+                        {userExportOptions.map((option) => (
+                          <label
+                            key={option.value}
+                            className={`flex items-center justify-between gap-4 rounded-xl border px-4 py-3 transition-colors ${
+                              userExportFilter === option.value
+                                ? 'border-[#1a1a1a] bg-[#FAF7F0]'
+                                : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="radio"
+                                name="user-export-filter"
+                                value={option.value}
+                                checked={userExportFilter === option.value}
+                                onChange={() => setUserExportFilter(option.value)}
+                                className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                              />
+                              <span className="text-sm font-medium text-[#1a1a1a]">{option.label}</span>
+                            </div>
+                            <span className="text-sm text-[#6B5D4F]">{option.count}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                          Export Format
                         </label>
-                      ))}
+                        {renderExportFormatOptions(
+                          userExportFormat,
+                          setUserExportFormat,
+                          'user-export-format',
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex flex-row items-center gap-3">
@@ -8755,9 +9155,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                         type="button"
                         onClick={() => handleSaveUsersAsPdf(userExportFilter)}
                         disabled={!canExportPdfs || getUserExportItems(userExportFilter).length === 0}
-                        className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                        aria-label={`Download users ${userExportFormat.toUpperCase()}`}
+                        title={`Download users ${userExportFormat.toUpperCase()}`}
                       >
-                        Save PDF
+                        <Download className="w-5 h-5" />
                       </button>
                     </div>
                   </div>
@@ -8770,16 +9172,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         {canViewAdminHistory && activeTab === 'history' && (
           <div className="space-y-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-light">Admin History</h2>
+              <h2 className="text-2xl font-light">Activity Logs</h2>
               <div className="flex items-center gap-2">
                 {canExportPdfs && (
                   <button
-                    onClick={handleSaveAdminHistoryAsPdf}
+                    onClick={openAdminHistoryExportModal}
                     disabled={adminHistoryLoading || filteredAdminHistory.length === 0}
-                    className={`${adminHistoryActionButtonClass} gap-2 py-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                    className={`${adminHistoryActionButtonClass} p-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+                    aria-label="Download activity logs"
+                    title="Download activity logs"
                   >
                     <Download className="h-4 w-4" />
-                    Save as PDF
                   </button>
                 )}
                 <button
@@ -8856,7 +9259,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             <div className="flex flex-col md:flex-row gap-3 md:items-center">
               <input
                 type="text"
-                placeholder="Search Admin History"
+                placeholder="Search Activity Logs"
                 value={adminHistorySearchQuery}
                 onChange={(e) => setAdminHistorySearchQuery(e.target.value)}
                 className="px-4 py-2 border border-[#E8DCC8] rounded-lg focus:outline-none focus:border-[#D4AF37] w-full md:w-[380px] lg:w-[460px]"
@@ -8876,12 +9279,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             )}
 
             {adminHistoryLoading && (
-              <p className="text-center py-8 text-[#6B5D4F]">Loading admin history...</p>
+              <p className="text-center py-8 text-[#6B5D4F]">Loading activity logs...</p>
             )}
 
             {!adminHistoryLoading && !adminHistoryError && filteredAdminHistory.length === 0 && (
               <p className="text-center py-8 text-[#6B5D4F]">
-                {adminHistory.length === 0 ? 'No admin actions recorded yet.' : 'No admin actions match the selected filters.'}
+                {adminHistory.length === 0 ? 'No activity logs recorded yet.' : 'No activity logs match the selected filters.'}
               </p>
             )}
 
@@ -8942,6 +9345,59 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {showAdminHistoryExportModal && (
+              <div
+                className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Choose activity logs export options"
+                onClick={() => setShowAdminHistoryExportModal(false)}
+              >
+                <div
+                  className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <h3 className="text-xl sm:text-2xl font-light mb-2">Save Activity Logs</h3>
+                  <p className="text-sm text-[#6B5D4F] mb-6">
+                    Choose the file format for the filtered activity logs export.
+                  </p>
+
+                  <div className="space-y-4 mb-6">
+                    <div>
+                      <label className="block text-sm font-medium text-[#1A1A1A] mb-3">
+                        Export Format
+                      </label>
+                      {renderExportFormatOptions(
+                        adminHistoryExportFormat,
+                        setAdminHistoryExportFormat,
+                        'admin-history-export-format',
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-row items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminHistoryExportModal(false)}
+                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveAdminHistoryAsPdf}
+                      disabled={!canExportPdfs || filteredAdminHistory.length === 0}
+                      className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                      aria-label={`Download activity logs ${adminHistoryExportFormat.toUpperCase()}`}
+                      title={`Download activity logs ${adminHistoryExportFormat.toUpperCase()}`}
+                    >
+                      <Download className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
