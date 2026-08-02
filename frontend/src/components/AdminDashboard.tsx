@@ -1149,6 +1149,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     if (normalized === 'user_created') return 'User Created';
     if (normalized === 'user_archived') return 'User Archived';
     if (normalized === 'user_restored') return 'User Restored';
+    if (normalized === 'chat_reply_sent') return 'Chat Reply Sent';
     if (normalized === 'appointment_status_updated') return 'Appointment Status Updated';
     if (normalized === 'custom_order_status_updated') return 'Custom Order Status Updated';
     return normalized

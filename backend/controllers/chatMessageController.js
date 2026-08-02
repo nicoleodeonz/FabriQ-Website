@@ -1,5 +1,6 @@
 import ChatMessage from '../models/ChatMessage.js';
 import Customer from '../models/Customer.js';
+import AdminAction from '../models/AdminAction.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { generateGeminiChatReply } from '../services/geminiChatService.js';
 
@@ -7,6 +8,31 @@ function buildConversationId(customerId, guestToken) {
   if (customerId) return `cust_${customerId}`;
   if (guestToken) return `guest_${guestToken}`;
   return `guest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildAdminLabelFromEmail(email) {
+  const prefix = String(email || '').split('@')[0] || 'Admin';
+  return prefix
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ') || 'Admin';
+}
+
+async function logElevatedChatReply(req, payload) {
+  try {
+    await AdminAction.create({
+      adminId: String(req.user?.id || ''),
+      adminEmail: String(req.user?.email || '').trim().toLowerCase(),
+      adminLabel: buildAdminLabelFromEmail(req.user?.email || ''),
+      action: 'chat_reply_sent',
+      targetUserId: payload.targetUserId || '',
+      targetRole: 'customer',
+      details: payload.details || null,
+    });
+  } catch (error) {
+    console.error('chat logElevatedChatReply error:', error);
+  }
 }
 
 async function buildCustomerContext(customerId) {
@@ -272,6 +298,18 @@ export const postAdminReply = async (req, res) => {
       text: normalizedText,
     });
     await record.save();
+
+    await logElevatedChatReply(req, {
+      targetUserId: sample?.customerId || '',
+      details: {
+        conversationId,
+        customerName: sample?.customerName || 'Guest Customer',
+        customerEmail: sample?.customerEmail || '',
+        senderRole: String(req.user?.role || '').trim().toLowerCase() || 'admin',
+        messagePreview: normalizedText.slice(0, 120),
+      },
+    });
+
     res.status(201).json({ ok: true, message: record.toObject() });
   } catch (err) {
     console.error('[chatMessages::postAdminReply]', err);
