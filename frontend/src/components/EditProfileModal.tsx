@@ -268,9 +268,11 @@ export function EditProfileModal({
 
     if (name === 'phoneNumber') {
       const digits = value.replace(/\D/g, '');
-      if (digits && !digits.startsWith('9')) {
+      if (!digits) {
+        message = 'Phone number is required';
+      } else if (!digits.startsWith('9')) {
         message = 'Phone number must start with 9';
-      } else if (digits && !phoneDigitsRegex.test(digits)) {
+      } else if (!phoneDigitsRegex.test(digits)) {
         message = 'Enter 10 digits (e.g. 9123456789)';
       }
     }
@@ -407,6 +409,7 @@ export function EditProfileModal({
       !formData.firstName ||
       !formData.lastName ||
       !formData.email ||
+      !formData.phoneNumber ||
       (!shouldHideBranchField && !formData.preferredBranch) ||
       (!isStaffAccount && (
         !streetAddress.trim() ||
