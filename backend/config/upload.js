@@ -21,13 +21,14 @@ const storage = multer.diskStorage({
 
 function createUpload(options) {
   const allowedExt = options.allowedExt.map((entry) => entry.toLowerCase());
-  const allowedMime = options.allowedMime.map((entry) => entry.toLowerCase());
 
   const fileFilter = (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const mime = String(file.mimetype || '').toLowerCase();
+    const hasAllowedExtension = allowedExt.includes(ext);
 
-    if (allowedExt.includes(ext) && allowedMime.includes(mime)) {
+    // Some browsers/OS combinations report uncommon or blank MIME types for 3D assets.
+    // Keep the extension gate strict and treat MIME only as advisory metadata.
+    if (hasAllowedExtension) {
       cb(null, true);
     } else {
       cb(new Error(options.errorMessage));
@@ -62,8 +63,11 @@ export const upload3DModel = createUpload({
   allowedExt: ['.glb', '.gltf', '.usdz', '.zip'],
   allowedMime: [
     'model/gltf-binary',
+    'model/gltf_binary',
     'model/gltf+json',
     'model/vnd.usdz+zip',
+    'model/vnd.pixar.usd',
+    'model/usd',
     'application/zip',
     'application/x-zip-compressed',
     'application/octet-stream',

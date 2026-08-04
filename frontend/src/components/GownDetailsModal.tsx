@@ -1,6 +1,6 @@
 import { Calendar, ChevronLeft, ChevronRight, MapPin, Star, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import '@google/model-viewer';
+import '@google/model-viewer/dist/model-viewer.min.js';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { getPublicInventory } from '../services/inventoryAPI';

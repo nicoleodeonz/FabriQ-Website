@@ -130,6 +130,16 @@ export async function storeUploadedAsset(file, options = {}) {
     throw new Error('Uploaded file is required.');
   }
 
+  const resourceType = options.resourceType || 'raw';
+
+  if (resourceType === 'raw') {
+    return {
+      storage: 'local',
+      url: `/uploads/${file.filename}`,
+      publicId: null,
+    };
+  }
+
   if (!config.isConfigured) {
     return {
       storage: 'local',
@@ -139,7 +149,6 @@ export async function storeUploadedAsset(file, options = {}) {
   }
 
   const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
-  const resourceType = options.resourceType || 'raw';
 
   try {
     const uploadOptions = {
@@ -150,12 +159,7 @@ export async function storeUploadedAsset(file, options = {}) {
       overwrite: false,
     };
 
-    const result = resourceType === 'raw'
-      ? await cloudinary.uploader.upload_large(file.path, {
-          ...uploadOptions,
-          chunk_size: 6 * 1024 * 1024,
-        })
-      : await cloudinary.uploader.upload(file.path, uploadOptions);
+    const result = await cloudinary.uploader.upload(file.path, uploadOptions);
 
     await removeLocalTempFile(file.path);
 
@@ -165,7 +169,8 @@ export async function storeUploadedAsset(file, options = {}) {
       publicId: result.public_id,
     };
   } catch (error) {
-    if (options.allowLocalFallback && isCloudinaryFileSizeLimitError(error)) {
+    if (options.allowLocalFallback) {
+      console.warn('Falling back to local asset storage:', error instanceof Error ? error.message : error);
       return {
         storage: 'local',
         url: `/uploads/${file.filename}`,
