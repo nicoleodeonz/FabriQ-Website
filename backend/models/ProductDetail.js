@@ -107,6 +107,7 @@ const ProductDetailSchema = new mongoose.Schema({
   stock: {
     type: Number,
     min: 0,
+    max: 99,
     default: 1
   },
   clickCount: {

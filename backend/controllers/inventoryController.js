@@ -304,7 +304,7 @@ export async function upload3DModel(req, res) {
 
     const storedModel = await storeUploadedAsset(req.file, {
       folder: 'products/models',
-      resourceType: 'image',
+      resourceType: 'raw',
       allowLocalFallback: true,
     });
     res.json({ url: toPublicUrl(req, storedModel.url) });
@@ -459,13 +459,20 @@ export async function createProduct(req, res) {
     }
 
     const requestedStock = typeof stock === 'number' && Number.isFinite(stock) ? Math.max(1, Number(stock)) : 1;
+    if (requestedStock > 99) {
+      return res.status(400).json({ message: 'Stock cannot exceed 99.' });
+    }
     const existingProduct = await ProductDetail.findOne({
       status: { $ne: 'archived' },
       name: { $regex: new RegExp(`^${escapeRegex(trimmedName)}$`, 'i') }
     });
 
     if (existingProduct) {
-      existingProduct.stock = Math.max(0, Number(existingProduct.stock || 0)) + requestedStock;
+      const nextStock = Math.max(0, Number(existingProduct.stock || 0)) + requestedStock;
+      if (nextStock > 99) {
+        return res.status(400).json({ message: 'Stock cannot exceed 99.' });
+      }
+      existingProduct.stock = nextStock;
       existingProduct.updatedAt = new Date();
       await existingProduct.save();
 
@@ -587,7 +594,15 @@ export async function updateProduct(req, res) {
     } else if (rating !== undefined) {
       updates.rating = rating;
     }
-    if (stock !== undefined) updates.stock = stock;
+    if (stock !== undefined) {
+      if (typeof stock !== 'number' || !Number.isFinite(stock) || stock < 0) {
+        return res.status(400).json({ message: 'Stock must be a non-negative number.' });
+      }
+      if (stock > 99) {
+        return res.status(400).json({ message: 'Stock cannot exceed 99.' });
+      }
+      updates.stock = stock;
+    }
     updates.updatedAt = new Date();
 
     const product = await ProductDetail.findOneAndUpdate({

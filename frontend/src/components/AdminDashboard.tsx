@@ -103,6 +103,7 @@ type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke
 type DashboardRefreshScope = 'overview' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history' | null;
 type ExportFormat = 'pdf' | 'csv' | 'xls';
 const EXPORT_FORMAT_OPTIONS: ExportFormat[] = ['pdf', 'csv', 'xls'];
+const MAX_INVENTORY_STOCK = 99;
 
 type AddItemField =
   | 'name'
@@ -340,6 +341,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const [incrementingItemId, setIncrementingItemId] = useState<string | null>(null);
   const [stockModalItem, setStockModalItem] = useState<InventoryItem | null>(null);
   const [stockQuantityToAdd, setStockQuantityToAdd] = useState('1');
+  const [isAddStockConfirmOpen, setIsAddStockConfirmOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<InventoryConfirmAction>(null);
   const [isConfirmingAction, setIsConfirmingAction] = useState(false);
   const [hoverPreviewItem, setHoverPreviewItem] = useState<InventoryItem | null>(null);
@@ -2493,6 +2495,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     if (!newItem.name?.trim()) errors.name = 'This field is required';
     if (newItem.stock === undefined || Number.isNaN(Number(newItem.stock)) || Number(newItem.stock) <= 0) {
       errors.stock = 'This field is required';
+    } else if (Number(newItem.stock) > MAX_INVENTORY_STOCK) {
+      errors.stock = `Stock cannot exceed ${MAX_INVENTORY_STOCK}.`;
     }
 
     if (!duplicateItem) {
@@ -4474,7 +4478,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         image: getItemImageList(newItem)[0] || '',
         images: getItemImageList(newItem),
         model3dUrl: getModel3DUrl(newItem),
-        stock: newItem.stock ?? 1
+        stock: Math.min(MAX_INVENTORY_STOCK, Number(newItem.stock ?? 1))
       });
       setInventory(prev => prev.some((item) => item.id === result.item.id)
         ? prev.map((item) => item.id === result.item.id ? result.item : item)
@@ -4505,6 +4509,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
 
     if (!editingItem?.id) return;
     setInventoryError(null);
+    if (Number(editingItem.stock ?? 1) > MAX_INVENTORY_STOCK) {
+      setInventoryError(`Stock cannot exceed ${MAX_INVENTORY_STOCK}.`);
+      return;
+    }
     try {
       const updated = await inventoryAPI.updateProduct(token, editingItem.id, {
         name: editingItem.name,
@@ -4519,7 +4527,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         image: getItemImageList(editingItem)[0] || '',
         images: getItemImageList(editingItem),
         model3dUrl: getModel3DUrl(editingItem),
-        stock: editingItem.stock ?? 1
+        stock: Math.min(MAX_INVENTORY_STOCK, Number(editingItem.stock ?? 1))
       });
       setInventory(prev => prev.map(item => item.id === editingItem.id ? updated : item));
       setEditingItem(null);
@@ -4545,11 +4553,34 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
+    setIsAddStockConfirmOpen(false);
     setStockModalItem(null);
     setStockQuantityToAdd('1');
   };
 
-  const handleIncreaseItemStock = async () => {
+  const getAddStockModalValidationMessage = () => {
+    if (!stockModalItem) {
+      return '';
+    }
+
+    if (stockQuantityToAdd.trim() === '') {
+      return 'Enter a quantity to add.';
+    }
+
+    const quantityToAdd = Number(stockQuantityToAdd);
+    if (!Number.isInteger(quantityToAdd) || quantityToAdd < 1) {
+      return 'Enter a valid stock quantity to add.';
+    }
+
+    const currentStock = Math.max(0, Number(stockModalItem.stock ?? 1));
+    if (currentStock + quantityToAdd > MAX_INVENTORY_STOCK) {
+      return `Total stock cannot exceed ${MAX_INVENTORY_STOCK}.`;
+    }
+
+    return '';
+  };
+
+  const handleRequestIncreaseItemStock = () => {
     if (isCurrentUserStaff) {
       setInventoryError('Staff accounts cannot update gown quantity.');
       return;
@@ -4559,11 +4590,22 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       return;
     }
 
-    const quantityToAdd = Number(stockQuantityToAdd);
-    if (!Number.isInteger(quantityToAdd) || quantityToAdd < 1) {
-      setInventoryError('Enter a valid stock quantity to add.');
+    const modalValidationMessage = getAddStockModalValidationMessage();
+    if (modalValidationMessage) {
+      setInventoryError(modalValidationMessage);
       return;
     }
+
+    setInventoryError(null);
+    setIsAddStockConfirmOpen(true);
+  };
+
+  const handleIncreaseItemStock = async () => {
+    if (!stockModalItem) {
+      return;
+    }
+
+    const quantityToAdd = Number(stockQuantityToAdd);
 
     setIncrementingItemId(stockModalItem.id);
     setInventoryError(null);
@@ -4576,9 +4618,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       setInventory((prev) => prev.map((entry) => (entry.id === stockModalItem.id ? updated : entry)));
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
       showTempMessage(`Added ${quantityToAdd} stock to ${stockModalItem.name}.`);
+      setIsAddStockConfirmOpen(false);
       setStockModalItem(null);
       setStockQuantityToAdd('1');
     } catch (err) {
+      setIsAddStockConfirmOpen(false);
       setInventoryError(err instanceof Error ? err.message : 'Failed to update gown quantity');
     } finally {
       setIncrementingItemId(null);
@@ -9607,6 +9651,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       type="number"
                       required={!editingItem}
                       min={1}
+                      max={MAX_INVENTORY_STOCK}
                       aria-invalid={!editingItem && Boolean(addItemErrors.stock)}
                       aria-describedby={!editingItem && addItemErrors.stock ? 'add-item-stock-error' : undefined}
                       value={(newItem as Partial<InventoryItem>).stock ?? 1}
@@ -9622,6 +9667,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                       className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.stock ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                       placeholder="1"
                     />
+                    <p className="text-xs text-[#9E8E80] mt-1">Maximum stock is {MAX_INVENTORY_STOCK}.</p>
                     {!editingItem && addItemErrors.stock && <p id="add-item-stock-error" className="text-sm text-red-600 mt-1">{addItemErrors.stock}</p>}
                   </div>
                 )}
@@ -9851,7 +9897,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
           </div>
         )}
 
-        {!isCurrentUserStaff && stockModalItem && (
+        {!isCurrentUserStaff && stockModalItem && !isAddStockConfirmOpen && (
+          (() => {
+            const addStockModalError = getAddStockModalValidationMessage();
+            const isAddStockDisabled = Boolean(addStockModalError) || incrementingItemId === stockModalItem.id;
+
+            return (
           <div
             className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             role="dialog"
@@ -9878,12 +9929,21 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 <input
                   type="number"
                   min={1}
+                  max={MAX_INVENTORY_STOCK}
                   step={1}
                   value={stockQuantityToAdd}
                   onChange={(e) => setStockQuantityToAdd(e.target.value)}
-                  className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37]"
+                  aria-invalid={Boolean(addStockModalError)}
+                  aria-describedby={addStockModalError ? 'add-stock-quantity-error' : undefined}
+                  className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] ${addStockModalError ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                   placeholder="1"
                 />
+                <p className="text-xs text-[#9E8E80] mt-1">Total stock cannot go above {MAX_INVENTORY_STOCK}.</p>
+                {addStockModalError && (
+                  <p id="add-stock-quantity-error" className="text-sm text-red-600 mt-2">
+                    {addStockModalError}
+                  </p>
+                )}
               </div>
 
               <div className="flex gap-3 mt-6">
@@ -9897,11 +9957,66 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 </button>
                 <button
                   type="button"
-                  onClick={() => void handleIncreaseItemStock()}
-                  disabled={incrementingItemId === stockModalItem.id}
+                  onClick={handleRequestIncreaseItemStock}
+                  disabled={isAddStockDisabled}
                   className="flex-1 px-6 py-3 bg-[#1a1a1a] text-white rounded-lg hover:bg-[#D4AF37] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {incrementingItemId === stockModalItem.id ? 'Adding...' : 'Add Stock'}
+                </button>
+              </div>
+            </div>
+          </div>
+            );
+          })()
+        )}
+
+        {!isCurrentUserStaff && isAddStockConfirmOpen && stockModalItem && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm add stock"
+            onClick={() => {
+              if (!incrementingItemId) {
+                setIsAddStockConfirmOpen(false);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-2xl font-light text-[#1A1A1A] mb-2">Confirm Add Stock</h3>
+              <p className="text-sm text-[#6B5D4F] leading-relaxed mb-6">
+                Are you sure you want to add{' '}
+                <span className="font-medium text-[#1A1A1A]">{Number(stockQuantityToAdd)}</span>{' '}
+                stock to{' '}
+                <span className="font-medium text-[#1A1A1A]">{stockModalItem.name}</span>?
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] px-4 py-3 mb-6">
+                <p className="text-xs uppercase tracking-[0.12em] text-[#9E8E80] mb-1">Updated Total</p>
+                <p className="text-lg text-[#1A1A1A]">
+                  {Math.max(0, Number(stockModalItem.stock ?? 1)) + Number(stockQuantityToAdd)}
+                </p>
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddStockConfirmOpen(false)}
+                  disabled={Boolean(incrementingItemId)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleIncreaseItemStock()}
+                  disabled={Boolean(incrementingItemId)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {incrementingItemId === stockModalItem.id ? 'Adding...' : 'Yes, Add'}
                 </button>
               </div>
             </div>
