@@ -15,6 +15,7 @@ import customOrderRoutes from './routes/customOrders.js';
 import notificationRoutes from './routes/notifications.js';
 import realtimeRoutes from './routes/realtime.js';
 import chatMessageRoutes from './routes/chatMessages.js';
+import skinAnalysisRoutes from './routes/skinAnalysis.js';
 
 loadEnvironment();
 
@@ -76,6 +77,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/custom-orders', customOrderRoutes);
 app.use('/api/realtime', realtimeRoutes);
 app.use('/api/chat-messages', chatMessageRoutes);
+app.use('/api/skin-analysis', skinAnalysisRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {

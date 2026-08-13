@@ -5,9 +5,9 @@ import RentalDetail from '../models/RentalDetail.js';
 
 const SENSITIVE_REQUEST_PATTERN = /\b(email|e-mail|phone|contact number|mobile number|address|password|passcode|otp|verification code|payment reference|reference number|receipt|card number|bank account|gcash|maya)\b/i;
 const OTHER_CUSTOMER_PATTERN = /\b(other customer|another customer|someone else|other people's|everyone else's|all customers)\b/i;
-const INVENTORY_PATTERN = /\b(inventory|stock|availability|how many gowns|how many dresses|available tomorrow|available today|is this item available|is this gown available|is this dress available|which items are currently available)\b/i;
+const INVENTORY_PATTERN = /\b(inventory|stock|availability|how many gowns|how many dresses|available tomorrow|available today|is this item available|is this gown available|is this dress available|which items are currently available|what gowns do you have|what dresses do you have|what white gowns do you have|white gowns|available gowns|gown collections|dress collections)\b/i;
 const APPOINTMENT_PATTERN = /\b(appointment|appointments|consultation|consultations|fitting|fittings|measurement|measurements|reschedule|schedule)\b/i;
-const RENTAL_PATTERN = /\b(rental|rentals|rent|gown|gowns|dress|dresses|pickup|pick up|return|returns|due date|due back)\b/i;
+const RENTAL_PATTERN = /\b(rental|rentals|rent|pickup|pick up|return|returns|due date|due back|rental order|rental orders|book now|book this item|rent this item|rent this gown|rent this dress)\b/i;
 const CUSTOM_ORDER_PATTERN = /\b(custom order|custom orders|bespoke|design approval|design|order status|custom status)\b/i;
 const BRANCH_PATTERN = /\b(preferred branch|my branch|branch)\b/i;
 const OVERVIEW_PATTERN = /\b(summary|overview|status|statuses|upcoming|next|current|what do i have|do i have)\b/i;
@@ -111,6 +111,8 @@ const STATIC_FAQ_RULES = [
   { pattern: /\b(what sizes are available|sizes available)\b/i, reply: 'Sizes are not specified because each rental gown is adjusted to fit each customer properly.' },
   { pattern: /\b(how often do you add new items|new arrivals)\b/i, reply: 'New arrivals are added periodically. Please follow our socials or check the site for updates.' },
   { pattern: /\b(what item styles do you offer|styles do you offer|type of gowns|types of gowns|kind of gowns|kinds of gowns)\b/i, reply: 'We offer multiple styles such as evening gowns, long gowns, wedding dresses, ball gowns, and more.' },
+  { pattern: /\b(what gowns do you have|what dresses do you have)\b/i, reply: 'We offer multiple styles such as evening gowns, long gowns, wedding dresses, ball gowns, and more. You can browse our collection page to see the available designs.' },
+  { pattern: /\b(what white gowns do you have|white gowns)\b/i, reply: 'Please check our collection page and browse the available white gowns there. Availability is shown on each gown page and is updated regularly.' },
   { pattern: /\b(wedding items|wedding gowns)\b/i, reply: 'Yes, we do have a selection of wedding gowns.' },
   { pattern: /\b(debut items|debut gowns)\b/i, reply: 'Yes, we do have a selection of gowns suited for debutantes.' },
   { pattern: /\b(prom items|prom gowns)\b/i, reply: 'Yes, we do have a selection of gowns suited for proms.' },
@@ -244,7 +246,7 @@ function buildPublicStoreReply(userQuery) {
     return matchedRule.reply;
   }
 
-  if (/\b(offer|offers|carry|available styles|available gowns|kind of gowns|kinds of gowns|types of gowns|types of dresses|collections|catalog|services|rentals available|bespoke service)\b/i.test(trimmedQuery)) {
+  if (/\b(offer|offers|carry|available styles|available gowns|kind of gowns|kinds of gowns|types of gowns|types of dresses|collections|catalog|services|rentals available|bespoke service|what gowns do you have|what dresses do you have|white gowns)\b/i.test(trimmedQuery)) {
     return 'Hannah Vanessa can help with gown collections, rentals, bespoke orders, appointments, and contact details. You can ask about available services, booking, rentals, or bespoke options.';
   }
 

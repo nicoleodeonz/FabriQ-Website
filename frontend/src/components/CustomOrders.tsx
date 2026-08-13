@@ -247,6 +247,22 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
     return digits.length >= 10;
   };
 
+  const missingCustomOrderFields = useMemo(() => {
+    const missing: string[] = [];
+
+    if (!formData.orderType) missing.push('order type');
+    if (!String(formData.branch || '').trim()) missing.push('branch');
+    if (!hasPhoneNumber(formData.contactNumber)) missing.push('verified phone number');
+    if (!formData.eventDate) missing.push('event date');
+    if (!String(formData.preferredColors || '').trim()) missing.push('preferred colors');
+    if (!formData.budget) missing.push('budget range');
+    if (!String(formData.fabricPreference || '').trim()) missing.push('fabric preference');
+
+    return missing;
+  }, [formData.branch, formData.contactNumber, formData.orderType, formData.eventDate, formData.preferredColors, formData.budget, formData.fabricPreference]);
+
+  const isCustomOrderFormComplete = missingCustomOrderFields.length === 0;
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files && e.target.files[0];
     if (file) {
@@ -256,9 +272,8 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Validation
+
     if (!formData.customerName.trim()) {
-      toast.error('Please enter your name');
       return;
     }
     if (!hasPhoneNumber(formData.contactNumber)) {
@@ -266,16 +281,13 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
       return;
     }
     if (!formData.email.trim()) {
-      toast.error('Please enter your email address');
       return;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
-      toast.error('Please enter a valid email address');
       return;
     }
-    if (!formData.orderType) {
-      toast.error('Please select an order type');
+    if (!isCustomOrderFormComplete) {
       return;
     }
 
@@ -695,7 +707,7 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
 
         {/* New Order Form */}
         {activeTab === 'new' && (
-          <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+          <form onSubmit={handleSubmit} noValidate className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
             <h2 className="text-2xl font-light mb-6">Start Your Custom Journey</h2>
             
             <div className="space-y-6">
@@ -743,8 +755,9 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                   </div>
 
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Branch *</label>
                     <select
+                      required
                       value={formData.branch}
                       onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
@@ -781,9 +794,10 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                   </div>
                   
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Event Date</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Event Date *</label>
                     <input
                       type="date"
+                      required
                       value={formData.eventDate}
                       min={(() => {
                         const today = new Date();
@@ -796,9 +810,10 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                   </div>
 
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Colors</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Preferred Colors *</label>
                     <input
                       type="text"
+                      required
                       value={formData.preferredColors}
                       onChange={(e) => setFormData({ ...formData, preferredColors: e.target.value })}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
@@ -807,8 +822,9 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                   </div>
 
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Budget Range</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Budget Range *</label>
                     <select
+                      required
                       value={formData.budget}
                       onChange={(e) => setFormData({ ...formData, budget: e.target.value })}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
@@ -823,9 +839,10 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                 </div>
 
                 <div className="mt-6">
-                  <label className="block text-sm text-[#6B5D4F] mb-2">Fabric Preference</label>
+                  <label className="block text-sm text-[#6B5D4F] mb-2">Fabric Preference *</label>
                   <input
                     type="text"
+                    required
                     value={formData.fabricPreference}
                     onChange={(e) => setFormData({ ...formData, fabricPreference: e.target.value })}
                     className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors"
@@ -868,11 +885,18 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                 </label>
               </div>
 
+              {!isCustomOrderFormComplete && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" aria-live="polite">
+                  Complete the required fields before submitting: {missingCustomOrderFields.join(', ')}.
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="w-full py-4 bg-black text-white rounded-full hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2"
+                disabled={!isCustomOrderFormComplete || uploadingImage}
+                className="w-full py-4 bg-black text-white rounded-full hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:bg-[#B8AEA2] disabled:text-[#F7F1E7]"
               >
-                Submit Custom Order Inquiry
+                {uploadingImage ? 'Uploading...' : 'Submit Custom Order Inquiry'}
                 <ChevronRight className="w-5 h-5" />
               </button>
             </div>

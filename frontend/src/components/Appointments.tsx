@@ -102,6 +102,8 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
   const [appointmentTypeError, setAppointmentTypeError] = useState('');
   const [branchError, setBranchError] = useState('');
   const [gownError, setGownError] = useState('');
+  const [dateError, setDateError] = useState('');
+  const [timeError, setTimeError] = useState('');
   const [isMissingPhoneModalOpen, setIsMissingPhoneModalOpen] = useState(false);
   const [selectedAppointmentDetails, setSelectedAppointmentDetails] = useState<Appointment | null>(null);
   const [isAppointmentDetailsOpen, setIsAppointmentDetailsOpen] = useState(false);
@@ -122,6 +124,29 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     () => availableGowns.find((gown) => gown.id === formData.selectedGown) || null,
     [availableGowns, formData.selectedGown]
   );
+
+  const missingAppointmentFields = useMemo(() => {
+    const missing: string[] = [];
+    const resolvedBranch = formData.appointmentType === 'fitting'
+      ? selectedGownDetails?.branch || ''
+      : formData.branch;
+
+    if (!formData.appointmentType) missing.push('appointment type');
+    if (formData.appointmentType === 'fitting' && !formData.selectedGown) missing.push('gown selection');
+    if (!formData.date) missing.push('date');
+    if (formData.date) {
+      const selectedDate = new Date(formData.date);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (selectedDate <= today) missing.push('future date');
+    }
+    if (!resolvedBranch) missing.push('branch');
+    if (!formData.time && formData.date && resolvedBranch) missing.push('time');
+
+    return missing;
+  }, [formData.appointmentType, formData.selectedGown, formData.date, formData.branch, formData.time, selectedGownDetails]);
+
+  const isAppointmentFormComplete = missingAppointmentFields.length === 0;
 
   useModalInteractionLock(isAnyAppointmentModalOpen, modalRef);
 
@@ -349,76 +374,28 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitError('');
-    
-    // Validation
+
     if (!formData.customerName.trim()) {
-      alert('Please enter your name');
       return;
     }
-    
+
     if (!hasPhoneNumber(formData.contactNumber)) {
       setIsMissingPhoneModalOpen(true);
       return;
     }
-    
+
     if (!formData.email.trim()) {
-      alert('Please enter your email address');
       return;
     }
-    
-    // Email validation
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
-      alert('Please enter a valid email address');
-      return;
-    }
-    
-    if (!formData.appointmentType) {
-      setAppointmentTypeError('Please select an appointment type');
       return;
     }
 
-    setAppointmentTypeError('');
-    
-    // Check for gown selection if appointment type is fitting
-    if (formData.appointmentType === 'fitting') {
-      if (!formData.selectedGown) {
-        setGownError('Please select a gown to try on');
-        return;
-      }
-      setGownError('');
-    }
-    
-    if (!formData.date) {
-      alert('Please select a date');
+    if (!isAppointmentFormComplete) {
       return;
     }
-    
-    // Check if date is in the future
-    const selectedDate = new Date(formData.date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    if (selectedDate <= today) {
-      alert('Please select a date after today');
-      return;
-    }
-    
-    if (!formData.time) {
-      alert('Please select a time slot');
-      return;
-    }
-
-    const resolvedBranch = formData.appointmentType === 'fitting'
-      ? selectedGownDetails?.branch || ''
-      : formData.branch;
-
-    if (!resolvedBranch) {
-      setBranchError('Please select a branch');
-      return;
-    }
-
-    setBranchError('');
     
     void handleCreateAppointment();
   };
@@ -454,6 +431,8 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
       setAppointmentTypeError('');
       setBranchError('');
       setGownError('');
+      setDateError('');
+      setTimeError('');
       setActiveTab('existing');
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : 'Failed to book appointment.');
@@ -633,8 +612,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                         appointmentType: type.value,
                         selectedGown: type.value === 'fitting' ? formData.selectedGown : ''
                       });
-                      setAppointmentTypeError('');
-                      setGownError('');
                     }}
                     className={`p-6 rounded-2xl border-2 transition-all text-left ${
                       formData.appointmentType === type.value
@@ -649,13 +626,10 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                   </button>
                 ))}
               </div>
-              {appointmentTypeError && (
-                <p className="text-red-600 text-sm mt-2">{appointmentTypeError}</p>
-              )}
             </div>
 
             {/* Form */}
-            <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+            <form onSubmit={handleSubmit} noValidate className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
               <h2 className="text-2xl font-light mb-6">Appointment Details</h2>
               
               <div className="space-y-6">
@@ -707,7 +681,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                     <label className="block text-sm text-[#6B5D4F] mb-2">Date *</label>
                     <input
                       type="date"
-                      required
                       min={minAppointmentDate}
                       value={formData.date}
                       onChange={(e) => setFormData({ ...formData, date: e.target.value })}
@@ -718,7 +691,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                   <div>
                     <label className="block text-sm text-[#6B5D4F] mb-2">Time *</label>
                     <select
-                      required
                       value={formData.time}
                       onChange={(e) => setFormData({ ...formData, time: e.target.value })}
                       disabled={!formData.date || !formData.branch}
@@ -738,10 +710,7 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                     <select
                       value={formData.branch}
                       disabled={formData.appointmentType === 'fitting' && Boolean(selectedGownDetails?.branch)}
-                      onChange={(e) => {
-                        setFormData({ ...formData, branch: e.target.value });
-                        setBranchError('');
-                      }}
+                      onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors disabled:bg-[#F7F1E8] disabled:cursor-not-allowed"
                     >
                       <option value="">Select a branch</option>
@@ -750,9 +719,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                       <option value="Makati Branch">Makati Branch</option>
                       <option value="Quezon City">Quezon City</option>
                     </select>
-                    {branchError && (
-                      <p className="text-red-600 text-sm mt-2">{branchError}</p>
-                    )}
                     {formData.appointmentType === 'fitting' && selectedGownDetails?.branch && (
                       <p className="text-[#6B5D4F] text-sm mt-2">
                         Fitting appointments use the branch where the selected gown is available.
@@ -777,8 +743,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                           branch: nextSelectedGown?.branch || '',
                           time: '',
                         });
-                        setGownError('');
-                        setBranchError('');
                       }}
                       disabled={gownsLoading}
                       className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] focus:outline-none focus:border-[#D4AF37] transition-colors disabled:bg-[#F7F1E8] disabled:cursor-not-allowed"
@@ -790,9 +754,6 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                         </option>
                       ))}
                     </select>
-                    {gownError && (
-                      <p className="text-red-600 text-sm mt-2">{gownError}</p>
-                    )}
                     {availableGowns.length === 0 && !gownsLoading && (
                       <p className="text-[#6B5D4F] text-sm mt-2">No gowns available for fitting at the moment.</p>
                     )}
@@ -816,10 +777,16 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                   </p>
                 </div>
 
+                {!isAppointmentFormComplete && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800" role="status" aria-live="polite">
+                    Complete the required fields before submitting: {missingAppointmentFields.join(', ')}.
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="w-full py-4 bg-black text-white rounded-full hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  disabled={!isAppointmentFormComplete || isSubmitting}
+                  className="w-full py-4 bg-black text-white rounded-full hover:bg-[#D4AF37] transition-colors flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:bg-[#B8AEA2] disabled:text-[#F7F1E7]"
                 >
                   {isSubmitting ? 'Submitting...' : 'Confirm Appointment'}
                   <ChevronRight className="w-5 h-5" />
