@@ -39,10 +39,10 @@ export function Navigation({
   const [notificationLoadError, setNotificationLoadError] = useState<string | null>(null);
   const [adminUnreadChatCount, setAdminUnreadChatCount] = useState<number>(0);
   const notificationPanelRef = useRef<HTMLDivElement | null>(null);
-  const notificationActionShift: CSSProperties = { position: 'relative', left: '350px' };
-  const messagesActionShift: CSSProperties = { position: 'relative', left: '350px' };
-  const profileActionShift: CSSProperties = { position: 'relative', left: '326px' };
-  const adminActionShift: CSSProperties = { position: 'relative', left: '300px' };
+  const notificationActionShift: CSSProperties = {};
+  const messagesActionShift: CSSProperties = {};
+  const profileActionShift: CSSProperties = {};
+  const adminActionShift: CSSProperties = {};
 
   useEffect(() => {
     if (!showNotificationModal) {
@@ -317,14 +317,14 @@ export function Navigation({
           </div>
 
           {/* Right: Desktop Actions */}
-          <div className="hidden md:flex flex-1 items-center justify-end gap-2 pl-6 lg:pl-10 md:translate-x-2 lg:translate-x-3">
+          <div className="hidden md:flex flex-1 items-center justify-end gap-2 pl-6 lg:pl-10">
             {showCustomerNotifications && (
               <div ref={notificationPanelRef} className="relative">
                 {renderButton('profile', '', 'notifications', notificationActionShift)}
                 {showNotificationModal && (
                   <div
                     className="absolute top-full z-[80] mt-5 flex flex-col overflow-hidden rounded-[2rem] border border-[#E8DCC8] shadow-[0_24px_80px_rgba(26,26,26,0.18)]"
-                    style={{ backgroundColor: '#FFFDF9', opacity: 1, right: 0, transform: 'translateX(320px)', width: '384px', maxHeight: '600px' }}
+                    style={{ backgroundColor: '#FFFDF9', opacity: 1, right: 0, width: '384px', maxHeight: '600px' }}
                   >
                     <div
                       className="flex items-center justify-between border-b border-[#EFE3D0] px-6 py-5"

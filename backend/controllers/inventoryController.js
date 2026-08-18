@@ -305,9 +305,14 @@ export async function upload3DModel(req, res) {
     const storedModel = await storeUploadedAsset(req.file, {
       folder: 'products/models',
       resourceType: 'raw',
-      allowLocalFallback: true,
+      allowLocalFallback: false,
     });
-    res.json({ url: toPublicUrl(req, storedModel.url) });
+
+    if (!storedModel || !storedModel.url) {
+      return res.status(500).json({ message: 'No valid 3D model URL was returned after upload.' });
+    }
+
+    res.json({ url: toPublicUrl(req, storedModel.url), secure_url: storedModel.url });
   } catch (err) {
     console.error('upload3DModel error:', err);
     res.status(500).json({ message: 'Failed to upload 3D model' });

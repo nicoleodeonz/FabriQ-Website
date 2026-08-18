@@ -124,30 +124,45 @@ export async function storeUploadedImage(file, options = {}) {
   }
 }
 
+export async function storeAssetFromLocalPath(filePath, options = {}) {
+  const config = ensureCloudinaryConfigured();
+  if (!config.isConfigured) {
+    throw new Error('Cloudinary is not configured.');
+  }
+
+  const resourceType = options.resourceType || 'raw';
+  const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
+
+  try {
+    const result = await cloudinary.uploader.upload(filePath, {
+      folder: targetFolder,
+      resource_type: resourceType,
+      use_filename: true,
+      unique_filename: true,
+      overwrite: false,
+    });
+
+    return {
+      storage: 'cloudinary',
+      url: result.secure_url,
+      publicId: result.public_id,
+    };
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
+  }
+}
+
 export async function storeUploadedAsset(file, options = {}) {
   const config = ensureCloudinaryConfigured();
   if (!file) {
     throw new Error('Uploaded file is required.');
   }
 
-  const resourceType = options.resourceType || 'raw';
-
-  if (resourceType === 'raw') {
-    return {
-      storage: 'local',
-      url: `/uploads/${file.filename}`,
-      publicId: null,
-    };
-  }
-
   if (!config.isConfigured) {
-    return {
-      storage: 'local',
-      url: `/uploads/${file.filename}`,
-      publicId: null,
-    };
+    throw new Error('Cloudinary is not configured for asset uploads.');
   }
 
+  const resourceType = options.resourceType || 'raw';
   const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
 
   try {
@@ -169,15 +184,6 @@ export async function storeUploadedAsset(file, options = {}) {
       publicId: result.public_id,
     };
   } catch (error) {
-    if (options.allowLocalFallback) {
-      console.warn('Falling back to local asset storage:', error instanceof Error ? error.message : error);
-      return {
-        storage: 'local',
-        url: `/uploads/${file.filename}`,
-        publicId: null,
-      };
-    }
-
     throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
   }
 }
