@@ -16,6 +16,7 @@ import notificationRoutes from './routes/notifications.js';
 import realtimeRoutes from './routes/realtime.js';
 import chatMessageRoutes from './routes/chatMessages.js';
 import skinAnalysisRoutes from './routes/skinAnalysis.js';
+import bodyMeasurementRoutes from './routes/bodyMeasurement.js';
 
 loadEnvironment();
 
@@ -78,6 +79,7 @@ app.use('/api/custom-orders', customOrderRoutes);
 app.use('/api/realtime', realtimeRoutes);
 app.use('/api/chat-messages', chatMessageRoutes);
 app.use('/api/skin-analysis', skinAnalysisRoutes);
+app.use('/api/body-measurement', bodyMeasurementRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {

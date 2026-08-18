@@ -59,6 +59,46 @@ const CustomerAccountSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  height: {
+    type: Number,
+    default: null
+  },
+  shoulderWidth: {
+    type: Number,
+    default: null
+  },
+  chest: {
+    type: Number,
+    default: null
+  },
+  waist: {
+    type: Number,
+    default: null
+  },
+  hips: {
+    type: Number,
+    default: null
+  },
+  armLength: {
+    type: Number,
+    default: null
+  },
+  inseam: {
+    type: Number,
+    default: null
+  },
+  torsoLength: {
+    type: Number,
+    default: null
+  },
+  neck: {
+    type: Number,
+    default: null
+  },
+  measuredAt: {
+    type: Date,
+    default: Date.now
+  },
   tokenVersion: {
     type: Number,
     default: 0
