@@ -192,6 +192,33 @@ export const analyzeImage = async (req, res) => {
   }
 };
 
+export const getMeasurements = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    if (!customerId) {
+      return res.status(400).json({ success: false, error: 'customerId is required.' });
+    }
+
+    const customer = await CustomerAccount.findById(customerId).lean();
+    if (!customer) {
+      return res.status(404).json({ success: false, error: 'Customer not found.' });
+    }
+
+    const profile = {};
+    for (const field of [...MEASUREMENT_FIELDS, 'measuredAt']) {
+      profile[field] = customer[field] ?? null;
+    }
+
+    return res.json({ success: true, profile });
+  } catch (error) {
+    console.error('Get body measurements failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve measurements.',
+    });
+  }
+};
+
 export const saveMeasurements = async (req, res) => {
   try {
     const { customerId, measurements } = req.body || {};
