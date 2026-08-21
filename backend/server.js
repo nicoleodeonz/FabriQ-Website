@@ -60,7 +60,11 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
+
+// Inventory edits can include many image URLs and 3D model links; the default JSON
+// body limit is too small for these payloads and triggers 413 responses.
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Connect to MongoDB
 connectDB();
