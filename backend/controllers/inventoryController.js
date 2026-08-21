@@ -315,7 +315,7 @@ export async function upload3DModel(req, res) {
     res.json({ url: toPublicUrl(req, storedModel.url), secure_url: storedModel.url });
   } catch (err) {
     console.error('upload3DModel error:', err);
-    res.status(500).json({ message: 'Failed to upload 3D model' });
+    res.status(500).json({ message: err instanceof Error ? err.message : 'Failed to upload 3D model' });
   }
 }
 

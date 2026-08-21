@@ -134,9 +134,10 @@ export async function storeAssetFromLocalPath(filePath, options = {}) {
   const targetFolder = [config.folder, options.folder].filter(Boolean).join('/');
 
   try {
-    const result = await cloudinary.uploader.upload(filePath, {
+    const result = await cloudinary.uploader.upload_large(filePath, {
       folder: targetFolder,
       resource_type: resourceType,
+      chunk_size: 6 * 1024 * 1024,
       use_filename: true,
       unique_filename: true,
       overwrite: false,
@@ -174,7 +175,10 @@ export async function storeUploadedAsset(file, options = {}) {
       overwrite: false,
     };
 
-    const result = await cloudinary.uploader.upload(file.path, uploadOptions);
+    const result = await cloudinary.uploader.upload_large(file.path, {
+      ...uploadOptions,
+      chunk_size: 6 * 1024 * 1024,
+    });
 
     await removeLocalTempFile(file.path);
 
