@@ -56,7 +56,7 @@ router.post('/upload-3d-model', authenticate, (req, res, next) => {
 
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ message: '3D model exceeds 75 MB limit' });
+        return res.status(400).json({ message: '3D model exceeds 150 MB limit' });
       }
       return res.status(400).json({ message: err.message || '3D model upload failed' });
     }

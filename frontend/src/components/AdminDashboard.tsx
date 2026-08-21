@@ -2187,7 +2187,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
   const MAX_ITEM_IMAGES = 6;
   const ALLOWED_MIME = ['image/jpeg', 'image/png'];
-  const MAX_3D_MODEL_SIZE = 75 * 1024 * 1024;
+  const MAX_3D_MODEL_SIZE = 150 * 1024 * 1024;
   const ALLOWED_3D_MODEL_EXTENSIONS = ['.glb', '.gltf', '.usdz', '.zip'];
 
   const getModel3DUrl = (item: Partial<InventoryItem> | null | undefined): string => String(item?.model3dUrl || '').trim();
@@ -2306,7 +2306,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     if (file.size > MAX_3D_MODEL_SIZE) {
-      setModelUploadError('File exceeds 75 MB limit.');
+      setModelUploadError('File exceeds 150 MB limit.');
       e.target.value = '';
       return;
     }
@@ -9843,7 +9843,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                         <>
                           <Upload className="w-7 h-7 text-[#6B5D4F] mb-2" />
                           <span className="text-sm text-[#6B5D4F]">Click to upload a 3D model</span>
-                          <span className="text-xs text-[#9E8E80] mt-1">GLB, GLTF, USDZ, or ZIP — max 75 MB</span>
+                          <span className="text-xs text-[#9E8E80] mt-1">GLB, GLTF, USDZ, or ZIP — max 150 MB</span>
                         </>
                       )}
                       <input
