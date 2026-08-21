@@ -305,7 +305,7 @@ export async function upload3DModel(req, res) {
     const storedModel = await storeUploadedAsset(req.file, {
       folder: 'products/models',
       resourceType: 'raw',
-      allowLocalFallback: false,
+      allowLocalFallback: true,
     });
 
     if (!storedModel || !storedModel.url) {

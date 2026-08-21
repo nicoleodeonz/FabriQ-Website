@@ -170,6 +170,13 @@ export async function storeUploadedAsset(file, options = {}) {
   }
 
   if (!config.isConfigured) {
+    if (options.allowLocalFallback) {
+      return {
+        storage: 'local',
+        url: `/uploads/${file.filename}`,
+        publicId: null,
+      };
+    }
     throw new Error('Cloudinary is not configured for asset uploads.');
   }
 
@@ -198,6 +205,14 @@ export async function storeUploadedAsset(file, options = {}) {
       publicId: result.public_id,
     };
   } catch (error) {
+    if (options.allowLocalFallback) {
+      console.warn('Cloudinary asset upload failed; using local storage:', error);
+      return {
+        storage: 'local',
+        url: `/uploads/${file.filename}`,
+        publicId: null,
+      };
+    }
     throw new Error(error instanceof Error ? error.message : 'Failed to upload asset to Cloudinary.');
   }
 }
