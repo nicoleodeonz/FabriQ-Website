@@ -209,7 +209,13 @@ export async function upload3DModel(token: string, file: File): Promise<string> 
   if (!uploadResponse.ok) {
     throw new Error(uploadData?.message || '3D model upload failed');
   }
-  const uploadedUrl = String(uploadData?.secure_url || uploadData?.url || '').trim();
+  const uploadedUrl = String(
+    uploadData?.secure_url
+      || uploadData?.url
+      || uploadData?.asset?.secure_url
+      || uploadData?.asset?.url
+      || ''
+  ).trim();
   if (!uploadedUrl) {
     throw new Error('3D model upload returned no file URL.');
   }

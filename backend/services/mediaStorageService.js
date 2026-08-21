@@ -77,9 +77,14 @@ export async function storeImageFromLocalPath(filePath, options = {}) {
       overwrite: false,
     });
 
+    const uploadedUrl = result.secure_url || result.url;
+    if (!uploadedUrl) {
+      throw new Error('Cloudinary returned no URL for the uploaded asset.');
+    }
+
     return {
       storage: 'cloudinary',
-      url: result.secure_url,
+      url: uploadedUrl,
       publicId: result.public_id,
     };
   } catch (error) {
@@ -114,9 +119,14 @@ export async function storeUploadedImage(file, options = {}) {
 
     await removeLocalTempFile(file.path);
 
+    const uploadedUrl = result.secure_url || result.url;
+    if (!uploadedUrl) {
+      throw new Error('Cloudinary returned no URL for the uploaded asset.');
+    }
+
     return {
       storage: 'cloudinary',
-      url: result.secure_url,
+      url: uploadedUrl,
       publicId: result.public_id,
     };
   } catch (error) {

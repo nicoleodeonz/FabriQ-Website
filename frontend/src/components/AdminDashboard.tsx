@@ -2315,6 +2315,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     setIsUploading3DModel(true);
     try {
       const uploadedUrl = await inventoryAPI.upload3DModel(token, file);
+      setModelUploadError(null);
       if (editingItem) {
         setEditingItem((prev) => prev ? { ...prev, model3dUrl: uploadedUrl } : prev);
       } else {
