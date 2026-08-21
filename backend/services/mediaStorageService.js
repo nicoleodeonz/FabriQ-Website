@@ -117,12 +117,12 @@ export async function storeUploadedImage(file, options = {}) {
       overwrite: false,
     });
 
-    await removeLocalTempFile(file.path);
-
     const uploadedUrl = result.secure_url || result.url;
     if (!uploadedUrl) {
       throw new Error('Cloudinary returned no URL for the uploaded asset.');
     }
+
+    await removeLocalTempFile(file.path);
 
     return {
       storage: 'cloudinary',
