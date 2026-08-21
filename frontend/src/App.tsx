@@ -225,6 +225,7 @@ export default function App() {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showForceChangePasswordModal, setShowForceChangePasswordModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
   const favoriteGownsRef = useRef<FavoriteGown[]>([]);
 
@@ -530,6 +531,10 @@ export default function App() {
     window.location.reload();
   };
 
+  const requestLogout = () => {
+    setShowLogoutConfirmModal(true);
+  };
+
   const handleForceReauth = (message?: string) => {
     clearAuthState();
     setAppView('home', { history: 'replace', selectedGownId: null });
@@ -818,6 +823,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#FAF7F0]">
       <Navigation
+        isBlurred={showLogoutConfirmModal}
         currentView={currentView}
         setCurrentView={setAppView}
         isAdmin={isAdmin}
@@ -829,7 +835,7 @@ export default function App() {
         onNotificationSelect={handleNotificationSelect}
         navigateProtected={navigateProtectedFromHeader}
       />
-      <main className="pt-20">
+      <main className={`pt-20 ${showLogoutConfirmModal ? 'blur-[2px]' : ''}`}>
         {currentView === 'home' && (
           <Home
             setCurrentView={setAppView}
@@ -895,6 +901,7 @@ export default function App() {
         {currentView === 'profile' && currentUser && authToken && (
           <CustomerProfile
             onLogout={handleLogout}
+            onRequestLogout={requestLogout}
             onForceReauth={handleForceReauth}
             onUserUpdated={handleCurrentUserUpdate}
             user={currentUser}
@@ -906,7 +913,7 @@ export default function App() {
           />
         )}
         {currentView === 'admin' && isAdmin && authToken && currentUser && (
-          <AdminDashboard token={authToken} currentUser={currentUser} />
+          <AdminDashboard token={authToken} currentUser={currentUser} onRequestLogout={requestLogout} />
         )}
         {currentView === 'messages' && isAdmin && authToken && currentUser && (
           <AdminMessages
@@ -917,12 +924,14 @@ export default function App() {
         )}
       </main>
       {currentView !== 'admin' && currentView !== 'messages' && (
-        <Footer
-          isAdmin={isAdmin}
-          onSelectCatalogCategory={navigateToCatalogCategory}
-          onSelectService={navigateToFooterService}
-          onOpenContactModal={() => setShowContactModal(true)}
-        />
+        <div className={showLogoutConfirmModal ? 'blur-[2px]' : ''}>
+          <Footer
+            isAdmin={isAdmin}
+            onSelectCatalogCategory={navigateToCatalogCategory}
+            onSelectService={navigateToFooterService}
+            onOpenContactModal={() => setShowContactModal(true)}
+          />
+        </div>
       )}
 
       {showContactModal && (
@@ -1050,6 +1059,59 @@ export default function App() {
         onLogout={handleLogout}
         onClose={() => setShowForceChangePasswordModal(false)}
       />
+
+      {showLogoutConfirmModal && (
+        <>
+          <div className="fixed inset-0 z-[99] bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
+            <div className="bg-white rounded-2xl max-w-md w-full p-8">
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h3 id="logout-confirm-title" className="font-serif text-2xl font-light text-[#1a1a1a]">Confirm Logout</h3>
+                  <p className="text-sm text-[#6B5D4F] mt-2">Are you sure you want to log out of your account?</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirmModal(false)}
+                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
+                  aria-label="Close logout confirmation"
+                >
+                  <X className="h-5 w-5 text-[#6B5D4F]" />
+                </button>
+              </div>
+
+              {currentUser && (
+                <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
+                  <p className="font-medium text-[#3D2B1F]">
+                    {currentUser.firstName} {currentUser.lastName}
+                  </p>
+                  <p className="text-sm text-[#6B5D4F]">{currentUser.email}</p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowLogoutConfirmModal(false)}
+                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowLogoutConfirmModal(false);
+                    await handleLogout();
+                  }}
+                  className="flex-1 py-3 bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] transition-colors font-medium"
+                >
+                  Yes, Logout
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       <Toaster />
       {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} onOpenContactModal={() => setShowContactModal(true)} />}

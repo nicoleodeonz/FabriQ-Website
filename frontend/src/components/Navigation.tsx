@@ -3,6 +3,7 @@ import type { View } from '../App';
 import { Bell, BellDot, User, Settings, X, MessageSquare } from 'lucide-react';
 import { notificationAPI, type CustomerNotificationEntry } from '../services/notificationAPI';
 import { chatAPI } from '../services/chatAPI';
+import { createAdminDashboardEventSource } from '../services/adminRealtime';
 
 const NOTIFICATION_POLL_INTERVAL_MS = 15000;
 
@@ -17,6 +18,7 @@ interface NavigationProps {
   showCustomerNotifications: boolean;
   onNotificationSelect: (notification: CustomerNotificationEntry) => void;
   navigateProtected: (view: View) => void;
+  isBlurred?: boolean;
 }
 
 
@@ -29,7 +31,8 @@ export function Navigation({
   notificationToken,
   showCustomerNotifications,
   onNotificationSelect,
-  navigateProtected
+  navigateProtected,
+  isBlurred = false
 }: NavigationProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showNotificationModal, setShowNotificationModal] = useState(false);
@@ -38,11 +41,16 @@ export function Navigation({
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationLoadError, setNotificationLoadError] = useState<string | null>(null);
   const [adminUnreadChatCount, setAdminUnreadChatCount] = useState<number>(0);
+  const [hasNewAdminOrder, setHasNewAdminOrder] = useState(false);
   const notificationPanelRef = useRef<HTMLDivElement | null>(null);
-  const notificationActionShift: CSSProperties = {};
-  const messagesActionShift: CSSProperties = {};
-  const profileActionShift: CSSProperties = {};
-  const adminActionShift: CSSProperties = {};
+  const notificationActionShift: CSSProperties = { marginLeft: '290px' };
+  const messagesActionShift: CSSProperties = { marginLeft: '290px' };
+  const profileActionShift: CSSProperties = isLoggedIn
+    ? { marginLeft: '-20px' }
+    : { marginLeft: '330px' };
+  const adminActionShift: CSSProperties = isAdmin
+    ? { marginLeft: '-20px' }
+    : {};
 
   useEffect(() => {
     if (!showNotificationModal) {
@@ -155,6 +163,40 @@ export function Navigation({
     };
   }, [isAdmin, notificationToken]);
 
+  useEffect(() => {
+    if (!isAdmin || !notificationToken || currentView === 'admin') {
+      return;
+    }
+
+    const eventSource = createAdminDashboardEventSource(notificationToken);
+    const handleAdminDashboardUpdate = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as { entity?: string; action?: string };
+        const isNewOrder =
+          (payload.action === 'created' && ['rental', 'appointment', 'custom-order'].includes(payload.entity || ''))
+          || (payload.entity === 'rental' && payload.action === 'payment-submitted');
+
+        if (isNewOrder) {
+          setHasNewAdminOrder(true);
+        }
+      } catch {
+      }
+    };
+
+    eventSource.addEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+
+    return () => {
+      eventSource.removeEventListener('admin-dashboard-update', handleAdminDashboardUpdate);
+      eventSource.close();
+    };
+  }, [currentView, isAdmin, notificationToken]);
+
+  useEffect(() => {
+    if (currentView === 'admin') {
+      setHasNewAdminOrder(false);
+    }
+  }, [currentView]);
+
   const filteredNotifications = notificationFilter === 'unread'
     ? customerNotifications.filter((notification) => !notification.readAt)
     : customerNotifications;
@@ -236,6 +278,7 @@ export function Navigation({
     const isIconOnlyDesktop = type === 'profile' || type === 'admin' || type === 'notifications' || type === 'messages';
     const hasUnreadNotifications = type === 'notifications' && unreadNotificationCount > 0;
     const hasUnreadChats = type === 'messages' && adminUnreadChatCount > 0;
+    const hasUnreadAdminOrders = type === 'admin' && hasNewAdminOrder;
     const Icon = type === 'profile'
       ? User
       : type === 'admin'
@@ -276,7 +319,7 @@ export function Navigation({
             style={hasUnreadNotifications ? { color: '#D62828' } : undefined}
           >
             <Icon className="h-5 w-5" />
-            {hasUnreadChats && (
+            {(hasUnreadChats || hasUnreadAdminOrders) && (
               <span
                 className="absolute inline-flex rounded-full shadow-sm"
                 style={{
@@ -298,7 +341,7 @@ export function Navigation({
   };
 
   return (
-    <nav className="fixed top-0 w-full bg-[#FAF7F0]/95 backdrop-blur-sm border-b border-[#E8DCC8] z-50">
+    <nav className={`fixed top-0 w-full bg-[#FAF7F0]/95 backdrop-blur-sm border-b border-[#E8DCC8] z-40 ${isBlurred ? 'blur-[2px]' : ''}`}>
       <div className="max-w-7xl mx-auto px-6 lg:px-8">
         <div className="flex items-center h-20">
           {/* Left: Logo */}
