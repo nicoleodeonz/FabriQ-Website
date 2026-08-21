@@ -305,7 +305,6 @@ export async function upload3DModel(req, res) {
     const storedModel = await storeUploadedAsset(req.file, {
       folder: 'products/models',
       resourceType: 'raw',
-      allowLocalFallback: true,
     });
 
     if (!storedModel || !storedModel.url) {
@@ -315,7 +314,9 @@ export async function upload3DModel(req, res) {
     res.json({ url: toPublicUrl(req, storedModel.url), secure_url: storedModel.url });
   } catch (err) {
     console.error('upload3DModel error:', err);
-    res.status(500).json({ message: err instanceof Error ? err.message : 'Failed to upload 3D model' });
+    const message = String(err?.message || (err instanceof Error ? err.message : 'Failed to upload 3D model'));
+    const status = /file size too large|maximum is/i.test(message) ? 413 : 500;
+    res.status(status).json({ message });
   }
 }
 
