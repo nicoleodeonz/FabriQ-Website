@@ -91,6 +91,16 @@ app.get('/', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+});
+
+server.on('error', (error) => {
+  if (error?.code === 'EADDRINUSE') {
+    console.warn(`Port ${PORT} is already in use. The existing backend server will continue running.`);
+    process.exit(0);
+  }
+
+  console.error('Backend server failed to start:', error);
+  process.exitCode = 1;
 });
