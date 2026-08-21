@@ -97,6 +97,7 @@ interface AdminDashboardProps {
   token: string;
   currentUserRole?: string;
   currentUser?: CurrentAdminUser | null;
+  onRequestLogout?: () => void;
 }
 
 type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
@@ -262,7 +263,7 @@ function toLocalDateKey(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export default function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
+export default function AdminDashboard({ token, currentUserRole, currentUser, onRequestLogout }: AdminDashboardProps) {
   const getCurrentUserId = (jwtToken: string) => {
     try {
       const payloadPart = jwtToken.split('.')[1];
@@ -6285,13 +6286,24 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     <div className="min-h-screen py-8 px-4 bg-[#FAF7F0]">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
-          <p className="text-[#6B5D4F]">
-            {assignedStaffBranch
-              ? `Manage your boutique operations for ${assignedStaffBranch}`
-              : 'Manage your boutique operations across all branches'}
-          </p>
+        <div className="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
+            <p className="text-[#6B5D4F]">
+              {assignedStaffBranch
+                ? `Manage your boutique operations for ${assignedStaffBranch}`
+                : 'Manage your boutique operations across all branches'}
+            </p>
+          </div>
+          {onRequestLogout && (
+            <button
+              type="button"
+              onClick={onRequestLogout}
+              className="shrink-0 px-6 py-3 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors"
+            >
+              Logout
+            </button>
+          )}
         </div>
 
         {/* Branch Selector */}
