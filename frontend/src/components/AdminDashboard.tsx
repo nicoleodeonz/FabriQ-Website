@@ -10118,7 +10118,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                   type="button"
                   onClick={confirmCategoryDeletion}
                   disabled={pendingCategoryDeletionUsageCount > 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#B42318] bg-[#B42318] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Delete
                 </button>
