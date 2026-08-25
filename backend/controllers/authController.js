@@ -4,6 +4,7 @@ import AdminAccount from '../models/Admin.js';
 import CustomerAccount from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
 import StaffAccount from '../models/Staff.js';
+import PendingSignup from '../models/PendingSignup.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { sendVerificationCodeEmail } from '../services/emailService.js';
 import { sendVerificationAcrossChannels } from '../services/messageDeliveryService.js';
@@ -19,8 +20,6 @@ const SIGNUP_CODE_TTL_MS = 24 * 60 * 60 * 1000;
 const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 const RESET_CODE_TTL_MS = 15 * 60 * 1000;
 const IS_PRODUCTION = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
-const pendingSignups = new Map();
-
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
 }
@@ -278,23 +277,23 @@ async function buildPendingCustomerFromSignup({ firstName, lastName, email, pass
   };
 }
 
-function createPendingSignup(data) {
+async function createPendingSignup(data) {
   const token = crypto.randomBytes(32).toString('hex');
-  pendingSignups.set(token, {
+  await PendingSignup.create({
+    _id: token,
     ...data,
-    expiresAt: Date.now() + SIGNUP_CODE_TTL_MS,
+    expiresAt: new Date(Date.now() + SIGNUP_CODE_TTL_MS),
   });
-  setTimeout(() => pendingSignups.delete(token), SIGNUP_CODE_TTL_MS).unref?.();
   return token;
 }
 
-function getPendingSignup(token) {
-  const pendingSignup = pendingSignups.get(String(token || ''));
-  if (!pendingSignup || pendingSignup.expiresAt < Date.now()) {
-    if (token) pendingSignups.delete(String(token));
-    return null;
-  }
-  return pendingSignup;
+async function getPendingSignup(token) {
+  if (!token) return null;
+
+  return PendingSignup.findOne({
+    _id: String(token),
+    expiresAt: { $gt: new Date() },
+  });
 }
 
 export const sendSignUpPhoneVerificationCode = async (req, res) => {
@@ -322,7 +321,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
 
     const requestedToken = String(req.body?.signupToken || '');
     let signupToken = requestedToken;
-    let pendingSignup = requestedToken ? getPendingSignup(requestedToken) : null;
+    let pendingSignup = requestedToken ? await getPendingSignup(requestedToken) : null;
 
     if (pendingSignup && (pendingSignup.email !== normalizedEmail || pendingSignup.phoneNumber !== normalizedPhone)) {
       pendingSignup = null;
@@ -330,7 +329,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
     }
 
     if (!pendingSignup) {
-      signupToken = createPendingSignup({
+      signupToken = await createPendingSignup({
         firstName: pendingResult.firstName,
         lastName: pendingResult.lastName,
         email: normalizedEmail,
@@ -338,7 +337,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
         phoneNumber: normalizedPhone,
         phoneVerified: false,
       });
-      pendingSignup = getPendingSignup(signupToken);
+      pendingSignup = await getPendingSignup(signupToken);
     }
 
     if (pendingSignup.phoneVerified) {
@@ -354,6 +353,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
     pendingSignup.phoneVerificationCodeHash = hashCode(code);
     pendingSignup.phoneVerificationExpiresAt = Date.now() + PHONE_VERIFICATION_TTL_MS;
     pendingSignup.phoneVerificationSentAt = Date.now();
+    await pendingSignup.save();
 
     try {
       await sendPhoneVerificationCode(normalizedPhone, code);
@@ -361,6 +361,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
       pendingSignup.phoneVerificationCodeHash = null;
       pendingSignup.phoneVerificationExpiresAt = null;
       pendingSignup.phoneVerificationSentAt = null;
+      await pendingSignup.save();
       throw error;
     }
 
@@ -391,7 +392,7 @@ export const verifySignUpPhoneVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'Enter a valid 6-digit verification code.' });
     }
 
-    const pendingSignup = getPendingSignup(signupToken);
+    const pendingSignup = await getPendingSignup(signupToken);
     if (!pendingSignup || pendingSignup.email !== normalizedEmail) {
       return res.status(404).json({ message: 'No pending signup was found for this email.' });
     }
@@ -429,6 +430,7 @@ export const verifySignUpPhoneVerificationCode = async (req, res) => {
     pendingSignup.phoneVerificationCodeHash = null;
     pendingSignup.phoneVerificationExpiresAt = null;
     pendingSignup.phoneVerificationSentAt = null;
+    await pendingSignup.save();
 
     return res.json({
       message: 'Mobile number verified successfully.',
@@ -476,7 +478,7 @@ export const signUp = async (req, res) => {
     }
 
     const { normalizedEmail, normalizedPhone } = pendingResult;
-    const pendingSignup = getPendingSignup(signupToken);
+    const pendingSignup = await getPendingSignup(signupToken);
 
     if (!pendingSignup || pendingSignup.email !== normalizedEmail || pendingSignup.phoneNumber !== normalizedPhone) {
       return res.status(400).json({ message: 'Your signup session expired. Please verify your mobile number again.' });
@@ -493,6 +495,7 @@ export const signUp = async (req, res) => {
     pendingSignup.signupVerificationCodeHash = signupVerificationCodeHash;
     pendingSignup.signupVerificationExpiresAt = signupVerificationExpiresAt.getTime();
     pendingSignup.signupVerificationSentAt = signupVerificationSentAt.getTime();
+    await pendingSignup.save();
 
     let codeDeliveryResult;
     try {
@@ -536,7 +539,7 @@ export const verifySignUp = async (req, res) => {
     }
 
     const normalizedEmail = normalizeEmail(email);
-    const pendingSignup = getPendingSignup(signupToken);
+    const pendingSignup = await getPendingSignup(signupToken);
     if (!pendingSignup || pendingSignup.email !== normalizedEmail) {
       return res.status(404).json({ message: 'No pending signup was found for this email.' });
     }
@@ -575,7 +578,7 @@ export const verifySignUp = async (req, res) => {
       address: '',
     });
     await customerAccount.save();
-    pendingSignups.delete(String(signupToken));
+    await PendingSignup.deleteOne({ _id: String(signupToken) });
 
     const token = generateToken({
       id: customerAccount._id,
