@@ -223,13 +223,6 @@ export async function upload3DModel(token: string, file: File): Promise<string> 
   return uploadedUrl;
 }
 
-export interface BranchClickAnalysisItem {
-  gownName: string;
-  gownBranch: string;
-  customerBranchClicks: Record<string, number>;
-  mismatchedClicks: number;
-}
-
 export async function recordGownClick(gownId: string): Promise<void> {
   const url = `${API_BASE}/${gownId}/click`;
   const res = await fetch(url, {
@@ -244,16 +237,3 @@ export async function recordGownClick(gownId: string): Promise<void> {
   }
 }
 
-export async function getBranchClickAnalysis(token: string): Promise<BranchClickAnalysisItem[]> {
-  const url = `${API_BASE}/branch-click-analysis`;
-  const res = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${token}`
-    }
-  });
-  const data = await parseJsonSafe(res);
-  if (!res.ok) {
-    throw new Error(data?.message || `Failed to get branch click analysis: ${res.status}`);
-  }
-  return data?.analysis || [];
-}
