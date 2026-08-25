@@ -918,7 +918,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         </div>
       </div>
 
-      {isTermsOpen && (
+      {isTermsOpen && !isVerifyingSignUp && (
         <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/50" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
           <div
