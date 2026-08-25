@@ -496,22 +496,24 @@ export default function App() {
     email: string,
     password: string,
     confirmPassword: string,
-    phoneNumber?: string
+    phoneNumber: string | undefined,
+    signupToken: string
   ) => {
     if (password !== confirmPassword) {
       throw new Error('Passwords do not match.');
     }
 
-    const result = await authAPI.signUp({ firstName, lastName, email, password, phoneNumber });
+    const result = await authAPI.signUp({ firstName, lastName, email, password, phoneNumber, signupToken });
     toast.success('Verification code sent. Check your email to finish creating your account.');
     return {
       email: result.email,
       message: result.message,
+      signupToken: result.signupToken,
     };
   };
 
-  const handleVerifySignUp = async (email: string, code: string) => {
-    const auth = await authAPI.verifySignUp({ email, code });
+  const handleVerifySignUp = async (email: string, code: string, signupToken: string) => {
+    const auth = await authAPI.verifySignUp({ email, code, signupToken });
     handleAuthSuccess(auth.user, auth.token);
 
     toast.success(`Welcome to FabriQ, ${auth.user.firstName}! Your account has been created.`);

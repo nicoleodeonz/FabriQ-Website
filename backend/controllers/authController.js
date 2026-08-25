@@ -19,6 +19,7 @@ const SIGNUP_CODE_TTL_MS = 24 * 60 * 60 * 1000;
 const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 const RESET_CODE_TTL_MS = 15 * 60 * 1000;
 const IS_PRODUCTION = String(process.env.NODE_ENV || 'development').toLowerCase() === 'production';
+const pendingSignups = new Map();
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -267,32 +268,33 @@ async function buildPendingCustomerFromSignup({ firstName, lastName, email, pass
     return { error: phoneConflict };
   }
 
-  const customerAccount = existingCustomerAccount || new CustomerAccount({
-    email: normalizedEmail,
-    preferredBranch: 'Taguig Main - Cadena de Amor',
-    address: ''
-  });
-
-  const previousPhoneNumber = String(customerAccount.phoneNumber || '').trim();
-
-  customerAccount.firstName = firstName.trim();
-  customerAccount.lastName = lastName.trim();
-  customerAccount.password = password;
-  customerAccount.status = 'pending_verification';
-  customerAccount.phoneNumber = normalizedPhone || undefined;
-
-  if (!normalizedPhone) {
-    clearPhoneVerificationState(customerAccount);
-  } else if (previousPhoneNumber !== normalizedPhone) {
-    clearPhoneVerificationState(customerAccount);
-  }
-
   return {
-    customerAccount,
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    password,
     existingCustomerAccount,
     normalizedEmail,
     normalizedPhone,
   };
+}
+
+function createPendingSignup(data) {
+  const token = crypto.randomBytes(32).toString('hex');
+  pendingSignups.set(token, {
+    ...data,
+    expiresAt: Date.now() + SIGNUP_CODE_TTL_MS,
+  });
+  setTimeout(() => pendingSignups.delete(token), SIGNUP_CODE_TTL_MS).unref?.();
+  return token;
+}
+
+function getPendingSignup(token) {
+  const pendingSignup = pendingSignups.get(String(token || ''));
+  if (!pendingSignup || pendingSignup.expiresAt < Date.now()) {
+    if (token) pendingSignups.delete(String(token));
+    return null;
+  }
+  return pendingSignup;
 }
 
 export const sendSignUpPhoneVerificationCode = async (req, res) => {
@@ -312,31 +314,53 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
       return res.status(status).json(errors ? { message, errors } : { message });
     }
 
-    const { customerAccount, normalizedPhone } = pendingResult;
+    const { normalizedEmail, normalizedPhone } = pendingResult;
 
     if (!normalizedPhone) {
       return res.status(400).json({ message: 'Enter a valid mobile number before requesting verification.' });
     }
 
-    if (customerAccount.phoneVerified) {
+    const requestedToken = String(req.body?.signupToken || '');
+    let signupToken = requestedToken;
+    let pendingSignup = requestedToken ? getPendingSignup(requestedToken) : null;
+
+    if (pendingSignup && (pendingSignup.email !== normalizedEmail || pendingSignup.phoneNumber !== normalizedPhone)) {
+      pendingSignup = null;
+      signupToken = '';
+    }
+
+    if (!pendingSignup) {
+      signupToken = createPendingSignup({
+        firstName: pendingResult.firstName,
+        lastName: pendingResult.lastName,
+        email: normalizedEmail,
+        password: pendingResult.password,
+        phoneNumber: normalizedPhone,
+        phoneVerified: false,
+      });
+      pendingSignup = getPendingSignup(signupToken);
+    }
+
+    if (pendingSignup.phoneVerified) {
       return res.json({
         message: 'This mobile number is already verified.',
         phoneNumber: normalizedPhone,
         verified: true,
+        signupToken,
       });
     }
 
     const code = generateCode();
-    customerAccount.phoneVerificationCodeHash = hashCode(code);
-    customerAccount.phoneVerificationExpiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
-    customerAccount.phoneVerificationSentAt = new Date();
-    await customerAccount.save();
+    pendingSignup.phoneVerificationCodeHash = hashCode(code);
+    pendingSignup.phoneVerificationExpiresAt = Date.now() + PHONE_VERIFICATION_TTL_MS;
+    pendingSignup.phoneVerificationSentAt = Date.now();
 
     try {
       await sendPhoneVerificationCode(normalizedPhone, code);
     } catch (error) {
-      clearPhoneVerificationCode(customerAccount);
-      await customerAccount.save();
+      pendingSignup.phoneVerificationCodeHash = null;
+      pendingSignup.phoneVerificationExpiresAt = null;
+      pendingSignup.phoneVerificationSentAt = null;
       throw error;
     }
 
@@ -344,6 +368,7 @@ export const sendSignUpPhoneVerificationCode = async (req, res) => {
       message: 'Verification code sent successfully.',
       phoneNumber: normalizedPhone,
       verified: false,
+      signupToken,
     });
   } catch (error) {
     console.error('sendSignUpPhoneVerificationCode error:', error);
@@ -356,6 +381,7 @@ export const verifySignUpPhoneVerificationCode = async (req, res) => {
   try {
     const normalizedEmail = normalizeEmail(req.body?.email);
     const code = String(req.body?.code || '').trim();
+    const signupToken = String(req.body?.signupToken || '');
 
     if (!normalizedEmail) {
       return res.status(400).json({ message: 'Email is required.' });
@@ -365,46 +391,50 @@ export const verifySignUpPhoneVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'Enter a valid 6-digit verification code.' });
     }
 
-    const customerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
-    if (!customerAccount || customerAccount.status !== 'pending_verification') {
+    const pendingSignup = getPendingSignup(signupToken);
+    if (!pendingSignup || pendingSignup.email !== normalizedEmail) {
       return res.status(404).json({ message: 'No pending signup was found for this email.' });
     }
 
-    if (!customerAccount.phoneNumber) {
+    if (!pendingSignup.phoneNumber) {
       return res.status(400).json({ message: 'Add a mobile number before verifying it.' });
     }
 
-    if (customerAccount.phoneVerified) {
+    if (pendingSignup.phoneVerified) {
       return res.json({
         message: 'This mobile number is already verified.',
-        phoneNumber: customerAccount.phoneNumber,
+        phoneNumber: pendingSignup.phoneNumber,
         verified: true,
+        signupToken,
       });
     }
 
-    if (!customerAccount.phoneVerificationCodeHash || !customerAccount.phoneVerificationExpiresAt) {
+    if (!pendingSignup.phoneVerificationCodeHash || !pendingSignup.phoneVerificationExpiresAt) {
       return res.status(400).json({ message: 'Request a verification code before verifying your mobile number.' });
     }
 
-    if (new Date(customerAccount.phoneVerificationExpiresAt).getTime() < Date.now()) {
-      clearPhoneVerificationCode(customerAccount);
-      await customerAccount.save();
+    if (pendingSignup.phoneVerificationExpiresAt < Date.now()) {
+      pendingSignup.phoneVerificationCodeHash = null;
+      pendingSignup.phoneVerificationExpiresAt = null;
+      pendingSignup.phoneVerificationSentAt = null;
       return res.status(400).json({ message: 'Invalid or expired verification code.' });
     }
 
-    if (hashCode(code) !== customerAccount.phoneVerificationCodeHash) {
+    if (hashCode(code) !== pendingSignup.phoneVerificationCodeHash) {
       return res.status(400).json({ message: 'Invalid or expired verification code.' });
     }
 
-    customerAccount.phoneVerified = true;
-    customerAccount.phoneVerifiedAt = new Date();
-    clearPhoneVerificationCode(customerAccount);
-    await customerAccount.save();
+    pendingSignup.phoneVerified = true;
+    pendingSignup.phoneVerifiedAt = new Date();
+    pendingSignup.phoneVerificationCodeHash = null;
+    pendingSignup.phoneVerificationExpiresAt = null;
+    pendingSignup.phoneVerificationSentAt = null;
 
     return res.json({
       message: 'Mobile number verified successfully.',
-      phoneNumber: customerAccount.phoneNumber,
+      phoneNumber: pendingSignup.phoneNumber,
       verified: true,
+      signupToken,
     });
   } catch (error) {
     console.error('verifySignUpPhoneVerificationCode error:', error);
@@ -430,7 +460,7 @@ const generateToken = (user) => {
 
 export const signUp = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phoneNumber } = req.body;
+    const { firstName, lastName, email, password, phoneNumber, signupToken } = req.body;
 
     const pendingResult = await buildPendingCustomerFromSignup({
       firstName,
@@ -445,13 +475,14 @@ export const signUp = async (req, res) => {
       return res.status(status).json(errors ? { message, errors } : { message });
     }
 
-    const {
-      customerAccount,
-      normalizedEmail,
-      normalizedPhone,
-    } = pendingResult;
+    const { normalizedEmail, normalizedPhone } = pendingResult;
+    const pendingSignup = getPendingSignup(signupToken);
 
-    if (normalizedPhone && !customerAccount.phoneVerified) {
+    if (!pendingSignup || pendingSignup.email !== normalizedEmail || pendingSignup.phoneNumber !== normalizedPhone) {
+      return res.status(400).json({ message: 'Your signup session expired. Please verify your mobile number again.' });
+    }
+
+    if (normalizedPhone && !pendingSignup.phoneVerified) {
       return res.status(400).json({ message: 'Verify your mobile number before creating your account.' });
     }
 
@@ -459,18 +490,15 @@ export const signUp = async (req, res) => {
     const signupVerificationCodeHash = hashCode(signupCode);
     const signupVerificationExpiresAt = new Date(Date.now() + SIGNUP_CODE_TTL_MS);
     const signupVerificationSentAt = new Date();
-    customerAccount.status = 'pending_verification';
-    customerAccount.signupVerificationCodeHash = signupVerificationCodeHash;
-    customerAccount.signupVerificationExpiresAt = signupVerificationExpiresAt;
-    customerAccount.signupVerificationSentAt = signupVerificationSentAt;
-
-    await customerAccount.save();
+    pendingSignup.signupVerificationCodeHash = signupVerificationCodeHash;
+    pendingSignup.signupVerificationExpiresAt = signupVerificationExpiresAt.getTime();
+    pendingSignup.signupVerificationSentAt = signupVerificationSentAt.getTime();
 
     let codeDeliveryResult;
     try {
       codeDeliveryResult = await sendVerificationCodeEmail({
         email: normalizedEmail,
-        name: `${customerAccount.firstName} ${customerAccount.lastName}`,
+        name: `${pendingSignup.firstName} ${pendingSignup.lastName}`,
         code: signupCode,
         purpose: 'account_verification',
         expiresInHours: 24,
@@ -491,6 +519,7 @@ export const signUp = async (req, res) => {
       ),
       email: normalizedEmail,
       expiresInMinutes: 24 * 60,
+      signupToken,
     });
   } catch (error) {
     console.error('Signup error:', error);
@@ -500,40 +529,53 @@ export const signUp = async (req, res) => {
 
 export const verifySignUp = async (req, res) => {
   try {
-    const { email, code } = req.body;
+    const { email, code, signupToken } = req.body;
 
     if (!email || !code) {
       return res.status(400).json({ message: 'Email and verification code are required.' });
     }
 
     const normalizedEmail = normalizeEmail(email);
-    const customerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
-
-    if (!customerAccount || customerAccount.status !== 'pending_verification') {
+    const pendingSignup = getPendingSignup(signupToken);
+    if (!pendingSignup || pendingSignup.email !== normalizedEmail) {
       return res.status(404).json({ message: 'No pending signup was found for this email.' });
     }
 
-    if (!customerAccount.signupVerificationCodeHash || !customerAccount.signupVerificationExpiresAt) {
+    if (!pendingSignup.signupVerificationCodeHash || !pendingSignup.signupVerificationExpiresAt) {
       return res.status(400).json({ message: 'No signup verification code is active. Please request a new code.' });
     }
 
-    if (customerAccount.signupVerificationExpiresAt.getTime() < Date.now()) {
-      customerAccount.signupVerificationCodeHash = null;
-      customerAccount.signupVerificationExpiresAt = null;
-      customerAccount.signupVerificationSentAt = null;
-      await customerAccount.save();
+    if (pendingSignup.signupVerificationExpiresAt < Date.now()) {
+      pendingSignup.signupVerificationCodeHash = null;
+      pendingSignup.signupVerificationExpiresAt = null;
+      pendingSignup.signupVerificationSentAt = null;
       return res.status(400).json({ message: 'The verification code has expired. Please request a new one.' });
     }
 
-    if (customerAccount.signupVerificationCodeHash !== hashCode(code)) {
+    if (pendingSignup.signupVerificationCodeHash !== hashCode(code)) {
       return res.status(400).json({ message: 'The verification code is incorrect.' });
     }
 
-    customerAccount.status = 'active';
-    customerAccount.signupVerificationCodeHash = null;
-    customerAccount.signupVerificationExpiresAt = null;
-    customerAccount.signupVerificationSentAt = null;
+    const existingCustomerAccount = await CustomerAccount.findOne({ email: normalizedEmail });
+    if (existingCustomerAccount && existingCustomerAccount.status !== 'pending_verification') {
+      return res.status(409).json({ message: 'Account already exists. Please log in instead.' });
+    }
+    if (existingCustomerAccount) await CustomerAccount.deleteOne({ _id: existingCustomerAccount._id });
+
+    const customerAccount = new CustomerAccount({
+      firstName: pendingSignup.firstName,
+      lastName: pendingSignup.lastName,
+      email: pendingSignup.email,
+      password: pendingSignup.password,
+      phoneNumber: pendingSignup.phoneNumber,
+      phoneVerified: pendingSignup.phoneVerified,
+      phoneVerifiedAt: pendingSignup.phoneVerifiedAt || null,
+      status: 'active',
+      preferredBranch: 'Taguig Main - Cadena de Amor',
+      address: '',
+    });
     await customerAccount.save();
+    pendingSignups.delete(String(signupToken));
 
     const token = generateToken({
       id: customerAccount._id,
