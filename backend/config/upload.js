@@ -74,6 +74,6 @@ export const upload3DModel = createUpload({
     'application/json',
     'text/plain'
   ],
-  maxFileSize: 75 * 1024 * 1024,
+  maxFileSize: 150 * 1024 * 1024,
   errorMessage: 'Only GLB, GLTF, USDZ, and ZIP model files are allowed'
 });

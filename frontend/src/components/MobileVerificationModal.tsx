@@ -109,7 +109,7 @@ export function MobileVerificationModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      <div ref={modalRef} tabIndex={-1} className="relative z-10 w-full max-w-lg rounded-2xl bg-[#FAF7F0] shadow-2xl">
+      <div ref={modalRef} tabIndex={-1} className="modal-gradient-surface relative z-10 w-full max-w-lg rounded-2xl shadow-2xl">
         <header className="flex items-center justify-between border-b p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl">

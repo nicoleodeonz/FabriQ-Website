@@ -116,9 +116,10 @@ interface AuthModalProps {
     email: string,
     password: string,
     confirmPassword: string,
-    phoneNumber?: string
-  ) => Promise<{ email: string; message: string }>;
-  onVerifySignUp: (email: string, code: string) => Promise<void>;
+    phoneNumber: string | undefined,
+    signupToken: string
+  ) => Promise<{ email: string; message: string; signupToken: string }>;
+  onVerifySignUp: (email: string, code: string, signupToken: string) => Promise<void>;
   onForgotPassword: () => void;
 }
 
@@ -164,6 +165,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
   const [phoneVerificationResendSecondsLeft, setPhoneVerificationResendSecondsLeft] = useState(0);
   const [hasSentPhoneVerificationCode, setHasSentPhoneVerificationCode] = useState(false);
   const [verifiedPhoneDigits, setVerifiedPhoneDigits] = useState('');
+  const [signupToken, setSignupToken] = useState('');
 
   const isPhoneVerified = phone.length === 10 && verifiedPhoneDigits === phone;
   const isPhoneAlreadyRegisteredError = phoneVerificationError === 'This phone number is already registered.';
@@ -227,6 +229,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setEmail('');
     setPassword('');
     setConfirmPassword('');
+    setSignupToken('');
     setVerificationCode('');
     setErrors(emptyErrors());
     setServerError(null);
@@ -255,9 +258,11 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         email,
         password,
         confirmPassword,
-        phone ? `+63${phone}` : undefined
+        phone ? `+63${phone}` : undefined,
+        signupToken
       );
 
+      setSignupToken(result.signupToken);
       setIsVerifyingSignUp(true);
       setVerificationMessage(result.message);
       setVerificationCode('');
@@ -450,7 +455,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
     setIsSubmitting(true);
     try {
-      await onVerifySignUp(email, verificationCode.trim());
+      await onVerifySignUp(email, verificationCode.trim(), signupToken);
       resetAllState();
     } catch (error: any) {
       setVerificationError(error?.message || 'Failed to verify your email.');
@@ -477,9 +482,11 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         email,
         password,
         confirmPassword,
-        phone ? `+63${phone}` : undefined
+        phone ? `+63${phone}` : undefined,
+        signupToken
       );
 
+      setSignupToken(result.signupToken);
       setVerificationMessage(result.message);
       setResendSecondsLeft(60);
     } catch (error: any) {
@@ -532,7 +539,9 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         email: email.trim(),
         password,
         phoneNumber: `+63${phone}`,
+        signupToken: signupToken || undefined,
       });
+      setSignupToken(result.signupToken);
       setHasSentPhoneVerificationCode(true);
       setPhoneVerificationResendSecondsLeft(result.verified ? 0 : 60);
       if (result.verified) {
@@ -559,6 +568,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
       const result = await authAPI.verifySignUpPhoneVerificationCode({
         email: email.trim(),
         code: phoneVerificationCode.trim(),
+        signupToken,
       });
       setVerifiedPhoneDigits(phone);
       setPhoneVerificationMessage(result.message);
@@ -581,6 +591,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
     setEmail('');
     setPassword('');
     setConfirmPassword('');
+    setSignupToken('');
     setVerificationCode('');
     setErrors(emptyErrors());
     setServerError(null);
@@ -618,7 +629,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
       <div
         ref={modalRef}
         tabIndex={-1}
-        className="relative z-10 bg-[#FAF7F0] w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
+        className="modal-gradient-surface relative z-10 w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
         style={{
           maxWidth: isSignUp || isVerifyingSignUp ? '592px' : '580px',
         }}
@@ -907,9 +918,9 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
         </div>
       </div>
 
-      {isTermsOpen && (
+      {isTermsOpen && !isVerifyingSignUp && (
         <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-[#1A1A1A]/45 backdrop-blur-[2px]" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
+          <div className="absolute inset-0 bg-black/50" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
           <div
             className="relative z-10 w-full overflow-hidden border-2 border-[#3A342E] shadow-[8px_8px_0_rgba(58,52,46,0.35)]"
             style={{ maxWidth: '720px', height: '500px', backgroundColor: '#F7F3EC' }}

@@ -305,7 +305,6 @@ export async function upload3DModel(req, res) {
     const storedModel = await storeUploadedAsset(req.file, {
       folder: 'products/models',
       resourceType: 'raw',
-      allowLocalFallback: false,
     });
 
     if (!storedModel || !storedModel.url) {
@@ -315,7 +314,9 @@ export async function upload3DModel(req, res) {
     res.json({ url: toPublicUrl(req, storedModel.url), secure_url: storedModel.url });
   } catch (err) {
     console.error('upload3DModel error:', err);
-    res.status(500).json({ message: 'Failed to upload 3D model' });
+    const message = String(err?.message || (err instanceof Error ? err.message : 'Failed to upload 3D model'));
+    const status = /file size too large|maximum is/i.test(message) ? 413 : 500;
+    res.status(status).json({ message });
   }
 }
 
@@ -781,55 +782,3 @@ export async function recordClick(req, res) {
   }
 }
 
-export async function getBranchClickAnalysis(req, res) {
-  try {
-    if (!isElevatedRole(req.user.role)) {
-      return res.status(403).json({ message: 'Access denied' });
-    }
-
-    const behaviors = await CustomerBehavior.find({
-      action: 'click',
-      customerBranchPreference: { $ne: null }
-    }).lean();
-
-    const analysis = behaviors.reduce((acc, behavior) => {
-      const gownName = behavior.gownName;
-      const gownBranch = behavior.gownBranch;
-      const customerBranch = behavior.customerBranchPreference;
-
-      if (!acc[gownName]) {
-        acc[gownName] = {
-          gownName,
-          gownBranch,
-          customerBranchClicks: {}
-        };
-      }
-
-      if (!acc[gownName].customerBranchClicks[customerBranch]) {
-        acc[gownName].customerBranchClicks[customerBranch] = 0;
-      }
-
-      acc[gownName].customerBranchClicks[customerBranch]++;
-
-      return acc;
-    }, {});
-
-    const analysisArray = Object.values(analysis)
-      .map(item => {
-        const mismatchedClicks = Object.entries(item.customerBranchClicks)
-          .filter(([branch]) => branch !== item.gownBranch)
-          .reduce((sum, [, count]) => sum + count, 0);
-        return {
-          ...item,
-          mismatchedClicks
-        };
-      })
-      .sort((a, b) => b.mismatchedClicks - a.mismatchedClicks)
-      .slice(0, 10);
-
-    res.json({ analysis: analysisArray });
-  } catch (err) {
-    console.error('getBranchClickAnalysis error:', err);
-    res.status(500).json({ message: 'Failed to get branch click analysis' });
-  }
-}

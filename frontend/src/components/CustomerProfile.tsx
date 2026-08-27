@@ -51,6 +51,7 @@ const HISTORY_STATUS_FILTER_OPTIONS: Exclude<HistoryStatusFilter, 'all'>[] = ['C
 
 interface CustomerProfileProps {
   onLogout: () => void;
+  onRequestLogout?: () => void;
   onForceReauth?: (message?: string) => void;
   onUserUpdated?: (profile: {
     firstName?: string;
@@ -293,10 +294,9 @@ interface ProfileState {
   preferredBranch: string;
 }
 
-export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, token, favoriteGowns, onRemoveFavorite, navigateWithGown, isAdmin }: CustomerProfileProps) {
+export function CustomerProfile({ onLogout, onRequestLogout, onForceReauth, onUserUpdated, user, token, favoriteGowns, onRemoveFavorite, navigateWithGown, isAdmin }: CustomerProfileProps) {
   const normalizedUserRole = String(user.role || '').trim().toLowerCase();
   const [activeTab, setActiveTab] = useState<'profile' | 'measurements' | 'favorites' | 'history'>('profile');
-  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [isPasswordConfirmOpen, setIsPasswordConfirmOpen] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -1353,7 +1353,13 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
               </div>
             </div>
             <button 
-              onClick={() => setIsLogoutConfirmOpen(true)}
+              onClick={() => {
+                if (onRequestLogout) {
+                  onRequestLogout();
+                } else {
+                  onLogout();
+                }
+              }}
               className="px-6 py-3 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors"
             >
               Logout
@@ -1378,52 +1384,6 @@ export function CustomerProfile({ onLogout, onForceReauth, onUserUpdated, user, 
         </div>
 
         {renderTabContent()}
-
-        {isLogoutConfirmOpen && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8">
-              <div className="flex items-start justify-between gap-4 mb-4">
-                <div>
-                  <h3 className="text-2xl font-light">Confirm Logout</h3>
-                  <p className="text-sm text-[#6B5D4F] mt-2">Are you sure you want to log out of your account?</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsLogoutConfirmOpen(false)}
-                  className="p-2 hover:bg-[#FAF7F0] rounded-lg transition-colors"
-                  aria-label="Close logout confirmation"
-                >
-                  <span className="text-xl leading-none text-[#6B5D4F]">×</span>
-                </button>
-              </div>
-
-              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
-                <p className="font-medium text-[#3D2B1F]">{displayedProfile.firstName} {displayedProfile.lastName}</p>
-                <p className="text-sm text-[#6B5D4F]">{displayedProfile.email}</p>
-              </div>
-
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsLogoutConfirmOpen(false)}
-                  className="flex-1 py-3 border-2 border-[#E8DCC8] bg-[#FAF7F0] text-[#6B5D4F] rounded-xl hover:bg-[#F2EADF] transition-colors font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsLogoutConfirmOpen(false);
-                    onLogout();
-                  }}
-                  className="flex-1 py-3 bg-[#1a1a1a] text-white rounded-xl hover:bg-[#D4AF37] transition-colors font-medium"
-                >
-                  Yes, Logout
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {passwordApiMessage && (
           <div

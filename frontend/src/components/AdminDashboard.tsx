@@ -1,13 +1,13 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Package, Users, TrendingUp, TrendingDown, Minus, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
-import { BarElement, CategoryScale, Chart as ChartJS, Legend, LinearScale, Tooltip as ChartTooltip } from 'chart.js';
+import { ArcElement, BarElement, CategoryScale, Chart as ChartJS, Legend, LineElement, LinearScale, PointElement, Tooltip as ChartTooltip } from 'chart.js';
 import type { ChartOptions, TooltipItem } from 'chart.js';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Bar } from 'react-chartjs-2';
 import * as inventoryAPI from '../services/inventoryAPI';
 import { INVENTORY_UPDATED_EVENT } from '../services/inventoryAPI';
-import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary, BranchClickAnalysisItem } from '../services/inventoryAPI';
+import type { InventoryItem, BranchPerformanceStats, BranchPerformanceSummary } from '../services/inventoryAPI';
 import { GownDetailsModal } from './GownDetailsModal';
 import type { GownDetails } from './GownDetailsModal';
 import * as usersAPI from '../services/usersAPI';
@@ -24,8 +24,12 @@ import { notificationAPI } from '../services/notificationAPI';
 import { createAdminDashboardEventSource } from '../services/adminRealtime';
 import { useModalInteractionLock } from '../hooks/useModalInteractionLock';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { ChatBehaviorAnalytics } from './ChatBehaviorAnalytics';
+import { getChatBehaviorAnalytics, type ChatAnalyticsResponse } from '../services/chatAnalyticsAPI';
+import { getColorAnalysisSummary } from '../services/colorAnalysisAPI';
+import type { ColorAnalysisEntry, ColorAnalysisSummary } from '../services/colorAnalysisAPI';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, ChartTooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, LineElement, PointElement, ChartTooltip, Legend);
 
 export type { InventoryItem };
 
@@ -97,6 +101,7 @@ interface AdminDashboardProps {
   token: string;
   currentUserRole?: string;
   currentUser?: CurrentAdminUser | null;
+  onRequestLogout?: () => void;
 }
 
 type AdminTab = 'overview' | 'inventory' | 'rentals' | 'appointments' | 'bespoke' | 'users' | 'history';
@@ -262,7 +267,7 @@ function toLocalDateKey(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export default function AdminDashboard({ token, currentUserRole, currentUser }: AdminDashboardProps) {
+export default function AdminDashboard({ token, currentUserRole, currentUser, onRequestLogout }: AdminDashboardProps) {
   const getCurrentUserId = (jwtToken: string) => {
     try {
       const payloadPart = jwtToken.split('.')[1];
@@ -289,6 +294,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     | null;
 
   const [activeTab, setActiveTab] = useState<AdminTab>(() => parseAdminTabFromHash(window.location.hash));
+  const [overviewAnalyticsTab, setOverviewAnalyticsTab] = useState<'general' | 'sales' | 'customer-behavior'>('general');
   const [selectedBranch, setSelectedBranch] = useState<string>(() => assignedStaffBranch || 'All Branches');
   const [overviewActivityPage, setOverviewActivityPage] = useState(1);
   const [branchComparisonMetric, setBranchComparisonMetric] = useState<BranchComparisonMetric>('revenue');
@@ -311,9 +317,13 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   
   // Inventory State
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [branchClickAnalysis, setBranchClickAnalysis] = useState<BranchClickAnalysisItem[]>([]);
-  const [branchClickAnalysisLoading, setBranchClickAnalysisLoading] = useState(false);
   const [branchStats, setBranchStats] = useState<BranchPerformanceStats[]>([]);
+  const [colorAnalysis, setColorAnalysis] = useState<ColorAnalysisSummary>({
+    skinTones: [],
+    suggestedColors: [],
+    suggestedGowns: [],
+  });
+  const [colorAnalysisLoading, setColorAnalysisLoading] = useState(false);
   const [branchSummary, setBranchSummary] = useState<BranchPerformanceSummary>({
     totalProducts: 0,
     totalStockUnits: 0,
@@ -685,7 +695,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   // Load inventory from DB on mount
   useEffect(() => {
     loadInventory();
-    loadBranchClickAnalysis();
+    loadColorAnalysis();
     loadUsers();
     loadAdminRentals();
     loadAdminAppointments();
@@ -869,15 +879,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     }
   }
 
-  async function loadBranchClickAnalysis() {
-    setBranchClickAnalysisLoading(true);
+  async function loadColorAnalysis() {
+    setColorAnalysisLoading(true);
     try {
-      const analysis = await inventoryAPI.getBranchClickAnalysis(token);
-      setBranchClickAnalysis(analysis);
+      const summary = await getColorAnalysisSummary(token);
+      setColorAnalysis(summary);
     } catch (err) {
-      console.error('Failed to load branch click analysis:', err);
+      console.error('Failed to load color analysis summary:', err);
     } finally {
-      setBranchClickAnalysisLoading(false);
+      setColorAnalysisLoading(false);
     }
   }
 
@@ -2186,7 +2196,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
   const MAX_FILE_SIZE = 5 * 1024 * 1024;
   const MAX_ITEM_IMAGES = 6;
   const ALLOWED_MIME = ['image/jpeg', 'image/png'];
-  const MAX_3D_MODEL_SIZE = 75 * 1024 * 1024;
+  const MAX_3D_MODEL_SIZE = 150 * 1024 * 1024;
   const ALLOWED_3D_MODEL_EXTENSIONS = ['.glb', '.gltf', '.usdz', '.zip'];
 
   const getModel3DUrl = (item: Partial<InventoryItem> | null | undefined): string => String(item?.model3dUrl || '').trim();
@@ -2305,7 +2315,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     }
 
     if (file.size > MAX_3D_MODEL_SIZE) {
-      setModelUploadError('File exceeds 75 MB limit.');
+      setModelUploadError('File exceeds 150 MB limit.');
       e.target.value = '';
       return;
     }
@@ -2314,6 +2324,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     setIsUploading3DModel(true);
     try {
       const uploadedUrl = await inventoryAPI.upload3DModel(token, file);
+      setModelUploadError(null);
       if (editingItem) {
         setEditingItem((prev) => prev ? { ...prev, model3dUrl: uploadedUrl } : prev);
       } else {
@@ -3285,6 +3296,55 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       },
     },
   }), [mostClickedItems]);
+  const colorAnalysisChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: false,
+        callbacks: {
+          label: (context: TooltipItem<'bar'>) => `${Number(context.parsed.x ?? 0).toLocaleString()} recommendation${Number(context.parsed.x ?? 0) === 1 ? '' : 's'}`,
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        grid: { color: '#E8DCC8', borderDash: [4, 4] },
+        border: { display: false },
+        ticks: { color: '#6B5D4F', precision: 0 },
+      },
+      y: {
+        grid: { display: false },
+        border: { color: '#E8DCC8' },
+        ticks: { color: '#6B5D4F' },
+      },
+    },
+  }), []);
+  const buildColorAnalysisChartData = (entries: ColorAnalysisEntry[]) => ({
+    labels: entries.map((entry) => entry.label),
+    datasets: [{
+      label: 'Recommendations',
+      data: entries.map((entry) => entry.count),
+      backgroundColor: entries.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+      borderRadius: 10,
+      borderSkipped: false as const,
+      maxBarThickness: 26,
+    }],
+  });
+  const colorAnalysisChartCards: Array<{ title: string; entries: ColorAnalysisEntry[] }> = [
+    { title: 'Most Common Skin Tone', entries: colorAnalysis.skinTones },
+    { title: 'Most Suggested Color', entries: colorAnalysis.suggestedColors },
+    { title: 'Most Suggested Gown', entries: colorAnalysis.suggestedGowns },
+  ];
   const salesThisWeek = adminRentals
     .filter((rental) => completedRentalStatuses.includes(rental.status) && isWithinRange(rental.createdAt, currentWeekStart, now))
     .reduce((sum, rental) => sum + Number(rental.totalPrice || 0), 0);
@@ -3910,6 +3970,212 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         image,
       };
     };
+    const renderChatBehaviorChartImage = (title: string, entries: Array<{ label: string; count: number }>) => {
+      if (entries.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: entries.map((entry) => entry.label),
+          datasets: [{
+            label: 'Messages',
+            data: entries.map((entry) => entry.count),
+            backgroundColor: entries.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+            borderRadius: 12,
+            borderSkipped: false,
+            maxBarThickness: 44,
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false },
+          },
+          layout: { padding: { top: 18, right: 20, bottom: 8, left: 8 } },
+          scales: {
+            x: {
+              beginAtZero: true,
+              grid: { color: '#D8C7AE', lineWidth: 1.5 },
+              border: { display: false },
+              ticks: { color: '#6B5D4F', precision: 0, font: { size: 20 } },
+            },
+            y: {
+              grid: { display: false },
+              border: { color: '#D8C7AE' },
+              ticks: { color: '#6B5D4F', font: { size: 20 } },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-chat-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: title,
+        narrativeTitle: title,
+        image,
+      };
+    };
+    const renderChatSentimentChartImage = (entries: ChatAnalyticsResponse['sentimentOverTime']) => {
+      if (entries.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'line',
+        data: {
+          labels: entries.map((entry) => entry.date),
+          datasets: [
+            { label: 'Positive', data: entries.map((entry) => entry.positive), borderColor: '#6E8B78', backgroundColor: '#6E8B78', tension: 0.3 },
+            { label: 'Neutral', data: entries.map((entry) => entry.neutral), borderColor: '#D4AF37', backgroundColor: '#D4AF37', tension: 0.3 },
+            { label: 'Negative', data: entries.map((entry) => entry.negative), borderColor: '#B86A6A', backgroundColor: '#B86A6A', tension: 0.3 },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: { display: true, labels: { color: '#6B5D4F', font: { size: 18 } } },
+            tooltip: { enabled: false },
+          },
+          layout: { padding: { top: 18, right: 20, bottom: 8, left: 8 } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#6B5D4F', font: { size: 18 } } },
+            y: { beginAtZero: true, grid: { color: '#D8C7AE', lineWidth: 1.5 }, ticks: { color: '#6B5D4F', precision: 0, font: { size: 20 } } },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-chat-sentiment-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: 'Customer Sentiment Over Time',
+        narrativeTitle: 'Customer Sentiment Over Time',
+        image,
+      };
+    };
+    const renderColorAnalysisChartImage = (title: string, entries: ColorAnalysisEntry[]) => {
+      if (entries.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: {
+          labels: entries.map((entry) => entry.label),
+          datasets: [{
+            label: 'Recommendations',
+            data: entries.map((entry) => entry.count),
+            backgroundColor: entries.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+            borderRadius: 12,
+            borderSkipped: false,
+            maxBarThickness: 44,
+          }],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: { display: false },
+            tooltip: { enabled: false },
+          },
+          layout: { padding: { top: 18, right: 20, bottom: 8, left: 8 } },
+          scales: {
+            x: {
+              beginAtZero: true,
+              grid: { color: '#D8C7AE', lineWidth: 1.5 },
+              border: { display: false },
+              ticks: { color: '#6B5D4F', precision: 0, font: { size: 20 } },
+            },
+            y: {
+              grid: { display: false },
+              border: { color: '#D8C7AE' },
+              ticks: { color: '#6B5D4F', font: { size: 20 } },
+            },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-color-analysis-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: title,
+        narrativeTitle: title,
+        image,
+      };
+    };
     const renderItemsPerCategoryChartImage = (items: Array<{ category: string; count: number; fill: string }>) => {
       if (items.length === 0) {
         return null;
@@ -4204,6 +4470,24 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       entry.appointments.toLocaleString(),
       entry.bespoke.toLocaleString(),
     ]);
+    const chatAnalytics: ChatAnalyticsResponse | null = await getChatBehaviorAnalytics(token).catch((error) => {
+      console.error('Failed to load chat behavior analytics for export:', error);
+      return null;
+    });
+    const chatSummaryRows = chatAnalytics ? [
+      ['Total Conversations', chatAnalytics.summary.totalConversations.toLocaleString()],
+      ['Customer Messages', chatAnalytics.summary.totalCustomerMessages.toLocaleString()],
+      ['Most Common Intent', chatAnalytics.summary.mostCommonIntent],
+      ['Most Discussed Product', chatAnalytics.summary.mostDiscussedProduct],
+      ['Positive Sentiment', `${chatAnalytics.summary.positiveSentimentPercentage}%`],
+      ['Peak Chat Hour', chatAnalytics.summary.peakChatHour],
+    ] : [];
+    const chatTopicRows = chatAnalytics?.topics.map((entry) => ['Top Customer Questions', entry.label, entry.count.toLocaleString()]) ?? [];
+    const chatIntentRows = chatAnalytics?.intents.map((entry) => ['Customer Intent Distribution', entry.label, entry.count.toLocaleString(), `${entry.percentage ?? 0}%`]) ?? [];
+    const chatSentimentRows = chatAnalytics?.sentimentOverTime.map((entry) => ['Customer Sentiment Over Time', entry.date, entry.positive.toLocaleString(), entry.neutral.toLocaleString(), entry.negative.toLocaleString()]) ?? [];
+    const discussedProductRows = chatAnalytics?.discussedProducts.map((entry) => ['Most Discussed Products', entry.productName, entry.mentions.toLocaleString()]) ?? [];
+    const conversationLengthRows = chatAnalytics?.conversationLength.map((entry) => ['Conversation Length', entry.label, entry.count.toLocaleString()]) ?? [];
+    const peakChatHourRows = chatAnalytics?.peakChatHours.map((entry) => ['Peak Chat Hours', entry.hour, entry.count.toLocaleString()]) ?? [];
     const tabularRows = [
       ...summaryRows.map(([label, value]) => ['Summary Metrics', label, value, '', '', '']),
       ...comparisonRows.map(([branch, revenue, rents, appointments, bespoke]) => ['Branch Comparison', branch, revenue, rents, appointments, bespoke]),
@@ -4211,6 +4495,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       ...mostRentedItemsForExport.map((entry) => ['Most Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...leastRentedItemsForExport.map((entry) => ['Least Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...mostClickedItemsForExport.map((entry) => ['Most Clicked Items', entry.name, entry.count.toLocaleString(), '', '', '']),
+      ...chatSummaryRows.map(([label, value]) => ['Chat Behavior', label, value, '', '', '']),
+      ...chatTopicRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...chatIntentRows.map(([section, label, value, percentage]) => [section, label, value, percentage, '', '']),
+      ...chatSentimentRows.map(([section, date, positive, neutral, negative]) => [section, date, positive, neutral, negative, '']),
+      ...discussedProductRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...conversationLengthRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...peakChatHourRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...colorAnalysis.skinTones.map((entry) => ['Most Common Skin Tone', entry.label, entry.count.toLocaleString(), '', '', '']),
+      ...colorAnalysis.suggestedColors.map((entry) => ['Most Suggested Color', entry.label, entry.count.toLocaleString(), '', '', '']),
+      ...colorAnalysis.suggestedGowns.map((entry) => ['Most Suggested Gown', entry.label, entry.count.toLocaleString(), '', '', '']),
     ];
     const filenameBase = `store-overview-${new Date().toISOString().slice(0, 10)}`;
 
@@ -4253,6 +4547,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
       tables: [
         createNarrativeTable('Summary Metrics', ['Metric', 'Value'], summaryRows),
         createNarrativeTable('Branch Comparison', ['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke'], comparisonRows),
+        ...(chatAnalytics ? [createNarrativeTable('Chat Behavior Summary', ['Metric', 'Value'], chatSummaryRows)] : []),
       ],
       charts: [
         createNarrativeChart('Revenue by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.revenue }))),
@@ -4263,6 +4558,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
         createNarrativeChart('Most Rented Items', mostRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
         createNarrativeChart('Least Rented Items', leastRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
         createNarrativeChart('Most Clicked Items', mostClickedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
+        ...(chatAnalytics ? [
+          createNarrativeChart('Top Customer Questions', chatAnalytics.topics.map((entry) => ({ label: entry.label, value: entry.count }))),
+          createNarrativeChart('Customer Intent Distribution', chatAnalytics.intents.map((entry) => ({ label: entry.label, value: entry.count }))),
+          createNarrativeChart('Customer Sentiment Over Time', chatAnalytics.sentimentOverTime.map((entry) => ({ label: entry.date, value: entry.positive + entry.neutral + entry.negative }))),
+          createNarrativeChart('Most Discussed Products', chatAnalytics.discussedProducts.map((entry) => ({ label: entry.productName, value: entry.mentions }))),
+          createNarrativeChart('Conversation Length', chatAnalytics.conversationLength.map((entry) => ({ label: entry.label, value: entry.count }))),
+          createNarrativeChart('Peak Chat Hours', chatAnalytics.peakChatHours.map((entry) => ({ label: entry.hour, value: entry.count }))),
+        ] : []),
+        createNarrativeChart('Most Common Skin Tone', colorAnalysis.skinTones.map((entry) => ({ label: entry.label, value: entry.count }))),
+        createNarrativeChart('Most Suggested Color', colorAnalysis.suggestedColors.map((entry) => ({ label: entry.label, value: entry.count }))),
+        createNarrativeChart('Most Suggested Gown', colorAnalysis.suggestedGowns.map((entry) => ({ label: entry.label, value: entry.count }))),
       ],
     };
     const narrative = await requestAnalyticsNarrative(reportPayload);
@@ -4309,6 +4615,39 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     if (mostClickedChartImage) {
       chartImages.push(mostClickedChartImage);
     }
+    const chatBehaviorChartDefinitions = [
+      ['Top Customer Questions', chatAnalytics?.topics ?? []],
+      ['Customer Intent Distribution', chatAnalytics?.intents ?? []],
+      ['Customer Sentiment Over Time', chatAnalytics?.sentimentOverTime.map((entry) => ({
+        label: entry.date,
+        count: entry.positive + entry.neutral + entry.negative,
+      })) ?? []],
+      ['Most Discussed Products', chatAnalytics?.discussedProducts.map((entry) => ({ label: entry.productName, count: entry.mentions })) ?? []],
+      ['Conversation Length', chatAnalytics?.conversationLength ?? []],
+      ['Peak Chat Hours', chatAnalytics?.peakChatHours.map((entry) => ({ label: entry.hour, count: entry.count })) ?? []],
+    ] as const;
+    chatBehaviorChartDefinitions.forEach(([title, entries]) => {
+      if (entries.length === 0) {
+        return;
+      }
+      const chartImage = title === 'Customer Sentiment Over Time' && chatAnalytics
+        ? renderChatSentimentChartImage(chatAnalytics.sentimentOverTime)
+        : renderChatBehaviorChartImage(title, entries);
+      if (chartImage) {
+        chartImages.push(chartImage);
+      }
+    });
+    const colorAnalysisChartDefinitions = [
+      ['Most Common Skin Tone', colorAnalysis.skinTones],
+      ['Most Suggested Color', colorAnalysis.suggestedColors],
+      ['Most Suggested Gown', colorAnalysis.suggestedGowns],
+    ] as const;
+    colorAnalysisChartDefinitions.forEach(([title, entries]) => {
+      const chartImage = renderColorAnalysisChartImage(title, entries);
+      if (chartImage) {
+        chartImages.push(chartImage);
+      }
+    });
 
     pdfDocument.setFont('times', 'normal');
     pdfDocument.setFontSize(22);
@@ -6285,13 +6624,24 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
     <div className="min-h-screen py-8 px-4 bg-[#FAF7F0]">
       <div className="max-w-5xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
-          <p className="text-[#6B5D4F]">
-            {assignedStaffBranch
-              ? `Manage your boutique operations for ${assignedStaffBranch}`
-              : 'Manage your boutique operations across all branches'}
-          </p>
+        <div className="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-light mb-2">{dashboardTitle}</h1>
+            <p className="text-[#6B5D4F]">
+              {assignedStaffBranch
+                ? `Manage your boutique operations for ${assignedStaffBranch}`
+                : 'Manage your boutique operations across all branches'}
+            </p>
+          </div>
+          {onRequestLogout && (
+            <button
+              type="button"
+              onClick={onRequestLogout}
+              className="shrink-0 px-6 py-3 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors"
+            >
+              Logout
+            </button>
+          )}
         </div>
 
         {/* Branch Selector */}
@@ -6615,6 +6965,30 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   </button>
                 </div>
 
+                <div className="flex w-full border-b border-[#E8DCC8]">
+                  {[
+                    { value: 'general', label: 'General' },
+                    { value: 'sales', label: 'Sales' },
+                    { value: 'customer-behavior', label: 'Customer Behavior' },
+                  ].map((tab) => (
+                    <button
+                      key={tab.value}
+                      type="button"
+                      onClick={() => setOverviewAnalyticsTab(tab.value as typeof overviewAnalyticsTab)}
+                      className={`flex-1 px-4 py-3 border-b-2 text-center text-sm transition-colors ${
+                        overviewAnalyticsTab === tab.value
+                          ? 'border-[#D4AF37] font-medium text-[#1A1A1A]'
+                          : 'border-transparent text-[#6B5D4F] hover:text-black'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <>
+                {overviewAnalyticsTab === 'sales' && (
+                  <>
                 {/* Revenue Comparison */}
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
@@ -6675,6 +7049,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   </div>
                 </div>
 
+                  </>
+                )}
+
+                {overviewAnalyticsTab === 'general' && (
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
                     <div>
@@ -6694,7 +7072,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                     )}
                   </div>
                 </div>
+                )}
 
+                {overviewAnalyticsTab === 'sales' && (
+                  <>
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
                     <div>
@@ -6779,6 +7160,11 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   )}
                 </div>
 
+                  </>
+                )}
+
+                {overviewAnalyticsTab === 'customer-behavior' && (
+                  <>
                 <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
                     <div>
@@ -6822,60 +7208,43 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 </div>
 
                 <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">
-                  <div className="mb-6 flex items-start justify-between gap-6">
-                    <div>
-                      <h2 className="text-2xl font-light text-[#1A1A1A]">Branch Click Analysis</h2>
-                      <p className="mt-1 text-sm text-[#6B5D4F]">
-                        See which gowns get clicks from customers of other branches (possible relocation suggestions).
-                      </p>
-                    </div>
+                  <div className="mb-6">
+                    <h2 className="text-2xl font-light text-[#1A1A1A]">Color Analysis Recommendations</h2>
+                    <p className="mt-1 text-sm text-[#6B5D4F]">Insights from customer skin analyses in the color analysis database.</p>
                   </div>
-                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
-                    {branchClickAnalysisLoading ? (
-                      <p className="text-sm text-[#6B5D4F]">Loading branch click analysis...</p>
-                    ) : branchClickAnalysis.length > 0 ? (
-                      <div className="space-y-4">
-                        {branchClickAnalysis.map((item, index) => (
-                          <div key={item.gownName} className="bg-white rounded-xl border border-[#E8DCC8] p-4">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <p className="font-medium text-[#1A1A1A]">{item.gownName}</p>
-                                <p className="text-sm text-[#6B5D4F]">
-                                  Currently at: <span className="font-medium">{item.gownBranch}</span>
-                                </p>
-                                <p className="text-sm text-[#6B5D4F]">
-                                  <span className="text-[#D4AF37] font-medium">{item.mismatchedClicks}</span> clicks from other branches
-                                </p>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-xs text-[#6B5D4F] mb-2">Customer Branch Clicks:</p>
-                                <div className="flex flex-wrap gap-2 justify-end">
-                                  {Object.entries(item.customerBranchClicks).map(([branch, count]) => (
-                                    <span
-                                      key={branch}
-                                      className={`px-3 py-1 rounded-full text-xs font-medium ${
-                                        branch === item.gownBranch
-                                          ? 'bg-[#E8DCC8] text-[#1A1A1A]'
-                                          : 'bg-[#D4AF37] text-white'
-                                      }`}
-                                    >
-                                      {branch}: {count}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
+                  {colorAnalysisLoading ? (
+                    <p className="text-sm text-[#6B5D4F]">Loading color analysis data...</p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+                      {colorAnalysisChartCards.map(({ title, entries }) => (
+                        <div key={title} className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                          <h3 className="mb-4 text-lg font-medium text-[#1A1A1A]">{title}</h3>
+                          {entries.length > 0 ? (
+                            <div className="h-[260px] w-full">
+                              <Bar
+                                data={buildColorAnalysisChartData(entries)}
+                                options={colorAnalysisChartOptions}
+                              />
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-[#6B5D4F]">No branch click analysis data available yet (needs customer clicks with preferred branch).</p>
-                    )}
-                  </div>
+                          ) : (
+                            <p className="text-sm text-[#6B5D4F]">No data available yet.</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </>
+
+                  </>
+                )}
+                </>
+                    </>
             )}
           </div>
+        )}
+
+        {activeTab === 'overview' && overviewAnalyticsTab === 'customer-behavior' && (
+          <ChatBehaviorAnalytics token={token} />
         )}
 
         {activeTab === 'inventory' && (
@@ -6932,6 +7301,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
             </div>
 
             <div className="flex flex-col md:flex-row gap-3 md:items-center">
+
               <input
                 type="text"
                 placeholder="Search Inventory"
@@ -7982,7 +8352,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                 <button
                   type="button"
                   onClick={handleSaveStoreOverviewAsPdf}
-                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0 || isGeneratingAnalyticsPdf}
+                  disabled={!canExportPdfs || storeOverviewComparisonData.length === 0 || colorAnalysisLoading || isGeneratingAnalyticsPdf}
                   className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                   aria-label={isGeneratingAnalyticsPdf ? 'Generating PDF export' : `Download store overview ${storeOverviewExportFormat.toUpperCase()}`}
                   title={isGeneratingAnalyticsPdf ? 'Generating PDF export' : `Download store overview ${storeOverviewExportFormat.toUpperCase()}`}
@@ -9830,7 +10200,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                         <>
                           <Upload className="w-7 h-7 text-[#6B5D4F] mb-2" />
                           <span className="text-sm text-[#6B5D4F]">Click to upload a 3D model</span>
-                          <span className="text-xs text-[#9E8E80] mt-1">GLB, GLTF, USDZ, or ZIP — max 75 MB</span>
+                          <span className="text-xs text-[#9E8E80] mt-1">GLB, GLTF, USDZ, or ZIP — max 150 MB</span>
                         </>
                       )}
                       <input
@@ -10105,7 +10475,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser }: 
                   type="button"
                   onClick={confirmCategoryDeletion}
                   disabled={pendingCategoryDeletionUsageCount > 0}
-                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#B42318] bg-[#B42318] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Delete
                 </button>

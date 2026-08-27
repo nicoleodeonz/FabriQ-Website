@@ -19,12 +19,14 @@ interface PendingAuthResponse {
   message: string;
   email: string;
   expiresInMinutes: number;
+  signupToken: string;
 }
 
 interface PhoneVerificationResponse {
   message: string;
   phoneNumber: string;
   verified: boolean;
+  signupToken: string;
 }
 
 const parseError = async (response: Response) => {
@@ -39,7 +41,7 @@ const parseError = async (response: Response) => {
 };
 
 export const authAPI = {
-  signUp: async (payload: { firstName: string; lastName: string; email: string; password: string; phoneNumber?: string }) => {
+  signUp: async (payload: { firstName: string; lastName: string; email: string; password: string; phoneNumber?: string; signupToken: string }) => {
     try {
       const response = await fetch(`${API_BASE_URL}/auth/signup`, {
         method: 'POST',
@@ -65,6 +67,7 @@ export const authAPI = {
     email: string;
     password: string;
     phoneNumber: string;
+    signupToken?: string;
   }) => {
     const response = await fetch(`${API_BASE_URL}/auth/signup/phone/send`, {
       method: 'POST',
@@ -77,7 +80,7 @@ export const authAPI = {
     return (await response.json()) as PhoneVerificationResponse;
   },
 
-  verifySignUpPhoneVerificationCode: async (payload: { email: string; code: string }) => {
+  verifySignUpPhoneVerificationCode: async (payload: { email: string; code: string; signupToken: string }) => {
     const response = await fetch(`${API_BASE_URL}/auth/signup/phone/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -89,7 +92,7 @@ export const authAPI = {
     return (await response.json()) as PhoneVerificationResponse;
   },
 
-  verifySignUp: async (payload: { email: string; code: string }) => {
+  verifySignUp: async (payload: { email: string; code: string; signupToken: string }) => {
     const response = await fetch(`${API_BASE_URL}/auth/signup/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

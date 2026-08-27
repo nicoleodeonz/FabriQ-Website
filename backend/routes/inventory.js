@@ -13,8 +13,7 @@ import {
   restoreProduct,
   uploadImage,
   upload3DModel,
-  recordClick,
-  getBranchClickAnalysis
+  recordClick
 } from '../controllers/inventoryController.js';
 import { upload, upload3DModel as upload3DModelFile } from '../config/upload.js';
 
@@ -22,7 +21,6 @@ const router = express.Router();
 
 router.get('/public', getPublicInventory);
 router.post('/:gownId/click', recordClick);
-router.get('/branch-click-analysis', authenticate, getBranchClickAnalysis);
 router.get('/', authenticate, getInventory);
 router.get('/archive', authenticate, getArchivedProducts);
 router.get('/branch-performance', authenticate, getBranchPerformance);
@@ -56,7 +54,7 @@ router.post('/upload-3d-model', authenticate, (req, res, next) => {
 
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ message: '3D model exceeds 75 MB limit' });
+        return res.status(400).json({ message: '3D model exceeds 150 MB limit' });
       }
       return res.status(400).json({ message: err.message || '3D model upload failed' });
     }

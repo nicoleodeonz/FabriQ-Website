@@ -228,7 +228,7 @@ export function GownDetailsModal({
       >
         {isRatingsPanelOpen && (
           <div
-            className="h-[90vh] shrink-0 overflow-hidden bg-white shadow-2xl"
+            className="modal-gradient-surface h-[90vh] shrink-0 overflow-hidden shadow-2xl"
             style={{
               flex: '0 0 750px',
               width: '750px',
@@ -321,7 +321,7 @@ export function GownDetailsModal({
         <div
           ref={modalRef}
           tabIndex={-1}
-          className="bg-white h-[90vh] w-full max-w-4xl overflow-hidden"
+          className="modal-gradient-surface h-[90vh] w-full max-w-4xl overflow-hidden"
         >
         <div className="min-w-0 flex-1 overflow-y-auto">
             <div className="grid md:grid-cols-2">
