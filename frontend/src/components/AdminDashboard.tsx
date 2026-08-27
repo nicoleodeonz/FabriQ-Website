@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Package, Users, TrendingUp, TrendingDown, Minus, MapPin, AlertCircle, Edit, Trash2, Plus, X, Mail, Phone, Calendar, Clock, Send, MessageSquare, Upload, Link, Archive, RotateCcw, ChevronDown, Eye, Download } from 'lucide-react';
 import { ArcElement, BarElement, CategoryScale, Chart as ChartJS, Legend, LineElement, LinearScale, PointElement, Tooltip as ChartTooltip } from 'chart.js';
-import type { ChartOptions, TooltipItem } from 'chart.js';
+import type { ChartData, ChartOptions, TooltipItem } from 'chart.js';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { Bar } from 'react-chartjs-2';
@@ -28,6 +28,9 @@ import { ChatBehaviorAnalytics } from './ChatBehaviorAnalytics';
 import { getChatBehaviorAnalytics, type ChatAnalyticsResponse } from '../services/chatAnalyticsAPI';
 import { getColorAnalysisSummary } from '../services/colorAnalysisAPI';
 import type { ColorAnalysisEntry, ColorAnalysisSummary } from '../services/colorAnalysisAPI';
+import { getGeneralAnalytics, getBusinessActivityAnalytics } from '../services/generalAnalyticsAPI';
+import type { GeneralAnalyticsResponse, BusinessActivityResponse } from '../services/generalAnalyticsAPI';
+import { Doughnut, Line } from 'react-chartjs-2';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, LineElement, PointElement, ChartTooltip, Legend);
 
@@ -324,6 +327,21 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     suggestedGowns: [],
   });
   const [colorAnalysisLoading, setColorAnalysisLoading] = useState(false);
+  
+  // General Analytics State
+  const [generalAnalytics, setGeneralAnalytics] = useState<GeneralAnalyticsResponse | null>(null);
+  const [generalAnalyticsLoading, setGeneralAnalyticsLoading] = useState(false);
+  const [generalAnalyticsError, setGeneralAnalyticsError] = useState<string | null>(null);
+  const [businessActivity, setBusinessActivity] = useState<BusinessActivityResponse | null>(null);
+  const [businessActivityLoading, setBusinessActivityLoading] = useState(false);
+  const [businessActivityError, setBusinessActivityError] = useState<string | null>(null);
+  const [businessActivityStartDate, setBusinessActivityStartDate] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 6);
+    return toLocalDateKey(date);
+  });
+  const [businessActivityEndDate, setBusinessActivityEndDate] = useState(() => toLocalDateKey(new Date()));
+
   const [branchSummary, setBranchSummary] = useState<BranchPerformanceSummary>({
     totalProducts: 0,
     totalStockUnits: 0,
@@ -696,6 +714,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   useEffect(() => {
     loadInventory();
     loadColorAnalysis();
+    loadGeneralAnalytics();
+    loadBusinessActivity();
     loadUsers();
     loadAdminRentals();
     loadAdminAppointments();
@@ -704,7 +724,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
 
   useEffect(() => {
     loadBranchPerformance(selectedBranch);
-  }, [selectedBranch]);
+    loadGeneralAnalytics();
+    loadBusinessActivity();
+  }, [selectedBranch, businessActivityStartDate, businessActivityEndDate]);
 
   const refreshAdminDashboardData = async (showLoading = false) => {
     await Promise.all([
@@ -888,6 +910,69 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       console.error('Failed to load color analysis summary:', err);
     } finally {
       setColorAnalysisLoading(false);
+    }
+  }
+
+  const updateBusinessActivityStartDate = (value: string) => {
+    if (!value) return;
+    const nextStart = new Date(`${value}T00:00:00Z`);
+    const currentEnd = new Date(`${businessActivityEndDate}T00:00:00Z`);
+    const maxEnd = new Date(nextStart);
+    maxEnd.setUTCDate(maxEnd.getUTCDate() + 6);
+    setBusinessActivityStartDate(value);
+    if (nextStart > currentEnd) {
+      setBusinessActivityEndDate(value);
+    } else if (currentEnd > maxEnd) {
+      setBusinessActivityEndDate(maxEnd.toISOString().slice(0, 10));
+    }
+  };
+
+  const updateBusinessActivityEndDate = (value: string) => {
+    if (!value) return;
+    const nextEnd = new Date(`${value}T00:00:00Z`);
+    const currentStart = new Date(`${businessActivityStartDate}T00:00:00Z`);
+    const minStart = new Date(nextEnd);
+    minStart.setUTCDate(minStart.getUTCDate() - 6);
+    setBusinessActivityEndDate(value);
+    if (nextEnd < currentStart) {
+      setBusinessActivityStartDate(value);
+    } else if (currentStart < minStart) {
+      setBusinessActivityStartDate(minStart.toISOString().slice(0, 10));
+    }
+  };
+
+  async function loadGeneralAnalytics() {
+    setGeneralAnalyticsLoading(true);
+    setGeneralAnalyticsError(null);
+    try {
+      const data = await getGeneralAnalytics(token, {
+        branch: selectedBranch,
+      });
+      setGeneralAnalytics(data);
+    } catch (err) {
+      setGeneralAnalyticsError(err instanceof Error ? err.message : 'Failed to load general analytics');
+      console.error('Failed to load general analytics:', err);
+    } finally {
+      setGeneralAnalyticsLoading(false);
+    }
+  }
+
+  async function loadBusinessActivity() {
+    setBusinessActivityLoading(true);
+    setBusinessActivityError(null);
+    try {
+      const data = await getBusinessActivityAnalytics(token, {
+        branch: selectedBranch,
+        startDate: businessActivityStartDate,
+        endDate: businessActivityEndDate,
+        granularity: 'daily',
+      });
+      setBusinessActivity(data);
+    } catch (err) {
+      setBusinessActivityError(err instanceof Error ? err.message : 'Failed to load business activity');
+      console.error('Failed to load business activity:', err);
+    } finally {
+      setBusinessActivityLoading(false);
     }
   }
 
@@ -3296,6 +3381,205 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
     },
   }), [mostClickedItems]);
+
+  // General Analytics Charts Data
+  const inventoryStatusColors = ['#6E8B78', '#B86A6A', '#7A8FB3', '#A27F5D', '#D4AF37'];
+  const inventoryStatusChartData = useMemo<ChartData<'doughnut'>>(() => ({
+    labels: (generalAnalytics?.inventoryStatus || []).map((item) => `${item.status} (${item.percentage}%)`),
+    datasets: [
+      {
+        label: 'Inventory Status',
+        data: (generalAnalytics?.inventoryStatus || []).map((item) => item.count),
+        backgroundColor: (generalAnalytics?.inventoryStatus || []).map((_, index) => inventoryStatusColors[index % inventoryStatusColors.length]),
+        borderColor: '#FFFFFF',
+        borderWidth: 2,
+      },
+    ],
+  }), [generalAnalytics?.inventoryStatus]);
+
+  const inventoryStatusChartOptions = useMemo<ChartOptions<'doughnut'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: {
+          color: '#6B5D4F',
+          padding: 12,
+          font: { size: 12 },
+        },
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: true,
+        callbacks: {
+          label: (context) => {
+            const value = context.parsed;
+            return `${value} item${value === 1 ? '' : 's'}`;
+          },
+        },
+      },
+    },
+  }), []);
+
+  const orderStatusColors = ['#8B6B61', '#B59A63', '#6D8C8C', '#C47F5D', '#A27B52'];
+  const orderStatusChartData = useMemo<ChartData<'doughnut'>>(() => ({
+    labels: (generalAnalytics?.orderStatus || []).map((item) => `${item.status} (${item.percentage}%)`),
+    datasets: [
+      {
+        label: 'Order Status',
+        data: (generalAnalytics?.orderStatus || []).map((item) => item.count),
+        backgroundColor: (generalAnalytics?.orderStatus || []).map((_, index) => orderStatusColors[index % orderStatusColors.length]),
+        borderColor: '#FFFFFF',
+        borderWidth: 2,
+      },
+    ],
+  }), [generalAnalytics?.orderStatus]);
+
+  const orderStatusChartOptions = useMemo<ChartOptions<'doughnut'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'right',
+        maxHeight: 120,
+        labels: {
+          color: '#6B5D4F',
+          padding: 10,
+          font: { size: 12 },
+        },
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: true,
+      },
+    },
+  }), []);
+
+  const businessActivityChartData = useMemo(() => ({
+    labels: (businessActivity?.businessActivity || []).map((item) => item.date),
+    datasets: [
+      {
+        label: 'Rentals',
+        data: (businessActivity?.businessActivity || []).map((item) => item.rentals),
+        borderColor: '#6E8B78',
+        backgroundColor: '#6E8B78',
+        tension: 0.4,
+        fill: false,
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+      },
+      {
+        label: 'Appointments',
+        data: (businessActivity?.businessActivity || []).map((item) => item.appointments),
+        borderColor: '#7A8FB3',
+        backgroundColor: '#7A8FB3',
+        tension: 0.4,
+        fill: false,
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+      },
+      {
+        label: 'Custom Orders',
+        data: (businessActivity?.businessActivity || []).map((item) => item.customOrders),
+        borderColor: '#B86A6A',
+        backgroundColor: '#B86A6A',
+        tension: 0.4,
+        fill: false,
+        borderWidth: 2,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+      },
+    ],
+  }), [businessActivity?.businessActivity]);
+
+  const businessActivityChartOptions = useMemo<ChartOptions<'line'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+        labels: {
+          color: '#6B5D4F',
+          padding: 16,
+          font: { size: 12 },
+        },
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+      },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        border: { color: '#E8DCC8' },
+        ticks: { autoSkip: false, color: '#6B5D4F', font: { size: 12 }, maxRotation: 45, minRotation: 0 },
+      },
+      y: {
+        beginAtZero: true,
+        grid: { color: '#E8DCC8', borderDash: [4, 4] },
+        border: { display: false },
+        ticks: { color: '#6B5D4F', precision: 0, font: { size: 12 } },
+      },
+    },
+  }), []);
+
+  const appointmentStatusColors = ['#D4AF37', '#6E8B78', '#B86A6A', '#7A8FB3'];
+  const appointmentStatusChartData = useMemo<ChartData<'doughnut'>>(() => ({
+    labels: (generalAnalytics?.appointmentOverview || []).map((item) => `${item.status} (${item.percentage}%)`),
+    datasets: [
+      {
+        label: 'Appointment Status',
+        data: (generalAnalytics?.appointmentOverview || []).map((item) => item.count),
+        backgroundColor: (generalAnalytics?.appointmentOverview || []).map((_, index) => appointmentStatusColors[index % appointmentStatusColors.length]),
+        borderColor: '#FFFFFF',
+        borderWidth: 2,
+      },
+    ],
+  }), [generalAnalytics?.appointmentOverview]);
+
+  const appointmentStatusChartOptions = useMemo<ChartOptions<'doughnut'>>(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'right',
+        maxWidth: 260,
+        labels: {
+          color: '#6B5D4F',
+          padding: 10,
+          font: { size: 12 },
+        },
+      },
+      tooltip: {
+        backgroundColor: '#FFFFFF',
+        titleColor: '#1A1A1A',
+        bodyColor: '#1A1A1A',
+        borderColor: '#E8DCC8',
+        borderWidth: 1,
+        cornerRadius: 16,
+        displayColors: true,
+      },
+    },
+  }), []);
+
   const colorAnalysisChartOptions = useMemo<ChartOptions<'bar'>>(() => ({
     indexAxis: 'y',
     responsive: true,
@@ -4103,6 +4387,46 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
         image,
       };
     };
+    const renderAnalyticsChartImage = (
+      title: string,
+      labels: string[],
+      datasets: Array<{ label: string; data: number[]; backgroundColor: string | string[] }>,
+    ) => {
+      if (labels.length === 0) return null;
+
+      const canvas = globalThis.document.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) return null;
+
+      const chart = new ChartJS(context, {
+        type: 'bar',
+        data: { labels, datasets: datasets.map((dataset) => ({ ...dataset, borderRadius: 10, borderSkipped: false })) },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: { legend: { display: datasets.length > 1 }, tooltip: { enabled: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#6B5D4F', font: { size: 18 } } },
+            y: { beginAtZero: true, grid: { color: '#D8C7AE' }, ticks: { color: '#6B5D4F', precision: 0, font: { size: 18 } } },
+          },
+        },
+        plugins: [{
+          id: `store-overview-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-background`,
+          beforeDraw: (chartInstance) => {
+            chartInstance.ctx.save();
+            chartInstance.ctx.fillStyle = '#FCFAF5';
+            chartInstance.ctx.fillRect(0, 0, chartInstance.width, chartInstance.height);
+            chartInstance.ctx.restore();
+          },
+        }],
+      });
+      const image = chart.toBase64Image();
+      chart.destroy();
+      return { metric: 'rents' as BranchComparisonMetric, metricLabel: title, narrativeTitle: title, image };
+    };
     const renderColorAnalysisChartImage = (title: string, entries: ColorAnalysisEntry[]) => {
       if (entries.length === 0) {
         return null;
@@ -4492,6 +4816,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       ...summaryRows.map(([label, value]) => ['Summary Metrics', label, value, '', '', '']),
       ...comparisonRows.map(([branch, revenue, rents, appointments, bespoke]) => ['Branch Comparison', branch, revenue, rents, appointments, bespoke]),
       ...itemsPerCategoryChartItemsForExport.map((entry) => ['Items per Category', entry.category, entry.count.toLocaleString(), '', '', '']),
+      ...(generalAnalytics?.inventoryStatus ?? []).map((entry) => ['Inventory Status', entry.status, entry.count.toLocaleString(), `${entry.percentage}%`, '', '']),
+      ...(generalAnalytics?.orderStatus ?? []).map((entry) => ['Order Status', entry.status, entry.count.toLocaleString(), `${entry.percentage}%`, '', '']),
+      ...(businessActivity?.businessActivity ?? []).map((entry) => ['Business Activity', entry.date, entry.orders.toLocaleString(), entry.rentals.toLocaleString(), entry.appointments.toLocaleString(), entry.customOrders.toLocaleString()]),
+      ...(generalAnalytics?.appointmentOverview ?? []).map((entry) => ['Appointment Overview', entry.status, entry.count.toLocaleString(), `${entry.percentage}%`, '', '']),
       ...mostRentedItemsForExport.map((entry) => ['Most Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...leastRentedItemsForExport.map((entry) => ['Least Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...mostClickedItemsForExport.map((entry) => ['Most Clicked Items', entry.name, entry.count.toLocaleString(), '', '', '']),
@@ -4547,6 +4875,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       tables: [
         createNarrativeTable('Summary Metrics', ['Metric', 'Value'], summaryRows),
         createNarrativeTable('Branch Comparison', ['Branch', 'Revenue', 'Rents', 'Appointments', 'Bespoke'], comparisonRows),
+        createNarrativeTable('Inventory Status', ['Status', 'Count', 'Percentage'], (generalAnalytics?.inventoryStatus ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`])),
+        createNarrativeTable('Order Status', ['Status', 'Count', 'Percentage'], (generalAnalytics?.orderStatus ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`])),
+        createNarrativeTable('Business Activity', ['Date', 'Orders', 'Rentals', 'Appointments', 'Custom Orders'], (businessActivity?.businessActivity ?? []).map((entry) => [entry.date, entry.orders.toLocaleString(), entry.rentals.toLocaleString(), entry.appointments.toLocaleString(), entry.customOrders.toLocaleString()])),
+        createNarrativeTable('Appointment Overview', ['Status', 'Count', 'Percentage'], (generalAnalytics?.appointmentOverview ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`])),
         ...(chatAnalytics ? [createNarrativeTable('Chat Behavior Summary', ['Metric', 'Value'], chatSummaryRows)] : []),
       ],
       charts: [
@@ -4555,6 +4887,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
         createNarrativeChart('Appointments by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.appointments }))),
         createNarrativeChart('Bespoke by Branch', storeOverviewComparisonData.map((entry) => ({ label: entry.fullBranch, value: entry.bespoke }))),
         createNarrativeChart('Items per Category', itemsPerCategoryChartItemsForExport.map((entry) => ({ label: entry.category, value: entry.count }))),
+        createNarrativeChart('Inventory Status', (generalAnalytics?.inventoryStatus ?? []).map((entry) => ({ label: entry.status, value: entry.count }))),
+        createNarrativeChart('Order Status', (generalAnalytics?.orderStatus ?? []).map((entry) => ({ label: entry.status, value: entry.count }))),
+        createNarrativeChart('Business Activity', (businessActivity?.businessActivity ?? []).map((entry) => ({ label: entry.date, value: entry.orders + entry.rentals + entry.appointments + entry.customOrders }))),
+        createNarrativeChart('Appointment Overview', (generalAnalytics?.appointmentOverview ?? []).map((entry) => ({ label: entry.status, value: entry.count }))),
         createNarrativeChart('Most Rented Items', mostRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
         createNarrativeChart('Least Rented Items', leastRentedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
         createNarrativeChart('Most Clicked Items', mostClickedItemsForExport.map((entry) => ({ label: entry.name, value: entry.count }))),
@@ -4564,7 +4900,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
           createNarrativeChart('Customer Sentiment Over Time', chatAnalytics.sentimentOverTime.map((entry) => ({ label: entry.date, value: entry.positive + entry.neutral + entry.negative }))),
           createNarrativeChart('Most Discussed Products', chatAnalytics.discussedProducts.map((entry) => ({ label: entry.productName, value: entry.mentions }))),
           createNarrativeChart('Conversation Length', chatAnalytics.conversationLength.map((entry) => ({ label: entry.label, value: entry.count }))),
-          createNarrativeChart('Peak Chat Hours', chatAnalytics.peakChatHours.map((entry) => ({ label: entry.hour, value: entry.count }))),
         ] : []),
         createNarrativeChart('Most Common Skin Tone', colorAnalysis.skinTones.map((entry) => ({ label: entry.label, value: entry.count }))),
         createNarrativeChart('Most Suggested Color', colorAnalysis.suggestedColors.map((entry) => ({ label: entry.label, value: entry.count }))),
@@ -4600,6 +4935,33 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     if (itemsPerCategoryChartImage) {
       chartImages.push(itemsPerCategoryChartImage);
     }
+    const analyticsChartDefinitions = [
+      ['Inventory Status', generalAnalytics?.inventoryStatus ?? [], 'Inventory Items'],
+      ['Order Status', generalAnalytics?.orderStatus ?? [], 'Orders'],
+      ['Appointment Overview', generalAnalytics?.appointmentOverview ?? [], 'Appointments'],
+    ] as const;
+    analyticsChartDefinitions.forEach(([title, entries, label]) => {
+      const chartImage = renderAnalyticsChartImage(
+        title,
+        entries.map((entry) => entry.status),
+        [{
+          label,
+          data: entries.map((entry) => entry.count),
+          backgroundColor: entries.map((_, index) => rentedItemPalette[index % rentedItemPalette.length]),
+        }],
+      );
+      if (chartImage) chartImages.push(chartImage);
+    });
+    const businessActivityChartImage = renderAnalyticsChartImage(
+      'Business Activity',
+      (businessActivity?.businessActivity ?? []).map((entry) => entry.date),
+      [
+        { label: 'Rentals', data: (businessActivity?.businessActivity ?? []).map((entry) => entry.rentals), backgroundColor: '#D4AF37' },
+        { label: 'Appointments', data: (businessActivity?.businessActivity ?? []).map((entry) => entry.appointments), backgroundColor: '#6E8B78' },
+        { label: 'Custom Orders', data: (businessActivity?.businessActivity ?? []).map((entry) => entry.customOrders), backgroundColor: '#7A8FB3' },
+      ],
+    );
+    if (businessActivityChartImage) chartImages.push(businessActivityChartImage);
     const mostRentedChartImage = renderMostRentedItemsChartImage(mostRentedItemsForExport);
     if (mostRentedChartImage) {
       chartImages.push(mostRentedChartImage);
@@ -4624,7 +4986,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       })) ?? []],
       ['Most Discussed Products', chatAnalytics?.discussedProducts.map((entry) => ({ label: entry.productName, count: entry.mentions })) ?? []],
       ['Conversation Length', chatAnalytics?.conversationLength ?? []],
-      ['Peak Chat Hours', chatAnalytics?.peakChatHours.map((entry) => ({ label: entry.hour, count: entry.count })) ?? []],
     ] as const;
     chatBehaviorChartDefinitions.forEach(([title, entries]) => {
       if (entries.length === 0) {
@@ -4748,6 +5109,33 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       'Branch Comparison Summary',
       getLastAutoTableFinalY(pdfDocument, summaryNarrativeEndY + 12) + 20,
     );
+
+    const analyticsPdfTables: Array<{ title: string; head: string[]; body: string[][] }> = [
+      { title: 'Inventory Status', head: ['Status', 'Count', 'Percentage'], body: (generalAnalytics?.inventoryStatus ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`]) },
+      { title: 'Order Status', head: ['Status', 'Count', 'Percentage'], body: (generalAnalytics?.orderStatus ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`]) },
+      { title: 'Business Activity', head: ['Date', 'Orders', 'Rentals', 'Appointments', 'Custom Orders'], body: (businessActivity?.businessActivity ?? []).map((entry) => [entry.date, entry.orders.toLocaleString(), entry.rentals.toLocaleString(), entry.appointments.toLocaleString(), entry.customOrders.toLocaleString()]) },
+      { title: 'Appointment Overview', head: ['Status', 'Count', 'Percentage'], body: (generalAnalytics?.appointmentOverview ?? []).map((entry) => [entry.status, entry.count.toLocaleString(), `${entry.percentage}%`]) },
+    ];
+    analyticsPdfTables.forEach((table) => {
+      pdfDocument.addPage();
+      pdfDocument.setFont('times', 'normal');
+      pdfDocument.setFontSize(16);
+      pdfDocument.setTextColor(26, 26, 26);
+      pdfDocument.text(table.title, 40, 48);
+      pdfDocument.setFontSize(10);
+      pdfDocument.setTextColor(107, 93, 79);
+      pdfDocument.text(`Branch Filter: ${storeOverviewBranchFilterLabel}`, 40, 66);
+      autoTable(pdfDocument, {
+        startY: 84,
+        head: [table.head],
+        body: table.body.length > 0 ? table.body : [['No data available.', ...Array(Math.max(0, table.head.length - 1)).fill('')]],
+        theme: 'grid',
+        styles: { fontSize: 10, cellPadding: 8, textColor: [26, 26, 26], lineColor: [214, 198, 176], lineWidth: 0.45 },
+        headStyles: { fillColor: [250, 247, 240], textColor: [107, 93, 79], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [252, 250, 245] },
+        margin: { left: 40, right: 40, bottom: 40 },
+      });
+    });
 
     const chartSectionTops = [40, 360];
     const chartImageWidth = 515;
@@ -7053,6 +7441,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 )}
 
                 {overviewAnalyticsTab === 'general' && (
+                <>
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
                     <div>
@@ -7072,8 +7461,91 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                     )}
                   </div>
                 </div>
-                )}
 
+                {/* Rentals Overview & Appointment Overview */}
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                    <div className="mb-6">
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Rentals Overview</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">Breakdown of rental statuses.</p>
+                    </div>
+                    <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                      {generalAnalyticsLoading ? (
+                        <p className="text-sm text-[#6B5D4F]">Loading rentals overview...</p>
+                      ) : generalAnalytics?.orderStatus && generalAnalytics.orderStatus.length > 0 ? (
+                        <div className="h-[320px] w-full">
+                          <Doughnut data={orderStatusChartData} options={orderStatusChartOptions} />
+                        </div>
+                      ) : (
+                        <p className="text-sm text-[#6B5D4F]">No rental data available.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                    <div className="mb-6">
+                      <h2 className="text-2xl font-light text-[#1A1A1A]">Appointment Overview</h2>
+                      <p className="mt-1 text-sm text-[#6B5D4F]">Breakdown of appointment statuses.</p>
+                    </div>
+                    <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                      {generalAnalyticsLoading ? (
+                        <p className="text-sm text-[#6B5D4F]">Loading appointment data...</p>
+                      ) : generalAnalytics?.appointmentOverview && generalAnalytics.appointmentOverview.length > 0 ? (
+                        <div className="h-[320px] w-full">
+                          <Doughnut data={appointmentStatusChartData} options={appointmentStatusChartOptions} />
+                        </div>
+                      ) : (
+                        <p className="text-sm text-[#6B5D4F]">No appointment data available.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Business Activity Over Time */}
+                <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
+                  <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                    <h2 className="text-2xl font-light text-[#1A1A1A]">Business Activity Over Time</h2>
+                    <p className="mt-1 text-sm text-[#6B5D4F]">Rentals, appointments, and custom orders over the selected period.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <label className="text-xs text-[#6B5D4F]">
+                        From
+                        <input
+                          type="date"
+                          value={businessActivityStartDate}
+                          max={businessActivityEndDate}
+                          onChange={(event) => updateBusinessActivityStartDate(event.target.value)}
+                          className="mt-1 block rounded-lg border border-[#E8DCC8] px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="text-xs text-[#6B5D4F]">
+                        To
+                        <input
+                          type="date"
+                          value={businessActivityEndDate}
+                          min={businessActivityStartDate}
+                          onChange={(event) => updateBusinessActivityEndDate(event.target.value)}
+                          className="mt-1 block rounded-lg border border-[#E8DCC8] px-3 py-2 text-sm"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-[#EDE1CE] bg-[#FCFAF5] p-4 sm:p-6">
+                    {businessActivityLoading ? (
+                      <p className="text-sm text-[#6B5D4F]">Loading business activity...</p>
+                    ) : businessActivity?.businessActivity && businessActivity.businessActivity.length > 0 ? (
+                      <div className="h-[320px] w-full">
+                        <Line data={businessActivityChartData} options={businessActivityChartOptions} />
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[#6B5D4F]">No activity data available for the selected period.</p>
+                    )}
+                  </div>
+                </div>
+
+                </>
+                )}
                 {overviewAnalyticsTab === 'sales' && (
                   <>
                 <div className="bg-white rounded-2xl border border-[#E8DCC8] p-8">
@@ -7162,7 +7634,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
 
                   </>
                 )}
-
                 {overviewAnalyticsTab === 'customer-behavior' && (
                   <>
                 <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">

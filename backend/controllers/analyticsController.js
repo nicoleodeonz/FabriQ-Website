@@ -3,6 +3,9 @@ import { isElevatedRole } from '../utils/roles.js';
 import SkinAnalysis from '../models/SkinAnalysis.js';
 import ProductDetail from '../models/ProductDetail.js';
 import ChatMessage from '../models/ChatMessage.js';
+import RentalDetail from '../models/RentalDetail.js';
+import AppointmentDetail from '../models/AppointmentDetail.js';
+import CustomOrder from '../models/CustomOrder.js';
 
 function ensureElevatedAccess(req, res) {
   if (!isElevatedRole(req.user?.role)) {
@@ -238,5 +241,265 @@ export async function getChatBehaviorAnalytics(req, res) {
   } catch (error) {
     console.error('getChatBehaviorAnalytics error:', error);
     return res.status(500).json({ message: 'Failed to load chat behavior analytics.' });
+  }
+}
+
+export async function getGeneralAnalytics(req, res) {
+  try {
+    if (!ensureElevatedAccess(req, res)) return;
+
+    const branchFilter = String(req.query?.branch || 'All Branches').trim();
+    const startDateStr = String(req.query?.startDate || '').trim();
+    const endDateStr = String(req.query?.endDate || '').trim();
+
+    const dateFilter = {};
+    if (startDateStr) {
+      dateFilter.$gte = new Date(`${startDateStr}T00:00:00Z`);
+    }
+    if (endDateStr) {
+      dateFilter.$lte = new Date(`${endDateStr}T23:59:59Z`);
+    }
+
+    // Inventory Status
+    const inventoryProducts = await ProductDetail.find({
+      status: { $ne: 'archived' },
+      ...(branchFilter !== 'All Branches' ? { branch: branchFilter } : {}),
+    }).lean();
+
+    const statusCounts = {};
+    for (const product of inventoryProducts) {
+      const status = String(product.status || 'available').trim();
+      statusCounts[status] = (statusCounts[status] || 0) + (product.stock || 1);
+    }
+
+    const totalInventoryItems = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+    const inventoryStatus = Object.entries(statusCounts).map(([status, count]) => ({
+      status,
+      count,
+      percentage: totalInventoryItems ? Math.round((count / totalInventoryItems) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count);
+
+    // Order Status (Rentals)
+    const rentalFilter = {
+      ...(branchFilter !== 'All Branches' ? { branch: branchFilter } : {}),
+      ...(Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {}),
+    };
+    const rentals = await RentalDetail.find(rentalFilter).select('status').lean();
+
+    const rentalStatusCounts = {};
+    for (const rental of rentals) {
+      const status = String(rental.status || 'pending').trim();
+      rentalStatusCounts[status] = (rentalStatusCounts[status] || 0) + 1;
+    }
+
+    const totalRentals = rentals.length;
+    const orderStatus = Object.entries(rentalStatusCounts).map(([status, count]) => ({
+      status,
+      count,
+      percentage: totalRentals ? Math.round((count / totalRentals) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count);
+
+    // Appointment Overview
+    const appointmentFilter = {
+      ...(branchFilter !== 'All Branches' ? { branch: branchFilter } : {}),
+      ...(Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {}),
+    };
+    const appointments = await AppointmentDetail.find(appointmentFilter).select('status').lean();
+
+    const appointmentStatusCounts = {};
+    for (const apt of appointments) {
+      const status = String(apt.status || 'pending').trim();
+      appointmentStatusCounts[status] = (appointmentStatusCounts[status] || 0) + 1;
+    }
+
+    const totalAppointments = appointments.length;
+    const appointmentOverview = Object.entries(appointmentStatusCounts).map(([status, count]) => ({
+      status,
+      count,
+      percentage: totalAppointments ? Math.round((count / totalAppointments) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count);
+
+    // Bespoke Order Overview
+    const bespokeOrders = await CustomOrder.find({
+      isArchived: { $ne: true },
+      ...(branchFilter !== 'All Branches' ? { branch: branchFilter } : {}),
+      ...(Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {}),
+    }).select('status').lean();
+    const bespokeStatusCounts = {};
+    for (const order of bespokeOrders) {
+      const status = String(order.status || 'inquiry').trim();
+      bespokeStatusCounts[status] = (bespokeStatusCounts[status] || 0) + 1;
+    }
+    const totalBespokeOrders = bespokeOrders.length;
+    const bespokeOverview = Object.entries(bespokeStatusCounts).map(([status, count]) => ({
+      status,
+      count,
+      percentage: totalBespokeOrders ? Math.round((count / totalBespokeOrders) * 1000) / 10 : 0,
+    })).sort((a, b) => b.count - a.count);
+
+    return res.json({
+      inventoryStatus,
+      orderStatus,
+      appointmentOverview,
+      bespokeOverview,
+    });
+  } catch (error) {
+    console.error('getGeneralAnalytics error:', error);
+    return res.status(500).json({ message: 'Failed to load general analytics.' });
+  }
+}
+
+export async function getBusinessActivityAnalytics(req, res) {
+  try {
+    if (!ensureElevatedAccess(req, res)) return;
+
+    const branchFilter = String(req.query?.branch || 'All Branches').trim();
+    const startDateStr = String(req.query?.startDate || '').trim();
+    const endDateStr = String(req.query?.endDate || '').trim();
+    const granularity = ['daily', 'weekly', 'monthly'].includes(req.query?.granularity)
+      ? req.query.granularity
+      : 'daily';
+
+    const startDate = startDateStr ? new Date(`${startDateStr}T00:00:00Z`) : new Date(0);
+    const endDate = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || startDate > endDate) {
+      return res.status(400).json({ message: 'Invalid date range.' });
+    }
+
+    const dateFilter = { createdAt: { $gte: startDate, $lte: endDate } };
+    const branchMatchFilter = branchFilter !== 'All Branches' ? { branch: branchFilter } : {};
+
+    const [rentals, appointments, customOrders] = await Promise.all([
+      RentalDetail.find({ ...dateFilter, ...branchMatchFilter }).select('createdAt').lean(),
+      AppointmentDetail.find({ ...dateFilter, ...branchMatchFilter }).select('createdAt').lean(),
+      CustomOrder.find({ ...dateFilter, ...branchMatchFilter }).select('createdAt').lean(),
+    ]);
+
+    const getDateBucket = (date, gran) => {
+      const d = new Date(date);
+      if (gran === 'monthly') return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      if (gran === 'weekly') {
+        const weekStart = new Date(d);
+        weekStart.setUTCDate(d.getUTCDate() - d.getUTCDay());
+        return weekStart.toISOString().slice(0, 10);
+      }
+      return d.toISOString().slice(0, 10);
+    };
+
+    const buckets = new Map();
+
+    for (const rental of rentals) {
+      const bucket = getDateBucket(rental.createdAt, granularity);
+      const current = buckets.get(bucket) || { date: bucket, orders: 0, rentals: 0, appointments: 0, customOrders: 0 };
+      current.orders += 1;
+      current.rentals += 1;
+      buckets.set(bucket, current);
+    }
+
+    for (const apt of appointments) {
+      const bucket = getDateBucket(apt.createdAt, granularity);
+      const current = buckets.get(bucket) || { date: bucket, orders: 0, rentals: 0, appointments: 0, customOrders: 0 };
+      current.appointments += 1;
+      buckets.set(bucket, current);
+    }
+
+    for (const co of customOrders) {
+      const bucket = getDateBucket(co.createdAt, granularity);
+      const current = buckets.get(bucket) || { date: bucket, orders: 0, rentals: 0, appointments: 0, customOrders: 0 };
+      current.orders += 1;
+      current.customOrders += 1;
+      buckets.set(bucket, current);
+    }
+
+    // Keep empty days in the selected range so the daily chart represents the full period.
+    if (granularity === 'daily' && startDateStr && endDateStr) {
+      const day = new Date(startDate);
+      day.setUTCHours(0, 0, 0, 0);
+      const lastDay = new Date(endDate);
+      lastDay.setUTCHours(0, 0, 0, 0);
+      while (day <= lastDay) {
+        const date = day.toISOString().slice(0, 10);
+        if (!buckets.has(date)) {
+          buckets.set(date, { date, orders: 0, rentals: 0, appointments: 0, customOrders: 0 });
+        }
+        day.setUTCDate(day.getUTCDate() + 1);
+      }
+    }
+
+    const businessActivity = [...buckets.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+    return res.json({ businessActivity });
+  } catch (error) {
+    console.error('getBusinessActivityAnalytics error:', error);
+    return res.status(500).json({ message: 'Failed to load business activity analytics.' });
+  }
+}
+
+export async function getRecentActivityAnalytics(req, res) {
+  try {
+    if (!ensureElevatedAccess(req, res)) return;
+
+    const branchFilter = String(req.query?.branch || 'All Branches').trim();
+    const limit = Math.min(Math.max(1, Number(req.query?.limit) || 10), 100);
+
+    const branchMatch = branchFilter !== 'All Branches' ? { branch: branchFilter } : {};
+
+    const [rentals, appointments, customOrders] = await Promise.all([
+      RentalDetail.find(branchMatch)
+        .select('createdAt gownName customerName status branch referenceId')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+      AppointmentDetail.find(branchMatch)
+        .select('createdAt type customerName status branch referenceId')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+      CustomOrder.find(branchMatch)
+        .select('createdAt orderType customerName status branch referenceId')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean(),
+    ]);
+
+    const activities = [
+      ...rentals.map((r) => ({
+        date: r.createdAt,
+        type: 'Rental',
+        title: `New Rental: ${r.gownName}`,
+        customer: r.customerName,
+        status: r.status,
+        branch: r.branch,
+        referenceId: r.referenceId,
+      })),
+      ...appointments.map((a) => ({
+        date: a.createdAt,
+        type: 'Appointment',
+        title: `New ${a.type} Appointment`,
+        customer: a.customerName,
+        status: a.status,
+        branch: a.branch,
+        referenceId: a.referenceId,
+      })),
+      ...customOrders.map((c) => ({
+        date: c.createdAt,
+        type: 'Custom Order',
+        title: `New ${c.orderType}`,
+        customer: c.customerName,
+        status: c.status,
+        branch: c.branch,
+        referenceId: c.referenceId,
+      })),
+    ];
+
+    const recentActivity = activities
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, limit);
+
+    return res.json({ recentActivity });
+  } catch (error) {
+    console.error('getRecentActivityAnalytics error:', error);
+    return res.status(500).json({ message: 'Failed to load recent activity analytics.' });
   }
 }

@@ -60,7 +60,7 @@ export function ChatBehaviorAnalytics({ token }: Props) {
   return (
     <div className="mt-6 space-y-6">
       <div className="flex flex-col gap-4 rounded-2xl border border-[#E8DCC8] bg-white p-6 lg:flex-row lg:items-end lg:justify-between">
-        <div><h2 className="text-2xl font-light">Customer Behavior Analytics</h2><p className="mt-1 text-sm text-[#6B5D4F]">Real customer chat activity from the selected period.</p></div>
+        <div><h2 className="text-2xl font-light">Chat Analytics</h2><p className="mt-1 text-sm text-[#6B5D4F]">Real customer chat activity from the selected period.</p></div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-wrap gap-2">
             {[['Today', 1], ['Last 7 Days', 7], ['Last 30 Days', 30], ['Last 90 Days', 90], ['All Time', null] as const].map(([label, days]) => (
@@ -85,7 +85,6 @@ export function ChatBehaviorAnalytics({ token }: Props) {
             {card('Customer Sentiment Over Time', data.sentimentOverTime.length ? <div className="h-[320px]"><Line data={{ labels: data.sentimentOverTime.map((entry) => entry.date), datasets: [{ label: 'Positive', data: data.sentimentOverTime.map((entry) => entry.positive), borderColor: '#6E8B78', backgroundColor: '#6E8B78', tension: 0.3 }, { label: 'Neutral', data: data.sentimentOverTime.map((entry) => entry.neutral), borderColor: '#D4AF37', backgroundColor: '#D4AF37', tension: 0.3 }, { label: 'Negative', data: data.sentimentOverTime.map((entry) => entry.negative), borderColor: '#B86A6A', backgroundColor: '#B86A6A', tension: 0.3 }] }} options={{ responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }} /></div> : empty)}
             {card('Most Discussed Products', data.discussedProducts.length ? <div className="h-[320px]"><Bar data={chartData(data.discussedProducts.map((entry) => ({ label: entry.productName, count: entry.mentions })))} options={horizontalOptions} /></div> : empty)}
             {card('Conversation Length', data.conversationLength.length ? <div className="h-[320px]"><Bar data={chartData(data.conversationLength)} options={verticalOptions} /></div> : empty)}
-            {card('Peak Chat Hours', data.peakChatHours.some((entry) => entry.count > 0) ? <div className="h-[320px]"><Bar data={chartData(data.peakChatHours)} options={verticalOptions} /></div> : empty)}
           </div>
         </>
       )}
