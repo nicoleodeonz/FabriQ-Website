@@ -1064,8 +1064,8 @@ export default function App() {
 
       {showLogoutConfirmModal && (
         <>
-          <div className="fixed inset-0 z-[99] bg-black/50 backdrop-blur-sm" aria-hidden="true" />
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
+          <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" aria-hidden="true" />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
             <div className="modal-gradient-surface rounded-2xl max-w-md w-full p-8">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>

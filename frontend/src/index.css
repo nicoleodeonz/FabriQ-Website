@@ -491,6 +491,21 @@
     background-size: cover;
   }
 
+  /* Keep confirmation dialogs consistent across the customer and admin flows. */
+  [role="dialog"][aria-label*="confirm" i] > div,
+  [role="dialog"][aria-labelledby*="confirm" i] > div,
+  [style*="z-index: 100"] > div {
+    background: linear-gradient(135deg, #FAF7F0 0%, #FFFDF9 52%, #F5F1E8 100%) !important;
+    border-radius: 32px !important;
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.2) !important;
+  }
+
+  [role="dialog"][aria-label*="confirm" i] > div > div:last-child button,
+  [role="dialog"][aria-labelledby*="confirm" i] > div > div:last-child button,
+  [style*="z-index: 100"] > div > div:last-child button {
+    border-radius: 999px !important;
+  }
+
   .absolute {
     position: absolute;
   }
