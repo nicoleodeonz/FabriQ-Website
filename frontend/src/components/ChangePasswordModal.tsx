@@ -101,7 +101,7 @@ export function ChangePasswordModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" />
-      <div ref={modalRef} className="relative z-10 bg-[#FAF7F0] w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
+      <div ref={modalRef} className="modal-gradient-surface relative z-10 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
         <div className="p-6 border-b flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-black/5 flex items-center justify-center text-black">

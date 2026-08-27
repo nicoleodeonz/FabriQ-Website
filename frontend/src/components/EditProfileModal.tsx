@@ -458,7 +458,7 @@ export function EditProfileModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div ref={modalRef} tabIndex={-1} className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto mx-4 relative">
+      <div ref={modalRef} tabIndex={-1} className="modal-gradient-surface rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto mx-4 relative">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-light">Edit Profile</h2>
           <button

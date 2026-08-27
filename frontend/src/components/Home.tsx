@@ -843,7 +843,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
           aria-label="Live view"
         >
           <div
-            className="w-full max-w-md rounded-2xl bg-white p-8"
+            className="modal-gradient-surface w-full max-w-md rounded-2xl p-8"
             onClick={(event) => event.stopPropagation()}
           >
             <h3 className="mb-3 font-serif text-3xl">Live View</h3>
@@ -870,7 +870,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
           aria-label="Select featured gowns"
         >
           <div
-            className="flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden bg-white p-4 md:p-6"
+            className="modal-gradient-surface flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden p-4 md:p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-6 flex flex-col gap-3">

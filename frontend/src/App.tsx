@@ -739,7 +739,7 @@ export default function App() {
           onClick={() => setShowContactModal(false)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl bg-white p-8 text-[#3D2B1F] shadow-2xl"
+            className="modal-gradient-surface w-full max-w-lg rounded-2xl p-8 text-[#3D2B1F] shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-6 flex items-start justify-between gap-4">
@@ -837,7 +837,7 @@ export default function App() {
         onNotificationSelect={handleNotificationSelect}
         navigateProtected={navigateProtectedFromHeader}
       />
-      <main className={`pt-20 ${showLogoutConfirmModal ? 'blur-[2px]' : ''}`}>
+      <main className={`relative z-0 pt-20 ${showLogoutConfirmModal ? 'blur-[2px]' : ''}`}>
         {currentView === 'home' && (
           <Home
             setCurrentView={setAppView}
@@ -1066,7 +1066,7 @@ export default function App() {
         <>
           <div className="fixed inset-0 z-[99] bg-black/50 backdrop-blur-sm" aria-hidden="true" />
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
-            <div className="bg-white rounded-2xl max-w-md w-full p-8">
+            <div className="modal-gradient-surface rounded-2xl max-w-md w-full p-8">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div>
                   <h3 id="logout-confirm-title" className="font-serif text-2xl font-light text-[#1a1a1a]">Confirm Logout</h3>

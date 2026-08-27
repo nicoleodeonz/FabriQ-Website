@@ -230,7 +230,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
             aria-label="Live view"
           >
             <div
-              className="w-full max-w-md rounded-2xl bg-white p-8"
+              className="modal-gradient-surface w-full max-w-md rounded-2xl p-8"
               onClick={(event) => event.stopPropagation()}
             >
               <h3 className="mb-3 text-2xl font-light text-[#1a1a1a]">Live View</h3>

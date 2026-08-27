@@ -4043,6 +4043,66 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
         image,
       };
     };
+    const renderChatSentimentChartImage = (entries: ChatAnalyticsResponse['sentimentOverTime']) => {
+      if (entries.length === 0) {
+        return null;
+      }
+
+      const domDocument: Document = globalThis.document;
+      const canvas = domDocument.createElement('canvas');
+      canvas.width = 1400;
+      canvas.height = 840;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        return null;
+      }
+
+      const chart = new ChartJS(context, {
+        type: 'line',
+        data: {
+          labels: entries.map((entry) => entry.date),
+          datasets: [
+            { label: 'Positive', data: entries.map((entry) => entry.positive), borderColor: '#6E8B78', backgroundColor: '#6E8B78', tension: 0.3 },
+            { label: 'Neutral', data: entries.map((entry) => entry.neutral), borderColor: '#D4AF37', backgroundColor: '#D4AF37', tension: 0.3 },
+            { label: 'Negative', data: entries.map((entry) => entry.negative), borderColor: '#B86A6A', backgroundColor: '#B86A6A', tension: 0.3 },
+          ],
+        },
+        options: {
+          responsive: false,
+          animation: false,
+          devicePixelRatio: 2,
+          plugins: {
+            legend: { display: true, labels: { color: '#6B5D4F', font: { size: 18 } } },
+            tooltip: { enabled: false },
+          },
+          layout: { padding: { top: 18, right: 20, bottom: 8, left: 8 } },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: '#6B5D4F', font: { size: 18 } } },
+            y: { beginAtZero: true, grid: { color: '#D8C7AE', lineWidth: 1.5 }, ticks: { color: '#6B5D4F', precision: 0, font: { size: 20 } } },
+          },
+        },
+        plugins: [{
+          id: 'store-overview-chat-sentiment-chart-background',
+          beforeDraw: (chartInstance) => {
+            const { ctx, width, height } = chartInstance;
+            ctx.save();
+            ctx.fillStyle = '#FCFAF5';
+            ctx.fillRect(0, 0, width, height);
+            ctx.restore();
+          },
+        }],
+      });
+
+      const image = chart.toBase64Image();
+      chart.destroy();
+
+      return {
+        metric: 'rents' as BranchComparisonMetric,
+        metricLabel: 'Customer Sentiment Over Time',
+        narrativeTitle: 'Customer Sentiment Over Time',
+        image,
+      };
+    };
     const renderColorAnalysisChartImage = (title: string, entries: ColorAnalysisEntry[]) => {
       if (entries.length === 0) {
         return null;
@@ -4422,6 +4482,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       ['Positive Sentiment', `${chatAnalytics.summary.positiveSentimentPercentage}%`],
       ['Peak Chat Hour', chatAnalytics.summary.peakChatHour],
     ] : [];
+    const chatTopicRows = chatAnalytics?.topics.map((entry) => ['Top Customer Questions', entry.label, entry.count.toLocaleString()]) ?? [];
+    const chatIntentRows = chatAnalytics?.intents.map((entry) => ['Customer Intent Distribution', entry.label, entry.count.toLocaleString(), `${entry.percentage ?? 0}%`]) ?? [];
+    const chatSentimentRows = chatAnalytics?.sentimentOverTime.map((entry) => ['Customer Sentiment Over Time', entry.date, entry.positive.toLocaleString(), entry.neutral.toLocaleString(), entry.negative.toLocaleString()]) ?? [];
+    const discussedProductRows = chatAnalytics?.discussedProducts.map((entry) => ['Most Discussed Products', entry.productName, entry.mentions.toLocaleString()]) ?? [];
+    const conversationLengthRows = chatAnalytics?.conversationLength.map((entry) => ['Conversation Length', entry.label, entry.count.toLocaleString()]) ?? [];
+    const peakChatHourRows = chatAnalytics?.peakChatHours.map((entry) => ['Peak Chat Hours', entry.hour, entry.count.toLocaleString()]) ?? [];
     const tabularRows = [
       ...summaryRows.map(([label, value]) => ['Summary Metrics', label, value, '', '', '']),
       ...comparisonRows.map(([branch, revenue, rents, appointments, bespoke]) => ['Branch Comparison', branch, revenue, rents, appointments, bespoke]),
@@ -4430,6 +4496,12 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       ...leastRentedItemsForExport.map((entry) => ['Least Rented Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...mostClickedItemsForExport.map((entry) => ['Most Clicked Items', entry.name, entry.count.toLocaleString(), '', '', '']),
       ...chatSummaryRows.map(([label, value]) => ['Chat Behavior', label, value, '', '', '']),
+      ...chatTopicRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...chatIntentRows.map(([section, label, value, percentage]) => [section, label, value, percentage, '', '']),
+      ...chatSentimentRows.map(([section, date, positive, neutral, negative]) => [section, date, positive, neutral, negative, '']),
+      ...discussedProductRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...conversationLengthRows.map(([section, label, value]) => [section, label, value, '', '', '']),
+      ...peakChatHourRows.map(([section, label, value]) => [section, label, value, '', '', '']),
       ...colorAnalysis.skinTones.map((entry) => ['Most Common Skin Tone', entry.label, entry.count.toLocaleString(), '', '', '']),
       ...colorAnalysis.suggestedColors.map((entry) => ['Most Suggested Color', entry.label, entry.count.toLocaleString(), '', '', '']),
       ...colorAnalysis.suggestedGowns.map((entry) => ['Most Suggested Gown', entry.label, entry.count.toLocaleString(), '', '', '']),
@@ -4489,7 +4561,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
         ...(chatAnalytics ? [
           createNarrativeChart('Top Customer Questions', chatAnalytics.topics.map((entry) => ({ label: entry.label, value: entry.count }))),
           createNarrativeChart('Customer Intent Distribution', chatAnalytics.intents.map((entry) => ({ label: entry.label, value: entry.count }))),
+          createNarrativeChart('Customer Sentiment Over Time', chatAnalytics.sentimentOverTime.map((entry) => ({ label: entry.date, value: entry.positive + entry.neutral + entry.negative }))),
           createNarrativeChart('Most Discussed Products', chatAnalytics.discussedProducts.map((entry) => ({ label: entry.productName, value: entry.mentions }))),
+          createNarrativeChart('Conversation Length', chatAnalytics.conversationLength.map((entry) => ({ label: entry.label, value: entry.count }))),
+          createNarrativeChart('Peak Chat Hours', chatAnalytics.peakChatHours.map((entry) => ({ label: entry.hour, value: entry.count }))),
         ] : []),
         createNarrativeChart('Most Common Skin Tone', colorAnalysis.skinTones.map((entry) => ({ label: entry.label, value: entry.count }))),
         createNarrativeChart('Most Suggested Color', colorAnalysis.suggestedColors.map((entry) => ({ label: entry.label, value: entry.count }))),
@@ -4543,13 +4618,21 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     const chatBehaviorChartDefinitions = [
       ['Top Customer Questions', chatAnalytics?.topics ?? []],
       ['Customer Intent Distribution', chatAnalytics?.intents ?? []],
+      ['Customer Sentiment Over Time', chatAnalytics?.sentimentOverTime.map((entry) => ({
+        label: entry.date,
+        count: entry.positive + entry.neutral + entry.negative,
+      })) ?? []],
       ['Most Discussed Products', chatAnalytics?.discussedProducts.map((entry) => ({ label: entry.productName, count: entry.mentions })) ?? []],
+      ['Conversation Length', chatAnalytics?.conversationLength ?? []],
+      ['Peak Chat Hours', chatAnalytics?.peakChatHours.map((entry) => ({ label: entry.hour, count: entry.count })) ?? []],
     ] as const;
     chatBehaviorChartDefinitions.forEach(([title, entries]) => {
       if (entries.length === 0) {
         return;
       }
-      const chartImage = renderChatBehaviorChartImage(title, entries);
+      const chartImage = title === 'Customer Sentiment Over Time' && chatAnalytics
+        ? renderChatSentimentChartImage(chatAnalytics.sentimentOverTime)
+        : renderChatBehaviorChartImage(title, entries);
       if (chartImage) {
         chartImages.push(chartImage);
       }

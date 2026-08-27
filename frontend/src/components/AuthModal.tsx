@@ -629,7 +629,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
       <div
         ref={modalRef}
         tabIndex={-1}
-        className="relative z-10 bg-[#FAF7F0] w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
+        className="modal-gradient-surface relative z-10 w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
         style={{
           maxWidth: isSignUp || isVerifyingSignUp ? '592px' : '580px',
         }}

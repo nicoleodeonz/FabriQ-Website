@@ -341,7 +341,10 @@ export function Navigation({
   };
 
   return (
-    <nav className={`fixed top-0 w-full bg-[#FAF7F0]/95 backdrop-blur-sm border-b border-[#E8DCC8] z-40 ${isBlurred ? 'blur-[2px]' : ''}`}>
+    <nav
+      className={`fixed top-0 z-40 w-full bg-[#FAF7F0]/95 backdrop-blur-sm border-b border-[#E8DCC8] ${isBlurred ? 'blur-[2px]' : ''}`}
+      style={{ zIndex: 40 }}
+    >
       <div className="max-w-7xl mx-auto px-6 lg:px-8">
         <div className="flex items-center h-20">
           {/* Left: Logo */}

@@ -486,6 +486,11 @@
 }
 
 @layer utilities {
+  .modal-gradient-surface {
+    background: linear-gradient(135deg, #FAF7F0 0%, #FFFDF9 52%, #F5F1E8 100%);
+    background-size: cover;
+  }
+
   .absolute {
     position: absolute;
   }
@@ -1928,6 +1933,11 @@ html {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--gold-accent);
+}
+
+[role='dialog'] > div:not(.absolute):not([aria-hidden='true']) {
+  background: linear-gradient(135deg, #FAF7F0 0%, #FFFDF9 52%, #F5F1E8 100%);
+  background-size: cover;
 }
 
 @property --tw-translate-x {
