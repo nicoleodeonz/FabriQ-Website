@@ -4,10 +4,12 @@ import {
   saveSkinAnalysis,
   updateSkinAnalysisApplied,
   getAllSkinAnalyses,
+  analyzeSkinTone,
 } from '../controllers/skinAnalysisController.js';
 
 const router = express.Router();
 
+router.post('/analyze', authenticate, analyzeSkinTone);
 router.post('/save', authenticate, saveSkinAnalysis);
 router.put('/:analysisId/applied', authenticate, updateSkinAnalysisApplied);
 router.get('/all', authenticate, getAllSkinAnalyses);
