@@ -1962,15 +1962,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: 'admin-history',
-      reportTitle: 'Activity Logs Report',
-      generatedAt,
-      totals: {
-        totalRecords: filteredAdminHistory.length,
-      },
-      tables: [createNarrativeTable('Activity Logs', ['Admin', 'Email', 'Action', 'Date / Time', 'Details'], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -2005,9 +1996,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
         4: { cellWidth: 280 },
       },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Activity Logs Summary', getLastAutoTableFinalY(document, 96) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`${filenameBase}.pdf`);
     setShowAdminHistoryExportModal(false);
@@ -3865,21 +3853,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       return;
     }
 
-    const generatedAt = new Date().toLocaleString();
     const document = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: 'todays-activities',
-      reportTitle: "Today's Activity Report",
-      generatedAt,
-      filters: {
-        branchFilter: overviewExportBranchFilter,
-        typeFilter: overviewExportTypeLabel,
-      },
-      totals: {
-        scheduledActivities: exportItems.length,
-      },
-      tables: [createNarrativeTable('Scheduled Activities', ['Time', 'Type', 'Activity', 'Customer', 'Reference ID', 'Branch'], activityRows)],
-    });
+    const generatedAt = new Date().toLocaleString();
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -3915,9 +3890,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Scheduled Activities Summary', getLastAutoTableFinalY(document, 128) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     setShowOverviewExportModal(false);
     document.save(`${filenameBase}.pdf`);
@@ -5567,18 +5539,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: 'users',
-      reportTitle: exportTitle,
-      generatedAt,
-      filters: {
-        accountType: filterLabel,
-      },
-      totals: {
-        totalUsers: exportItems.length,
-      },
-      tables: [createNarrativeTable('Users', ['Name', 'Email', 'Phone', 'Branch', 'Role', 'Joined', 'Status'], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -5611,9 +5571,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Users Summary', getLastAutoTableFinalY(document, 112) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`${filenameBase}.pdf`);
     setShowUserExportModal(false);
@@ -5712,18 +5669,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: inventoryView === 'archive' ? 'inventory-archive' : 'inventory',
-      reportTitle: exportTitle,
-      generatedAt,
-      filters: {
-        branchFilter: inventoryExportBranchLabel,
-      },
-      totals: {
-        totalGowns: inventoryExportItems.length,
-      },
-      tables: [createNarrativeTable('Inventory', ['ID', 'Name', 'Category', 'Color', 'Price', 'Branch', statusHeader], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -5756,9 +5701,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Inventory Summary', getLastAutoTableFinalY(document, 112) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     setShowInventoryExportModal(false);
     document.save(`${filenameBase}.pdf`);
@@ -6136,19 +6078,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: filters.length === 1 && filters[0] === 'archive' ? 'rentals-archive' : 'rentals',
-      reportTitle: exportTitle,
-      generatedAt,
-      filters: {
-        view: filterLabel,
-        branch: branchFilter,
-      },
-      totals: {
-        totalRecords: exportItems.length,
-      },
-      tables: [createNarrativeTable('Rentals', ['Reference', 'Gown', 'Customer', 'Branch', 'Start / Due', 'End Date', 'Status', 'Amount'], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -6182,9 +6111,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Rentals Summary', getLastAutoTableFinalY(document, 128) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`${filenameBase}.pdf`);
     setShowRentalExportModal(false);
@@ -6409,19 +6335,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: filters.length === 1 && filters[0] === 'archive' ? 'appointments-archive' : 'appointments',
-      reportTitle: exportTitle,
-      generatedAt,
-      filters: {
-        view: filterLabel,
-        branch: branchFilter,
-      },
-      totals: {
-        totalRecords: exportItems.length,
-      },
-      tables: [createNarrativeTable('Appointments', ['ID', 'Customer', 'Email', 'Contact', 'Type', 'Branch', 'Date', 'Time', 'Status', 'Selected Gown'], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -6455,9 +6368,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Appointments Summary', getLastAutoTableFinalY(document, 128) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`${filenameBase}.pdf`);
     setShowAppointmentExportModal(false);
@@ -6734,19 +6644,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
 
     const document = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-    const narrative = await requestAnalyticsNarrative({
-      reportType: filters.length === 1 && filters[0] === 'archive' ? 'custom-orders-archive' : 'custom-orders',
-      reportTitle: exportTitle,
-      generatedAt,
-      filters: {
-        view: filterLabel,
-        branch: branchFilter,
-      },
-      totals: {
-        totalRecords: exportItems.length,
-      },
-      tables: [createNarrativeTable('Custom Orders', ['Reference ID', 'Customer', 'Email', 'Contact', 'Order Type', 'Status', 'Branch', 'Event Date', 'Budget'], rows)],
-    });
 
     document.setFont('times', 'normal');
     document.setFontSize(22);
@@ -6780,9 +6677,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       },
       margin: { left: 40, right: 40, bottom: 40 },
     });
-
-    appendPdfSectionNarrative(document, narrative, 'Custom Orders Summary', getLastAutoTableFinalY(document, 128) + 20);
-    appendPdfFinalSummaryPage(document, narrative);
 
     document.save(`${filenameBase}.pdf`);
     setShowCustomOrderExportModal(false);
@@ -7634,7 +7528,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
 
                   </>
                 )}
-                {overviewAnalyticsTab === 'customer-behavior' && (
+               {overviewAnalyticsTab === 'customer-behavior' && (
                   <>
                 <div className="mt-6 bg-white rounded-2xl border border-[#E8DCC8] p-8">
                   <div className="mb-6 flex items-start justify-between gap-6">
