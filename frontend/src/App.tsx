@@ -476,7 +476,7 @@ export default function App() {
     setIsAdmin(hasAdminAccess(user.role));
     setShowAuth(false);
     setPendingView(null);
-    setAppView('home', { history: 'replace', selectedGownId: null });
+    setAppView(hasAdminAccess(user.role) ? 'admin' : 'home', { history: 'replace', selectedGownId: null });
 
     if (user.mustChangePassword) {
       setShowForceChangePasswordModal(true);
