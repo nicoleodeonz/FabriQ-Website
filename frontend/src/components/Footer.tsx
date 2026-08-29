@@ -8,6 +8,7 @@ interface FooterProps {
   onSelectCatalogCategory: (category: string) => void;
   onSelectService: (service: FooterServiceTarget) => void;
   onOpenContactModal: () => void;
+  onOpenTcpModal: () => void;
 }
 
 const SHOP_CATEGORIES = [
@@ -24,7 +25,7 @@ const SERVICE_LINKS: Array<{ label: string; target: FooterServiceTarget }> = [
   { label: 'Measurements', target: 'measurements' },
 ];
 
-export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOpenContactModal }: FooterProps) {
+export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOpenContactModal, onOpenTcpModal }: FooterProps) {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showLiveViewModal, setShowLiveViewModal] = useState(false);
@@ -161,21 +162,8 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
           </div>
 
           <div>
-            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium">Company</h4>
-            <ul className="space-y-3 text-sm">
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}>About Us</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}>Our Story</a></li>
-              <li><a href="#" {...getDisabledLinkProps} className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}>Branches</a></li>
-              <li>
-                <a
-                  href="#contact-platforms"
-                  onClick={handleContactClick}
-                  className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}
-                >
-                  Contact
-                </a>
-              </li>
-            </ul>
+            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium text-[#6B5D4F]">Company</h4>
+            <div className="h-32" aria-hidden="true" />
           </div>
 
           <div>
@@ -183,11 +171,18 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
             <ul className="space-y-3 text-sm">
               <li>
                 <a
-                  href="mailto:hannahvanessaexclusive@gmail.com"
-                  {...getDisabledLinkProps}
+                  href="#contact-platforms"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (isAdmin) {
+                      openAdminFooterPreview('contact viewing');
+                      return;
+                    }
+                    onOpenContactModal();
+                  }}
                   className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}
                 >
-                  hannahvanessaexclusive@gmail.com
+                  Contact
                 </a>
               </li>
               <li className="text-white/80">Cadena de Amor, Taguig City</li>
@@ -252,8 +247,34 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
         <div className="pt-8 border-t border-white/20 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-white/60">
           <p>© 2026 Hannah Vanessa Boutique. All rights reserved.</p>
           <div className="flex gap-6">
-            <a href="#" {...getDisabledLinkProps} className={`hover:text-white transition-colors ${isAdmin ? 'opacity-60' : ''}`}>Privacy Policy</a>
-            <a href="#" {...getDisabledLinkProps} className={`hover:text-white transition-colors ${isAdmin ? 'opacity-60' : ''}`}>Terms of Service</a>
+            <a
+              href="#tcp-view"
+              onClick={(event) => {
+                event.preventDefault();
+                if (isAdmin) {
+                  openAdminFooterPreview('terms viewing');
+                  return;
+                }
+                onOpenTcpModal();
+              }}
+              className={`hover:text-white transition-colors ${isAdmin ? 'opacity-60' : ''}`}
+            >
+              Privacy Policy
+            </a>
+            <a
+              href="#tcp-view"
+              onClick={(event) => {
+                event.preventDefault();
+                if (isAdmin) {
+                  openAdminFooterPreview('terms viewing');
+                  return;
+                }
+                onOpenTcpModal();
+              }}
+              className={`hover:text-white transition-colors ${isAdmin ? 'opacity-60' : ''}`}
+            >
+              Terms of Service
+            </a>
           </div>
         </div>
       </div>

@@ -225,6 +225,7 @@ export default function App() {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showForceChangePasswordModal, setShowForceChangePasswordModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showTcpPreviewModal, setShowTcpPreviewModal] = useState(false);
   const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState(false);
   const [favoriteGowns, setFavoriteGowns] = useState<FavoriteGown[]>([]);
   const favoriteGownsRef = useRef<FavoriteGown[]>([]);
@@ -932,6 +933,10 @@ export default function App() {
             onSelectCatalogCategory={navigateToCatalogCategory}
             onSelectService={navigateToFooterService}
             onOpenContactModal={() => setShowContactModal(true)}
+            onOpenTcpModal={() => {
+              setShowAuth(false);
+              setShowTcpPreviewModal(true);
+            }}
           />
         </div>
       )}
@@ -1028,8 +1033,11 @@ export default function App() {
       )}
 
       <AuthModal
-        isOpen={showAuth}
-        onClose={() => setShowAuth(false)}
+        isOpen={showAuth || showTcpPreviewModal}
+        onClose={() => {
+          setShowAuth(false);
+          setShowTcpPreviewModal(false);
+        }}
         onSignIn={handleSignIn}
         onSignUp={handleSignUp}
         onVerifySignUp={handleVerifySignUp}
@@ -1037,6 +1045,8 @@ export default function App() {
           setShowAuth(false);
           setShowForgotPassword(true);
         }}
+        openTermsOnMount={showTcpPreviewModal}
+        readOnlyTerms={showTcpPreviewModal}
       />
 
       <ForgotPasswordModal

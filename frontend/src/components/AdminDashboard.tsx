@@ -121,8 +121,7 @@ type AddItemField =
   | 'branch'
   | 'status'
   | 'stock'
-  | 'image'
-  | 'description';
+  | 'image';
 
 type RentalExportFilter = 'archive' | 'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns';
 type OverviewExportTypeFilter = OverviewActivityRow['source'];
@@ -2592,7 +2591,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       if (!newItem.branch?.trim()) errors.branch = 'This field is required';
       if (!newItem.status?.trim()) errors.status = 'This field is required';
       if (getItemImageList(newItem).length === 0) errors.image = 'At least one image is required';
-      if (!newItem.description?.trim()) errors.description = 'This field is required';
     }
 
     setAddItemErrors(errors);
@@ -10243,7 +10241,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                         </div>
                       </div>
                     ) : (
-                      <div className="relative" ref={categoryDropdownRef}>
+                      <div className="relative z-30" ref={categoryDropdownRef}>
                         <button
                           type="button"
                           aria-haspopup="listbox"
@@ -10258,7 +10256,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                         </button>
 
                         {isCategoryDropdownOpen && (
-                          <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-xl border border-[#E8DCC8] bg-white shadow-lg">
+                          <div className="absolute left-0 right-0 top-full z-50 mt-2 rounded-xl border border-[#E8DCC8] bg-white shadow-lg">
                             <div className="max-h-60 overflow-y-auto p-2" role="listbox" aria-label="Category options">
                               {inventoryCategoryOptions.map((category) => {
                                 const isSelectedCategory = (editingItem?.category || newItem.category) === category;
@@ -10583,24 +10581,6 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                       <p className="mt-2 text-sm text-red-600">{modelUploadError}</p>
                     )}
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm text-[#6B5D4F] mb-2">Description</label>
-                  <textarea
-                    rows={3}
-                    required={!editingItem}
-                    aria-invalid={!editingItem && Boolean(addItemErrors.description)}
-                    aria-describedby={!editingItem && addItemErrors.description ? 'add-item-description-error' : undefined}
-                    value={editingItem?.description ?? newItem.description ?? ''}
-                    onChange={(e) => editingItem
-                      ? setEditingItem({ ...editingItem, description: e.target.value })
-                      : (setNewItem({ ...newItem, description: e.target.value }), setAddItemErrors(prev => ({ ...prev, description: '' })))
-                    }
-                    className={`w-full px-4 py-3 rounded-lg border focus:outline-none focus:border-[#D4AF37] resize-none ${!editingItem && addItemErrors.description ? 'border-red-400' : 'border-[#E8DCC8]'}`}
-                    placeholder="Brief description of the gown..."
-                  />
-                  {!editingItem && addItemErrors.description && <p id="add-item-description-error" className="text-sm text-red-600 mt-1">{addItemErrors.description}</p>}
                 </div>
 
                 <div className="flex gap-3 mt-6">

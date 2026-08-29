@@ -121,6 +121,8 @@ interface AuthModalProps {
   ) => Promise<{ email: string; message: string; signupToken: string }>;
   onVerifySignUp: (email: string, code: string, signupToken: string) => Promise<void>;
   onForgotPassword: () => void;
+  openTermsOnMount?: boolean;
+  readOnlyTerms?: boolean;
 }
 
 const emptyErrors = (): AuthErrors => ({
@@ -132,7 +134,16 @@ const emptyErrors = (): AuthErrors => ({
   confirmPassword: [],
 });
 
-export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp, onForgotPassword }: AuthModalProps) {
+export function AuthModal({
+  isOpen,
+  onClose,
+  onSignIn,
+  onSignUp,
+  onVerifySignUp,
+  onForgotPassword,
+  openTermsOnMount = false,
+  readOnlyTerms = false,
+}: AuthModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const phoneVerificationModalRef = useRef<HTMLDivElement>(null);
   const phoneVerificationCodeInputRef = useRef<HTMLInputElement>(null);
@@ -169,6 +180,12 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
   const isPhoneVerified = phone.length === 10 && verifiedPhoneDigits === phone;
   const isPhoneAlreadyRegisteredError = phoneVerificationError === 'This phone number is already registered.';
+
+  useEffect(() => {
+    if (openTermsOnMount && isOpen) {
+      setIsTermsOpen(true);
+    }
+  }, [isOpen, openTermsOnMount]);
 
   useEffect(() => {
     if (resendSecondsLeft <= 0) return;
@@ -623,302 +640,312 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
 
   if (!isOpen) return null;
 
+  const isReadOnlyPreviewMode = readOnlyTerms && (openTermsOnMount || isTermsOpen);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        className="modal-gradient-surface relative z-10 w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
-        style={{
-          maxWidth: isSignUp || isVerifyingSignUp ? '592px' : '580px',
-        }}
-      >
-        <div className="flex-1 flex flex-col overflow-auto">
-          <button onClick={handleClose} className="absolute top-4 right-4 text-[#6B5D4F] hover:text-black z-10">
-            <X className="w-5 h-5" />
-          </button>
-          <div
-            className={`flex-1 flex flex-col items-center text-center pb-8 ${
-              isSignUp || isVerifyingSignUp ? 'justify-start pt-[30px]' : 'justify-center'
-            }`}
-          >
-            <div style={{ paddingTop: 30 }}>
-              <h2 className="font-serif text-2xl sm:text-3xl font-light mb-3">
-                {isVerifyingSignUp ? 'Verify Your Email' : isSignUp ? 'Create Account' : 'Welcome Back'}
-              </h2>
-              <p className="text-sm text-[#6B5D4F] mb-6 max-w-md leading-relaxed">
-                {isVerifyingSignUp
-                  ? 'Enter the 6-digit code we sent to complete your account setup'
-                  : isSignUp
-                  ? 'Join us to start your journey'
-                  : 'Sign in to continue your journey with us'}
-              </p>
-            </div>
-            <form onSubmit={isVerifyingSignUp ? handleVerifySignUp : handleSubmit} className="w-full max-w-lg space-y-4">
-              {!isVerifyingSignUp && serverError && (
-                <p className="text-red-500 text-sm text-center">{serverError}</p>
-              )}
 
-              {isVerifyingSignUp ? (
-                <>
-                  {verificationMessage && (
-                    <p className="text-sm text-[#6B5D4F] text-center">{verificationMessage}</p>
-                  )}
-                  {verificationError && (
-                    <p className="text-red-500 text-sm text-center">{verificationError}</p>
-                  )}
-                  <div>
-                    <label className="block text-xs uppercase tracking-wider mb-2">Verification Code</label>
-                    <input
-                      type="text"
-                      value={verificationCode}
-                      onChange={(event) => {
-                        setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6));
-                        if (verificationError) setVerificationError(null);
+      {!isReadOnlyPreviewMode && (
+        <div
+          ref={modalRef}
+          tabIndex={-1}
+          className="modal-gradient-surface relative z-10 w-full max-h-[calc(100vh-2rem)] flex flex-col shadow-2xl rounded-lg overflow-hidden md:p-10 p-5"
+          style={{
+            maxWidth: isSignUp || isVerifyingSignUp ? '592px' : '580px',
+          }}
+        >
+          <div className="flex-1 flex flex-col overflow-auto">
+            <button onClick={handleClose} className="absolute top-4 right-4 text-[#6B5D4F] hover:text-black z-10">
+              <X className="w-5 h-5" />
+            </button>
+            <div
+              className={`flex-1 flex flex-col items-center text-center pb-8 ${
+                isSignUp || isVerifyingSignUp ? 'justify-start pt-[30px]' : 'justify-center'
+              }`}
+            >
+              <div style={{ paddingTop: 30 }}>
+                <h2 className="font-serif text-2xl sm:text-3xl font-light mb-3">
+                  {isVerifyingSignUp ? 'Verify Your Email' : isSignUp ? 'Create Account' : 'Welcome Back'}
+                </h2>
+                <p className="text-sm text-[#6B5D4F] mb-6 max-w-md leading-relaxed">
+                  {isVerifyingSignUp
+                    ? 'Enter the 6-digit code we sent to complete your account setup'
+                    : isSignUp
+                    ? 'Join us to start your journey'
+                    : 'Sign in to continue your journey with us'}
+                </p>
+              </div>
+
+              <form onSubmit={isVerifyingSignUp ? handleVerifySignUp : handleSubmit} className="w-full max-w-lg space-y-4">
+                {!isVerifyingSignUp && serverError && (
+                  <p className="text-red-500 text-sm text-center">{serverError}</p>
+                )}
+
+                {isVerifyingSignUp ? (
+                  <>
+                    {verificationMessage && (
+                      <p className="text-sm text-[#6B5D4F] text-center">{verificationMessage}</p>
+                    )}
+                    {verificationError && (
+                      <p className="text-red-500 text-sm text-center">{verificationError}</p>
+                    )}
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider mb-2">Verification Code</label>
+                      <input
+                        type="text"
+                        value={verificationCode}
+                        onChange={(event) => {
+                          setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6));
+                          if (verificationError) setVerificationError(null);
+                        }}
+                        maxLength={6}
+                        inputMode="numeric"
+                        placeholder="Enter 6-digit code"
+                        className="w-full px-4 py-3 border border-[#CFC6B8] bg-transparent focus:outline-none focus:border-black rounded-md text-center tracking-[0.35em]"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || verificationCode.length !== 6}
+                      className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
+                        isSubmitting || verificationCode.length !== 6 ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      {isSubmitting ? 'Verifying…' : 'Verify and Create Account'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResendVerificationCode}
+                      disabled={isSubmitting || resendSecondsLeft > 0}
+                      className={`w-full py-3 border border-[#CFC6B8] rounded-md font-medium ${
+                        isSubmitting || resendSecondsLeft > 0 ? 'opacity-50 cursor-not-allowed' : 'hover:border-black'
+                      }`}
+                    >
+                      {resendSecondsLeft > 0 ? `Resend code in ${resendSecondsLeft}s` : 'Resend verification code'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsVerifyingSignUp(false);
+                        setVerificationCode('');
+                        setVerificationError(null);
                       }}
-                      maxLength={6}
-                      inputMode="numeric"
-                      placeholder="Enter 6-digit code"
-                      className="w-full px-4 py-3 border border-[#CFC6B8] bg-transparent focus:outline-none focus:border-black rounded-md text-center tracking-[0.35em]"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={isSubmitting || verificationCode.length !== 6}
-                    className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
-                      isSubmitting || verificationCode.length !== 6 ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    {isSubmitting ? 'Verifying…' : 'Verify and Create Account'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResendVerificationCode}
-                    disabled={isSubmitting || resendSecondsLeft > 0}
-                    className={`w-full py-3 border border-[#CFC6B8] rounded-md font-medium ${
-                      isSubmitting || resendSecondsLeft > 0 ? 'opacity-50 cursor-not-allowed' : 'hover:border-black'
-                    }`}
-                  >
-                    {resendSecondsLeft > 0 ? `Resend code in ${resendSecondsLeft}s` : 'Resend verification code'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsVerifyingSignUp(false);
-                      setVerificationCode('');
-                      setVerificationError(null);
-                    }}
-                    className="w-full py-3 text-sm underline text-center text-black"
-                  >
-                    Back to sign up
-                  </button>
-                </>
-              ) : (
-                <>
-                  {isSignUp && (
-                    <>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs uppercase tracking-wider mb-2">First Name</label>
-                          <input
-                            type="text"
-                            value={firstName}
-                            onChange={handleFirstNameChange}
-                            onBlur={() => validateField('firstName', firstName)}
-                            required
-                            className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
-                              errors.firstName.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
-                            }`}
-                          />
-                          {errors.firstName.map((error, index) => (
-                            <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
-                          ))}
+                      className="w-full py-3 text-sm underline text-center text-black"
+                    >
+                      Back to sign up
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {isSignUp && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs uppercase tracking-wider mb-2">First Name</label>
+                            <input
+                              type="text"
+                              value={firstName}
+                              onChange={handleFirstNameChange}
+                              onBlur={() => validateField('firstName', firstName)}
+                              required
+                              className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
+                                errors.firstName.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
+                              }`}
+                            />
+                            {errors.firstName.map((error, index) => (
+                              <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
+                            ))}
+                          </div>
+                          <div>
+                            <label className="block text-xs uppercase tracking-wider mb-2">Last Name</label>
+                            <input
+                              type="text"
+                              value={lastName}
+                              onChange={handleLastNameChange}
+                              onBlur={() => validateField('lastName', lastName)}
+                              required
+                              className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
+                                errors.lastName.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
+                              }`}
+                            />
+                            {errors.lastName.map((error, index) => (
+                              <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
+                            ))}
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-xs uppercase tracking-wider mb-2">Last Name</label>
-                          <input
-                            type="text"
-                            value={lastName}
-                            onChange={handleLastNameChange}
-                            onBlur={() => validateField('lastName', lastName)}
-                            required
-                            className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
-                              errors.lastName.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
-                            }`}
-                          />
-                          {errors.lastName.map((error, index) => (
-                            <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
-                          ))}
-                        </div>
-                      </div>
 
-                      <div>
-                        <label className="block text-xs uppercase tracking-wider mb-2">Phone Number</label>
-                        <div
-                          className={`flex w-full rounded-md border bg-transparent transition-colors ${
-                            errors.phoneNumber.length > 0 ? 'border-red-500' : 'border-[#CFC6B8] focus-within:border-black'
-                          }`}
-                        >
-                          <span className="flex items-center px-4 py-3 text-sm text-[#6B5D4F] border-r border-[#CFC6B8] bg-[#F5F0E6] rounded-l-md">
-                            +63
-                          </span>
-                          <input
-                            type="tel"
-                            value={phone}
-                            onChange={handlePhoneChange}
-                            onBlur={() => validateField('phoneNumber', phone)}
-                            maxLength={10}
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            placeholder="9123456789"
-                            className="flex-1 px-4 py-3 bg-transparent focus:outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={handleOpenPhoneVerification}
-                            disabled={isPhoneVerified || !phone || phone.length !== 10}
-                            className={`px-4 py-3 border-l border-[#CFC6B8] rounded-r-md text-sm font-medium transition-colors ${
-                              isPhoneVerified
-                                ? 'bg-[#E8F3E3] text-[#2F5A2F]'
-                                : 'bg-[#F5F0E6] text-[#1A1A1A] hover:bg-[#ECE2D2] disabled:cursor-not-allowed disabled:opacity-50'
+                        <div>
+                          <label className="block text-xs uppercase tracking-wider mb-2">Phone Number</label>
+                          <div
+                            className={`flex w-full rounded-md border bg-transparent transition-colors ${
+                              errors.phoneNumber.length > 0 ? 'border-red-500' : 'border-[#CFC6B8] focus-within:border-black'
                             }`}
                           >
-                            {isPhoneVerified ? 'Verified' : 'Verify'}
-                          </button>
+                            <span className="flex items-center px-4 py-3 text-sm text-[#6B5D4F] border-r border-[#CFC6B8] bg-[#F5F0E6] rounded-l-md">
+                              +63
+                            </span>
+                            <input
+                              type="tel"
+                              value={phone}
+                              onChange={handlePhoneChange}
+                              onBlur={() => validateField('phoneNumber', phone)}
+                              maxLength={10}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              placeholder="9123456789"
+                              className="flex-1 px-4 py-3 bg-transparent focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleOpenPhoneVerification}
+                              disabled={isPhoneVerified || !phone || phone.length !== 10}
+                              className={`px-4 py-3 border-l border-[#CFC6B8] rounded-r-md text-sm font-medium transition-colors ${
+                                isPhoneVerified
+                                  ? 'bg-[#E8F3E3] text-[#2F5A2F]'
+                                  : 'bg-[#F5F0E6] text-[#1A1A1A] hover:bg-[#ECE2D2] disabled:cursor-not-allowed disabled:opacity-50'
+                              }`}
+                            >
+                              {isPhoneVerified ? 'Verified' : 'Verify'}
+                            </button>
+                          </div>
+                          {errors.phoneNumber.map((error, index) => (
+                            <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
+                          ))}
+                          {isPhoneVerified && errors.phoneNumber.length === 0 && (
+                            <p className="text-[#2F5A2F] text-xs mt-1">Mobile number verified.</p>
+                          )}
                         </div>
-                        {errors.phoneNumber.map((error, index) => (
-                          <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
-                        ))}
-                        {isPhoneVerified && errors.phoneNumber.length === 0 && (
-                          <p className="text-[#2F5A2F] text-xs mt-1">Mobile number verified.</p>
-                        )}
-                      </div>
-                    </>
-                  )}
+                      </>
+                    )}
 
-                  <div>
-                    <label className="block text-xs uppercase tracking-wider mb-2">Email Address</label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={handleEmailChange}
-                      onBlur={() => validateField('email', email)}
-                      required
-                      className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
-                        errors.email.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
-                      }`}
-                    />
-                    {errors.email.map((error, index) => (
-                      <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
-                    ))}
-                  </div>
-                  <div>
-                    <label className="block text-xs uppercase tracking-wider mb-2">Password</label>
-                    <div className="relative">
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider mb-2">Email Address</label>
                       <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={password}
-                        onChange={handlePasswordChange}
-                        onBlur={() => validateField('password', password)}
+                        type="email"
+                        value={email}
+                        onChange={handleEmailChange}
+                        onBlur={() => validateField('email', email)}
                         required
-                        className={`w-full px-4 py-3 pr-12 border bg-transparent focus:outline-none focus:border-black rounded-md ${
-                          errors.password.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
+                        className={`w-full px-4 py-3 border bg-transparent focus:outline-none focus:border-black rounded-md ${
+                          errors.email.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
                         }`}
                       />
-                      <button
-                        type="button"
-                        onPointerDown={() => setShowPassword(true)}
-                        onPointerUp={() => setShowPassword(false)}
-                        onPointerLeave={() => setShowPassword(false)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-[#6B5D4F] hover:text-black"
-                      >
-                        {showPassword ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
-                      </button>
+                      {errors.email.map((error, index) => (
+                        <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
+                      ))}
                     </div>
-                    {errors.password.map((error, index) => (
-                      <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
-                    ))}
-                    {!isSignUp && (
-                      <button
-                        type="button"
-                        onClick={onForgotPassword}
-                        className="mt-2 text-xs w-full text-right text-[#6B5D4F] underline hover:text-black"
-                      >
-                        Forgot Password?
-                      </button>
-                    )}
-                  </div>
-                  {isSignUp && (
+
                     <div>
-                      <label className="block text-xs uppercase tracking-wider mb-2">Confirm Password</label>
+                      <label className="block text-xs uppercase tracking-wider mb-2">Password</label>
                       <div className="relative">
                         <input
-                          type={showConfirmPassword ? 'text' : 'password'}
-                          value={confirmPassword}
-                          onChange={handleConfirmPasswordChange}
-                          onBlur={() => validateField('confirmPassword', confirmPassword)}
+                          type={showPassword ? 'text' : 'password'}
+                          value={password}
+                          onChange={handlePasswordChange}
+                          onBlur={() => validateField('password', password)}
                           required
                           className={`w-full px-4 py-3 pr-12 border bg-transparent focus:outline-none focus:border-black rounded-md ${
-                            errors.confirmPassword.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
+                            errors.password.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
                           }`}
                         />
                         <button
                           type="button"
-                          onPointerDown={() => setShowConfirmPassword(true)}
-                          onPointerUp={() => setShowConfirmPassword(false)}
-                          onPointerLeave={() => setShowConfirmPassword(false)}
+                          onPointerDown={() => setShowPassword(true)}
+                          onPointerUp={() => setShowPassword(false)}
+                          onPointerLeave={() => setShowPassword(false)}
                           className="absolute right-4 top-1/2 -translate-y-1/2 text-[#6B5D4F] hover:text-black"
                         >
-                          {showConfirmPassword ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
+                          {showPassword ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
                         </button>
                       </div>
-                      {errors.confirmPassword.map((error, index) => (
+                      {errors.password.map((error, index) => (
                         <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
                       ))}
+                      {!isSignUp && (
+                        <button
+                          type="button"
+                          onClick={onForgotPassword}
+                          className="mt-2 text-xs w-full text-right text-[#6B5D4F] underline hover:text-black"
+                        >
+                          Forgot Password?
+                        </button>
+                      )}
                     </div>
-                  )}
+
+                    {isSignUp && (
+                      <div>
+                        <label className="block text-xs uppercase tracking-wider mb-2">Confirm Password</label>
+                        <div className="relative">
+                          <input
+                            type={showConfirmPassword ? 'text' : 'password'}
+                            value={confirmPassword}
+                            onChange={handleConfirmPasswordChange}
+                            onBlur={() => validateField('confirmPassword', confirmPassword)}
+                            required
+                            className={`w-full px-4 py-3 pr-12 border bg-transparent focus:outline-none focus:border-black rounded-md ${
+                              errors.confirmPassword.length > 0 ? 'border-red-500' : 'border-[#CFC6B8]'
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            onPointerDown={() => setShowConfirmPassword(true)}
+                            onPointerUp={() => setShowConfirmPassword(false)}
+                            onPointerLeave={() => setShowConfirmPassword(false)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-[#6B5D4F] hover:text-black"
+                          >
+                            {showConfirmPassword ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
+                          </button>
+                        </div>
+                        {errors.confirmPassword.map((error, index) => (
+                          <p key={index} className="text-red-500 text-xs mt-1">{error}</p>
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={isSubmitting || (isSignUp && !isSignUpFormValid)}
+                      className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
+                        isSubmitting || (isSignUp && !isSignUpFormValid) ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      {isSubmitting
+                        ? 'Processing…'
+                        : isSignUp
+                          ? isSignUpFormValid
+                            ? 'Send Verification Code'
+                            : isPhoneVerified
+                              ? 'Complete All Fields'
+                              : 'Verify Phone Number First'
+                          : 'Sign in'}
+                    </button>
+                  </>
+                )}
+              </form>
+
+              {!isVerifyingSignUp && (
+                <p className="text-sm text-[#6B5D4F] mt-6">
+                  {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
                   <button
-                    type="submit"
-                    disabled={isSubmitting || (isSignUp && !isSignUpFormValid)}
-                    className={`w-full py-3 bg-[#1a1a1a] text-white hover:bg-[#D4AF37] transition-all rounded-md font-medium ${
-                      isSubmitting || (isSignUp && !isSignUpFormValid) ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
+                    onClick={toggleMode}
+                    className="hover:text-black font-medium"
                   >
-                    {isSubmitting
-                      ? 'Processing…'
-                      : isSignUp
-                        ? isSignUpFormValid
-                          ? 'Send Verification Code'
-                          : isPhoneVerified
-                            ? 'Complete All Fields'
-                            : 'Verify Phone Number First'
-                        : 'Sign in'}
+                    <span
+                      className="inline-block leading-none"
+                      style={{ boxShadow: 'inset 0 -0.08em 0 -0.03em currentColor' }}
+                    >
+                      {isSignUp ? 'Sign In' : 'Sign Up'}
+                    </span>
                   </button>
-                </>
+                </p>
               )}
-            </form>
-            {!isVerifyingSignUp && (
-              <p className="text-sm text-[#6B5D4F] mt-6">
-                {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-                <button
-                  onClick={toggleMode}
-                  className="hover:text-black font-medium"
-                >
-                  <span
-                    className="inline-block leading-none"
-                    style={{ boxShadow: 'inset 0 -0.08em 0 -0.03em currentColor' }}
-                  >
-                    {isSignUp ? 'Sign In' : 'Sign Up'}
-                  </span>
-                </button>
-              </p>
-            )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {isTermsOpen && !isVerifyingSignUp && (
+      {(isTermsOpen || isReadOnlyPreviewMode) && !isVerifyingSignUp && (
         <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/50" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
           <div
@@ -991,52 +1018,65 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onVerifySignUp,
                 </div>
               </div>
 
-              <label className={`flex items-start gap-3 rounded-md border px-4 py-3 text-left transition-all ${
-                isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid
-                  ? 'border-[#E8DCC8] bg-[#FAF7F0] opacity-50'
-                  : 'border-[#D8CCBA] bg-[#F2EBE0]'
-              }`}>
-                <input
-                  type="checkbox"
-                  checked={hasAcceptedTerms}
-                  onChange={(event) => setHasAcceptedTerms(event.target.checked)}
-                  disabled={isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid}
-                  className="mt-1 h-4 w-4 accent-[#1A1A1A] disabled:opacity-50"
-                />
-                <span className="text-sm italic leading-6 text-[#3D2B1F] underline underline-offset-2">
-                  I agree to the terms, conditions, and policies stated above
-                </span>
-              </label>
-              {!hasScrolledTermsToBottom && (
-                <p className="-mt-2 text-xs text-[#6B5D4F]">
-                  Scroll to the bottom of the terms and conditions before you can agree.
-                </p>
+              {!readOnlyTerms && (
+                <>
+                  <label className={`flex items-start gap-3 rounded-md border px-4 py-3 text-left transition-all ${
+                    isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid
+                      ? 'border-[#E8DCC8] bg-[#FAF7F0] opacity-50'
+                      : 'border-[#D8CCBA] bg-[#F2EBE0]'
+                  }`}>
+                    <input
+                      type="checkbox"
+                      checked={hasAcceptedTerms}
+                      onChange={(event) => setHasAcceptedTerms(event.target.checked)}
+                      disabled={isSubmitting || !hasScrolledTermsToBottom || !isSignUpFormValid}
+                      className="mt-1 h-4 w-4 accent-[#1A1A1A] disabled:opacity-50"
+                    />
+                    <span className="text-sm italic leading-6 text-[#3D2B1F] underline underline-offset-2">
+                      I agree to the terms, conditions, and policies stated above
+                    </span>
+                  </label>
+                  {!hasScrolledTermsToBottom && (
+                    <p className="-mt-2 text-xs text-[#6B5D4F]">
+                      Scroll to the bottom of the terms and conditions before you can agree.
+                    </p>
+                  )}
+                </>
               )}
 
               <div className="border-t border-[#D8CCBA] bg-[#F2EBE0] px-5 py-4 md:px-6">
                 <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                   <button
                     type="button"
-                    onClick={() => setIsTermsOpen(false)}
-                    disabled={isSubmitting}
-                    className="w-full sm:w-[170px] rounded-md border border-[#C8BEAF] bg-white px-5 py-3 text-sm font-medium text-[#4B433A] transition-colors hover:border-[#6B5D4F] hover:text-black disabled:opacity-50"
-                  >
-                    Refuse
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void submitSignUpRequest()}
-                    disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid}
-                    className="w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-opacity"
-                    style={{
-                      backgroundColor: '#1A1A1A',
-                      color: '#FFFFFF',
-                      opacity: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 0.5 : 1,
-                      cursor: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 'not-allowed' : 'pointer'
+                    onClick={() => {
+                      setIsTermsOpen(false);
+                      onClose();
                     }}
+                    disabled={isSubmitting}
+                    className={`w-full sm:w-[170px] rounded-md border px-5 py-3 text-sm font-medium transition-colors ${
+                      readOnlyTerms
+                        ? 'border-[#C8BEAF] bg-white text-[#4B433A] hover:border-[#6B5D4F] hover:text-black'
+                        : 'border-[#C8BEAF] bg-white text-[#4B433A] hover:border-[#6B5D4F] hover:text-black'
+                    } disabled:opacity-50`}
                   >
-                    {isSubmitting ? 'Sending Verification Code…' : isSignUpFormValid ? 'Continue' : 'Complete Form First'}
+                    {readOnlyTerms ? 'Close' : 'Refuse'}
                   </button>
+                  {!readOnlyTerms && (
+                    <button
+                      type="button"
+                      onClick={() => void submitSignUpRequest()}
+                      disabled={isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid}
+                      className="w-full sm:w-[170px] rounded-md px-5 py-3 text-sm font-medium transition-opacity"
+                      style={{
+                        backgroundColor: '#1A1A1A',
+                        color: '#FFFFFF',
+                        opacity: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 0.5 : 1,
+                        cursor: isSubmitting || !hasAcceptedTerms || !isPhoneVerified || !isSignUpFormValid ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {isSubmitting ? 'Sending Verification Code…' : isSignUpFormValid ? 'Continue' : 'Complete Form First'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
