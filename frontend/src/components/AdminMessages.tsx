@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Send, ArrowLeft, User as UserIcon, Mail as MailIcon, Phone as PhoneIcon } from 'lucide-react';
 import { chatAPI, type AdminConversationSummary, type ChatMessageRecord } from '../services/chatAPI';
+import { createAdminDashboardEventSource } from '../services/adminRealtime';
 
 interface AdminMessagesPageProps {
   token: string;
@@ -91,6 +92,48 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedId]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const eventSource = createAdminDashboardEventSource(token);
+    const handleDashboardUpdate = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        if (payload.entity !== 'chat-message') return;
+      } catch {
+        return;
+      }
+
+      void loadConversations();
+      if (selectedId) {
+        void loadMessages(selectedId);
+      }
+    };
+
+    eventSource.addEventListener('chat-conversation-update', handleDashboardUpdate);
+    eventSource.addEventListener('admin-dashboard-update', handleDashboardUpdate);
+
+    return () => {
+      eventSource.removeEventListener('chat-conversation-update', handleDashboardUpdate);
+      eventSource.removeEventListener('admin-dashboard-update', handleDashboardUpdate);
+      eventSource.close();
+    };
+  }, [selectedId, token]);
+
+  useEffect(() => {
+    if (!selectedId || !token) return;
+
+    void chatAPI.markAdminConversationOpen(token, selectedId).catch((err) => {
+      console.error('[AdminMessages] markAdminConversationOpen failed', err);
+    });
+
+    return () => {
+      void chatAPI.markAdminConversationClosed(token, selectedId).catch((err) => {
+        console.error('[AdminMessages] markAdminConversationClosed failed', err);
+      });
+    };
+  }, [selectedId, token]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

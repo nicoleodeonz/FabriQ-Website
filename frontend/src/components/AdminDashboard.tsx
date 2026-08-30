@@ -5425,6 +5425,10 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     (safeUserPage - 1) * USER_PAGE_SIZE,
     safeUserPage * USER_PAGE_SIZE,
   );
+  const activeUsers = users.filter((user) => normalizeManagedUserStatus(user.status) !== 'archived');
+  const activeAdminUsers = activeUsers.filter((user) => user.role === 'Admin').length;
+  const activeStaffUsers = activeUsers.filter((user) => user.role === 'Staff').length;
+  const activeCustomerUsers = activeUsers.filter((user) => user.role === 'Customer').length;
 
   useEffect(() => {
     setUserPage(1);
@@ -9708,7 +9712,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 }`}
               >
                 <p className="text-sm text-[#6B5D4F] mb-1">Total Users</p>
-                <p className="text-2xl font-light">{users.length}</p>
+                <p className="text-2xl font-light">{activeUsers.length}</p>
               </button>
               <button
                 type="button"
@@ -9718,7 +9722,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 }`}
               >
                 <p className="text-sm text-[#6B5D4F] mb-1">Admin Accounts</p>
-                <p className="text-2xl font-light text-[#1a1a1a]">{users.filter(u => u.role === 'Admin').length}</p>
+                <p className="text-2xl font-light text-[#1a1a1a]">{activeAdminUsers}</p>
               </button>
               <button
                 type="button"
@@ -9728,7 +9732,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 }`}
               >
                 <p className="text-sm text-[#6B5D4F] mb-1">Staff Accounts</p>
-                <p className="text-2xl font-light text-[#1a1a1a]">{users.filter(u => u.role === 'Staff').length}</p>
+                <p className="text-2xl font-light text-[#1a1a1a]">{activeStaffUsers}</p>
               </button>
               <button
                 type="button"
@@ -9738,7 +9742,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 }`}
               >
                 <p className="text-sm text-[#6B5D4F] mb-1">Customer Accounts</p>
-                <p className="text-2xl font-light text-[#1a1a1a]">{users.filter(u => u.role === 'Customer').length}</p>
+                <p className="text-2xl font-light text-[#1a1a1a]">{activeCustomerUsers}</p>
               </button>
             </div>
 

@@ -3,6 +3,58 @@ import Customer from '../models/Customer.js';
 import AdminAction from '../models/AdminAction.js';
 import { isElevatedRole } from '../utils/roles.js';
 import { generateGeminiChatReply } from '../services/geminiChatService.js';
+import { emitAdminDashboardUpdate, emitChatConversationUpdate } from '../services/adminRealtimeService.js';
+
+const ACTIVE_ADMIN_CHAT_SESSIONS = new Map();
+
+function getActiveAdminSessionIds(conversationId) {
+  const normalizedConversationId = String(conversationId || '').trim();
+  if (!normalizedConversationId) return new Set();
+  return ACTIVE_ADMIN_CHAT_SESSIONS.get(normalizedConversationId) || new Set();
+}
+
+export function isConversationOpenByAdmin(conversationId) {
+  return getActiveAdminSessionIds(conversationId).size > 0;
+}
+
+export function markConversationOpenByAdmin(conversationId, adminId) {
+  const normalizedConversationId = String(conversationId || '').trim();
+  const normalizedAdminId = String(adminId || '').trim();
+  if (!normalizedConversationId || !normalizedAdminId) {
+    return false;
+  }
+
+  const currentAdmins = getActiveAdminSessionIds(normalizedConversationId);
+  currentAdmins.add(normalizedAdminId);
+  ACTIVE_ADMIN_CHAT_SESSIONS.set(normalizedConversationId, currentAdmins);
+  return true;
+}
+
+export function markConversationClosedByAdmin(conversationId, adminId) {
+  const normalizedConversationId = String(conversationId || '').trim();
+  const normalizedAdminId = String(adminId || '').trim();
+  if (!normalizedConversationId) {
+    return false;
+  }
+
+  const currentAdmins = getActiveAdminSessionIds(normalizedConversationId);
+  if (!normalizedAdminId) {
+    ACTIVE_ADMIN_CHAT_SESSIONS.delete(normalizedConversationId);
+    return true;
+  }
+
+  if (currentAdmins.has(normalizedAdminId)) {
+    currentAdmins.delete(normalizedAdminId);
+  }
+
+  if (currentAdmins.size === 0) {
+    ACTIVE_ADMIN_CHAT_SESSIONS.delete(normalizedConversationId);
+  } else {
+    ACTIVE_ADMIN_CHAT_SESSIONS.set(normalizedConversationId, currentAdmins);
+  }
+
+  return true;
+}
 
 function buildConversationId(customerId, guestToken) {
   if (customerId) return `cust_${customerId}`;
@@ -114,6 +166,13 @@ export const postChatMessage = async (req, res) => {
       } catch (_err) { /* ignore */ }
     }
 
+    emitChatConversationUpdate({
+      entity: 'chat-message',
+      action: String(sender).toLowerCase() === 'admin' ? 'admin-reply' : 'customer-message',
+      conversationId,
+      customerId: customerId || '',
+    });
+
     res.status(201).json({
       ok: true,
       message: record.toObject(),
@@ -144,6 +203,10 @@ export const postChatbotReply = async (req, res) => {
     }
 
     const conversationId = incomingConversationId || buildConversationId(customerId, guestToken);
+    if (isConversationOpenByAdmin(conversationId)) {
+      return res.status(200).json({ ok: true, skipped: true, conversationId, message: null });
+    }
+
     const customerContext = await buildCustomerContext(customerId);
     const conversationHistory = await ChatMessage.find({ conversationId }).sort({ createdAt: 1 }).lean();
 
@@ -175,7 +238,14 @@ export const postChatbotReply = async (req, res) => {
     });
     await record.save();
 
-    res.status(201).json({ ok: true, message: record.toObject(), conversationId });
+    emitChatConversationUpdate({
+      entity: 'chat-message',
+      action: 'ai-reply',
+      conversationId,
+      customerId: customerId || '',
+    });
+
+    res.status(201).json({ ok: true, skipped: false, message: record.toObject(), conversationId });
   } catch (err) {
     console.error('[chatMessages::postChatbotReply]', err);
     res.status(500).json({ message: err instanceof Error ? err.message : 'Failed to generate chatbot reply' });
@@ -308,6 +378,13 @@ export const postAdminReply = async (req, res) => {
         senderRole: String(req.user?.role || '').trim().toLowerCase() || 'admin',
         messagePreview: normalizedText.slice(0, 120),
       },
+    });
+
+    emitChatConversationUpdate({
+      entity: 'chat-message',
+      action: 'admin-reply',
+      conversationId,
+      customerId: sample?.customerId || '',
     });
 
     res.status(201).json({ ok: true, message: record.toObject() });

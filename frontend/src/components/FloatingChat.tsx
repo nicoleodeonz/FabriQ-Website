@@ -151,15 +151,17 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
       };
 
       const botReply = await chatAPI.postChatbotReply(botPayload);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `msg-${Date.now()}-reply`,
-          sender: 'admin',
-          text: botReply.message.text,
-          timestamp: new Date(),
-        },
-      ]);
+      if (!botReply.skipped && botReply.message) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg-${Date.now()}-reply`,
+            sender: 'admin',
+            text: botReply.message.text,
+            timestamp: new Date(),
+          },
+        ]);
+      }
     } catch (err) {
       console.error('[FloatingChat] Failed to persist chat message or get chatbot reply:', err);
       setTimeout(() => {

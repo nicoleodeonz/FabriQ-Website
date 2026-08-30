@@ -70,6 +70,23 @@ export function emitAdminDashboardUpdate(payload = {}) {
   }
 }
 
+export function emitChatConversationUpdate(payload = {}) {
+  if (ADMIN_DASHBOARD_CLIENTS.size === 0) {
+    return;
+  }
+
+  const eventPayload = typeof payload === 'object' && payload !== null ? payload : {};
+  const message = buildSseEvent('chat-conversation-update', eventPayload);
+
+  for (const client of ADMIN_DASHBOARD_CLIENTS) {
+    try {
+      client.write(message);
+    } catch {
+      ADMIN_DASHBOARD_CLIENTS.delete(client);
+    }
+  }
+}
+
 export function emitCustomerActivityUpdate(customerId, payload = {}) {
   const normalizedCustomerId = String(customerId || '').trim();
   if (!normalizedCustomerId) {

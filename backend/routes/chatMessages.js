@@ -7,6 +7,8 @@ import {
   getAdminConversationMessages,
   getAdminUnreadCount,
   postAdminReply,
+  markConversationOpenByAdmin,
+  markConversationClosedByAdmin,
 } from '../controllers/chatMessageController.js';
 
 const router = express.Router();
@@ -16,6 +18,26 @@ router.post('/reply', postChatbotReply);
 router.get('/admin/unread-count', authenticate, getAdminUnreadCount);
 router.get('/admin/conversations', authenticate, getAdminConversations);
 router.get('/admin/conversations/:conversationId', authenticate, getAdminConversationMessages);
+router.post('/admin/conversations/:conversationId/open', authenticate, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const adminId = String(req.user?.id || '').trim();
+  if (!conversationId || !adminId) {
+    return res.status(400).json({ message: 'conversationId and adminId are required.' });
+  }
+
+  const opened = markConversationOpenByAdmin(conversationId, adminId);
+  return res.json({ ok: true, opened });
+});
+router.delete('/admin/conversations/:conversationId/open', authenticate, (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  const adminId = String(req.user?.id || '').trim();
+  if (!conversationId) {
+    return res.status(400).json({ message: 'conversationId is required.' });
+  }
+
+  const closed = markConversationClosedByAdmin(conversationId, adminId);
+  return res.json({ ok: true, closed });
+});
 router.post('/admin/conversations/:conversationId/reply', authenticate, postAdminReply);
 
 export default router;

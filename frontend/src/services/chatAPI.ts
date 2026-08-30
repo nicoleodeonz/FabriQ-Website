@@ -129,7 +129,7 @@ export const chatAPI = {
     return (body as any)?.messages || [];
   },
 
-  postChatbotReply: async (payload: PostChatbotReplyPayload): Promise<{ message: ChatMessageRecord; conversationId: string }> => {
+  postChatbotReply: async (payload: PostChatbotReplyPayload): Promise<{ message: ChatMessageRecord | null; conversationId: string; skipped?: boolean }> => {
     const response = await fetch(`${API_BASE_URL}/chat-messages/reply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -140,8 +140,9 @@ export const chatAPI = {
       throw new Error(getErrorMessage('Failed to get chatbot reply', body));
     }
     return {
-      message: (body as any)?.message as ChatMessageRecord,
+      message: (body as any)?.message as ChatMessageRecord | null,
       conversationId: String((body as any)?.conversationId || ''),
+      skipped: Boolean((body as any)?.skipped),
     };
   },
 
@@ -163,5 +164,27 @@ export const chatAPI = {
       throw new Error(getErrorMessage('Failed to send reply', body));
     }
     return (body as any)?.message as ChatMessageRecord;
+  },
+
+  markAdminConversationOpen: async (token: string, conversationId: string): Promise<void> => {
+    const response = await fetch(`${API_BASE_URL}/chat-messages/admin/conversations/${encodeURIComponent(conversationId)}/open`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await parseJsonSafe(response);
+    if (!response.ok) {
+      throw new Error(getErrorMessage('Failed to mark conversation as open', body));
+    }
+  },
+
+  markAdminConversationClosed: async (token: string, conversationId: string): Promise<void> => {
+    const response = await fetch(`${API_BASE_URL}/chat-messages/admin/conversations/${encodeURIComponent(conversationId)}/open`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const body = await parseJsonSafe(response);
+    if (!response.ok) {
+      throw new Error(getErrorMessage('Failed to close conversation', body));
+    }
   },
 };
