@@ -448,6 +448,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   const [userExportFilter, setUserExportFilter] = useState<UserExportFilter>('all');
   const [userExportFormat, setUserExportFormat] = useState<ExportFormat>('pdf');
   const [showAddUserModal, setShowAddUserModal] = useState(false);
+  const [showCreateUserConfirmModal, setShowCreateUserConfirmModal] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [newUserError, setNewUserError] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminActionEntry[]>([]);
@@ -2082,34 +2083,40 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     }
   }
 
-  async function handleCreateUser() {
-    setNewUserError(null);
-
+  function validateNewUserForm(): string | null {
     if (!newUserForm.email.trim()) {
-      setNewUserError('Email is required.');
-      return;
+      return 'Email is required.';
     }
 
     if (!newUserForm.firstName.trim() || !newUserForm.lastName.trim()) {
-      setNewUserError('First name and last name are required.');
-      return;
+      return 'First name and last name are required.';
     }
 
     if (
       newUserForm.role === 'Customer' &&
       (!newUserForm.firstName.trim() || !newUserForm.lastName.trim() || !newUserForm.phoneNumber.trim())
     ) {
-      setNewUserError('First name, last name, and phone number are required for customer accounts.');
-      return;
+      return 'First name, last name, and phone number are required for customer accounts.';
     }
 
     if (newUserForm.phoneNumber && newUserForm.phoneNumber.length !== 10) {
-      setNewUserError('Phone number must use the format 9123456789.');
-      return;
+      return 'Phone number must use the format 9123456789.';
     }
 
     if (newUserForm.role === 'Staff' && !newUserForm.preferredBranch.trim()) {
-      setNewUserError('Branch assignment is required for staff accounts.');
+      return 'Branch assignment is required for staff accounts.';
+    }
+
+    return null;
+  }
+
+  async function handleCreateUser() {
+    setNewUserError(null);
+    setShowCreateUserConfirmModal(false);
+
+    const validationError = validateNewUserForm();
+    if (validationError) {
+      setNewUserError(validationError);
       return;
     }
 
@@ -11236,7 +11243,13 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                 className="space-y-6"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  void handleCreateUser();
+                  const validationError = validateNewUserForm();
+                  if (validationError) {
+                    setNewUserError(validationError);
+                    return;
+                  }
+                  setNewUserError(null);
+                  setShowCreateUserConfirmModal(true);
                 }}
               >
                 <div className="grid md:grid-cols-2 gap-6">
@@ -11375,6 +11388,53 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {showCreateUserConfirmModal && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm create user"
+            onClick={() => setShowCreateUserConfirmModal(false)}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 className="text-2xl font-light mb-2">Confirm User Creation</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Are you sure you want to create this account? A temporary password will be emailed to the user.
+              </p>
+
+              <div className="rounded-xl border border-[#E8DCC8] bg-[#FAF7F0] p-4 mb-6">
+                <p className="font-medium text-[#1A1A1A]">{`${newUserForm.firstName} ${newUserForm.lastName}`.trim() || 'Unnamed User'}</p>
+                <p className="text-sm text-[#6B5D4F]">{newUserForm.email || 'No email provided'}</p>
+                <p className="text-xs uppercase tracking-[0.12em] text-[#9E8E80] mt-3">{newUserForm.role}</p>
+              </div>
+
+              <div className="flex flex-row items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateUserConfirmModal(false)}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 border border-[#E8DCC8] rounded-lg hover:border-[#1a1a1a] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateUserConfirmModal(false);
+                    void handleCreateUser();
+                  }}
+                  disabled={creatingUser}
+                  className="flex-1 min-w-0 px-4 sm:px-6 py-3 text-white font-medium rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {creatingUser ? 'Creating...' : 'Yes, Create'}
+                </button>
+              </div>
             </div>
           </div>
         )}
