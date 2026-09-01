@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import CustomerAccount from '../models/Customer.js';
+import CustomerMeasurement from '../models/CustomerMeasurement.js';
 
 const MEASUREMENT_FIELDS = [
   'height',
@@ -199,14 +199,11 @@ export const getMeasurements = async (req, res) => {
       return res.status(400).json({ success: false, error: 'customerId is required.' });
     }
 
-    const customer = await CustomerAccount.findById(customerId).lean();
-    if (!customer) {
-      return res.status(404).json({ success: false, error: 'Customer not found.' });
-    }
+    const doc = await CustomerMeasurement.findOne({ customerId }).lean();
 
     const profile = {};
     for (const field of [...MEASUREMENT_FIELDS, 'measuredAt']) {
-      profile[field] = customer[field] ?? null;
+      profile[field] = doc?.[field] ?? null;
     }
 
     return res.json({ success: true, profile });
@@ -255,25 +252,20 @@ export const saveMeasurements = async (req, res) => {
       });
     }
 
-    const customer = await CustomerAccount.findById(customerId);
-    if (!customer) {
-      return res.status(404).json({ success: false, error: 'Customer not found.' });
-    }
-
     const measurementUpdate = {
       ...filteredMeasurements,
       measuredAt: new Date(),
     };
 
-    const updatedCustomer = await CustomerAccount.findByIdAndUpdate(
-      customerId,
-      { $set: measurementUpdate },
-      { new: true, runValidators: true }
+    const updatedDoc = await CustomerMeasurement.findOneAndUpdate(
+      { customerId },
+      { $set: measurementUpdate, $setOnInsert: { customerId } },
+      { new: true, upsert: true, runValidators: true }
     );
 
     const profile = {};
     for (const field of [...MEASUREMENT_FIELDS, 'measuredAt']) {
-      profile[field] = updatedCustomer?.[field] ?? null;
+      profile[field] = updatedDoc?.[field] ?? null;
     }
 
     return res.json({
