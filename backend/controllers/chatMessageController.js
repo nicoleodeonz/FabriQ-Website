@@ -203,9 +203,6 @@ export const postChatbotReply = async (req, res) => {
     }
 
     const conversationId = incomingConversationId || buildConversationId(customerId, guestToken);
-    if (isConversationOpenByAdmin(conversationId)) {
-      return res.status(200).json({ ok: true, skipped: true, conversationId, message: null });
-    }
 
     const customerContext = await buildCustomerContext(customerId);
     const conversationHistory = await ChatMessage.find({ conversationId }).sort({ createdAt: 1 }).lean();

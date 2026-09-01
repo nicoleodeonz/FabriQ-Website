@@ -129,6 +129,15 @@ export const chatAPI = {
     return (body as any)?.messages || [];
   },
 
+  getConversationMessages: async (conversationId: string): Promise<ChatMessageRecord[]> => {
+    const response = await fetch(`${API_BASE_URL}/chat-messages/conversation/${encodeURIComponent(conversationId)}`);
+    const body = await parseJsonSafe(response);
+    if (!response.ok) {
+      throw new Error(getErrorMessage('Failed to fetch conversation messages', body));
+    }
+    return (body as any)?.messages || [];
+  },
+
   postChatbotReply: async (payload: PostChatbotReplyPayload): Promise<{ message: ChatMessageRecord | null; conversationId: string; skipped?: boolean }> => {
     const response = await fetch(`${API_BASE_URL}/chat-messages/reply`, {
       method: 'POST',

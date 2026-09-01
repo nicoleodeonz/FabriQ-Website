@@ -16,14 +16,16 @@ const WHAT_PATTERN = /\b(what|what is it for|what's it for|type|purpose|for)\b/i
 const WHERE_PATTERN = /\b(where|which branch|what branch|location)\b/i;
 const PAYMENT_PATTERN = /\b(paid|payment|pay|downpayment|down payment|balance)\b/i;
 const PROCESS_TIMING_PATTERN = /\b(when will|how long|how soon|take a while|be confirmed|confirmed|be approved|approved|be processed|processed|be ready|ready|be available|available|finished|complete|completed)\b/i;
-const BUSINESS_CONTACT_PATTERN = /\b(contact information|contact info|contact details|how can i contact|how do i contact|how to contact|reach you|reach your store|store contact|contact your store)\b/i;
+const BUSINESS_CONTACT_PATTERN = /\b(contact information|contact info|contact details|how can i contact|how do i contact|how to contact|reach you|reach your store|store contact|contact your store|contact customer support|contact support)\b/i;
 const ACKNOWLEDGEMENT_PATTERN = /\b(thank you|thanks|thank u|ty|okay thanks|ok thanks|okay thank you|ok thank you|got it|noted|alright|all right|sure thanks)\b/i;
 const CASUAL_CLOSE_PATTERN = /\b(bye|goodbye|see you|that is all|that's all|thats all|no worries)\b/i;
+const HUMAN_SUPPORT_PATTERN = /\b(speak|talk|connect|chat with|staff|admin|agent|human|person|someone)\b/i;
 const FOLLOW_UP_CONTEXT_PATTERN = /\b(when|what|where|which|how long|how soon|will it|is it|does it|for it|about it|that one|this one|it)\b/i;
 const SIMPLE_MATH_PATTERN = /^(?:what is|what's|calculate|compute|solve)?\s*(-?\d+(?:\.\d+)?)\s*([+\-xX*/])\s*(-?\d+(?:\.\d+)?)\s*\??$/i;
 const WEBSITE_RELATED_PATTERN = /\b(hannah vanessa|website|site|store|shop|boutique|service|services|hours|business hours|email|instagram|facebook|support|parking|holiday|walk-?in|gown|gowns|dress|dresses|bridal|wedding|evening gown|rental|rentals|bespoke|custom order|custom orders|fabric|fabrics|appointment|appointments|consultation|fitting|measurement|measurements|book|booking|collection|collections|catalog|contact|branch|pickup|pick up|return|returns|payment|downpayment|balance|order|orders|profile|account|chat)\b/i;
 const GENERIC_QUESTION_PATTERN = /\b(what|who|when|where|why|how|can you|could you|do you know|tell me|define|explain|calculate|compute|solve)\b/i;
 const BEST_SELLER_PATTERN = /\b(most popular item|most popular gown|bestsellers|best sellers|best seller|popular gowns|popular items)\b/i;
+const STAFF_HANDOFF_PATTERN = /\b((may i|can i|could i|i would like to|i want to|can you|could you|would you|please)\s+(speak|talk|connect|reconnect|speak with|talk with)\s+(to|me to|with)?\s*(a\s+)?(person|staff|staff member|admin|someone))\b|\b(speak to a person|talk to a person|speak to staff|talk to staff|speak to a staff member|talk to a staff member|speak with a person|talk with a person|speak with staff|talk with staff|connect me to an admin|reconnect me to an admin|connect me to staff|reconnect me to staff|speak to an admin|talk to an admin|speak with an admin|talk with an admin|speak to a staff member|talk to a staff member)\b/i;
 
 const STATIC_FAQ_RULES = [
   { pattern: /\b(what is hannah vanessa|about hannah vanessa|what kind of shop)\b/i, reply: 'Hannah Vanessa Dress Shop is an item rental and bespoke shop that offers elegant items for weddings, debuts, proms, evening events, and other special occasions. We also provide custom tailoring, alterations, and appointment scheduling.' },
@@ -37,8 +39,9 @@ const STATIC_FAQ_RULES = [
   { pattern: /\b(open during holidays|open on holidays|holiday schedule)\b/i, reply: 'Our holiday schedule may vary. Please check our announcements or contact us before visiting.' },
   { pattern: /\b(parking|parking available)\b/i, reply: 'We only have limited parking space, and it is on a first-come, first-served basis.' },
   { pattern: /\b(walk-?in|walk in customers)\b/i, reply: 'Yes, walk-ins are welcome, but appointments are recommended to ensure availability.' },
-  { pattern: /\b(do i need to create an account|need an account)\b/i, reply: 'If you wish to avail any of our online services, account creation is required to continue.' },
+  { pattern: /\b(do i need to create an account|need an account|how do i create an account|create an account|register an account|sign up for an account)\b/i, reply: 'If you wish to avail any of our online services, account creation is required to continue.' },
   { pattern: /\b(browse .* without logging in|browse .* without .* log ?in|browse products .* without)\b/i, reply: 'Yes, but to avail any of our online services, you are required to log in.' },
+  { pattern: /\b^(hi|hello|hey|good morning|good afternoon|good evening)\b$/i, reply: 'Hi there! How can I help with your rental, bespoke, or appointment needs today?' },
 
   { pattern: /\b(how do i rent|how to rent|rent an item)\b/i, reply: 'To rent an item, you must first log in to your account, browse our collection, choose your item, then click "Book Now".' },
   { pattern: /\b(requirements for renting|rental requirements)\b/i, reply: 'The basic requirements are a valid account, a 50% deposit, and a valid government ID when picking the item up.' },
@@ -306,7 +309,7 @@ function analyzeUserQuery(userQuery) {
   const asksSensitiveInfo = SENSITIVE_REQUEST_PATTERN.test(query);
   const asksOtherCustomerData = OTHER_CUSTOMER_PATTERN.test(query);
   const asksInventory = INVENTORY_PATTERN.test(query);
-  const asksBusinessContact = BUSINESS_CONTACT_PATTERN.test(query);
+  const asksBusinessContact = BUSINESS_CONTACT_PATTERN.test(query) && HUMAN_SUPPORT_PATTERN.test(query);
   const asksPublicStoreInfo = /\b(your|store|shop|hannah vanessa|business)\b/.test(query);
   const hasExplicitTopic = explicitAppointments || explicitRentals || explicitCustomOrders || explicitBranch;
   const shouldExpandOverview = asksOverview && !hasExplicitTopic;
@@ -344,7 +347,11 @@ function getGuardrailReply(queryProfile, customerId, options = {}) {
   }
 
   if (queryProfile.asksBusinessContact) {
-    return 'Please contact us through here';
+    return 'I can help with general questions here. If you need to speak with a staff member, please use the contact form or call our store directly.';
+  }
+
+  if (/^(hi|hello|hey|good morning|good afternoon|good evening)$/.test(String(queryProfile.query || '').trim())) {
+    return 'Hi there! How can I help with your rental, bespoke, or appointment needs today?';
   }
 
   if (queryProfile.asksOtherCustomerData) {
@@ -766,6 +773,10 @@ async function callGemini(prompt) {
 }
 
 export async function generateGeminiChatReply({ customerId, preferredBranch, conversationHistory, userQuery }) {
+  if (STAFF_HANDOFF_PATTERN.test(String(userQuery || '')) ) {
+    return 'Please wait while I connect you to a Staff. It might take a few minutes.';
+  }
+
   const queryProfile = analyzeUserQuery(userQuery);
   const featuredBestSellerReply = await buildFeaturedBestSellerReply(userQuery);
   const publicStoreReply = buildPublicStoreReply(userQuery);

@@ -74,21 +74,23 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
     }
   }
 
+  const refreshConversationState = async (conversationId?: string) => {
+    const targetConversationId = conversationId || selectedId;
+    try {
+      await loadConversations();
+      if (targetConversationId) {
+        await loadMessages(targetConversationId);
+      }
+    } catch (err) {
+      console.error('[AdminMessages] refreshConversationState', err);
+    }
+  };
+
   useEffect(() => {
     void loadConversations();
     const interval = window.setInterval(() => {
-      void loadConversations().then(() => {
-        if (selectedId) {
-          void (async () => {
-            try {
-              const updated = await chatAPI.getAdminConversationMessages(token, selectedId);
-              setMessages(updated);
-              setConversations((prev) => prev.map((c) => (c.conversationId === selectedId ? { ...c, unreadCount: 0 } : c)));
-            } catch (_e) { /* ignore */ }
-          })();
-        }
-      });
-    }, 15000);
+      void refreshConversationState(selectedId);
+    }, 2000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, selectedId]);
@@ -101,25 +103,46 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
       try {
         const payload = JSON.parse(event.data || '{}');
         if (payload.entity !== 'chat-message') return;
+
+        const targetConversationId = payload.conversationId || selectedId;
+        if (payload.action === 'customer-message' || payload.action === 'ai-reply') {
+          void loadConversations();
+          if (selectedId && targetConversationId === selectedId) {
+            void loadMessages(selectedId);
+          }
+          return;
+        }
+
+        void refreshConversationState(targetConversationId);
       } catch {
         return;
       }
+    };
+
+    const handleLocalChatUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ conversationId?: string }>;
+      const targetConversationId = customEvent.detail?.conversationId || selectedId;
 
       void loadConversations();
-      if (selectedId) {
+      if (selectedId && targetConversationId === selectedId) {
         void loadMessages(selectedId);
       }
     };
 
     eventSource.addEventListener('chat-conversation-update', handleDashboardUpdate);
     eventSource.addEventListener('admin-dashboard-update', handleDashboardUpdate);
+    window.addEventListener('fabriq-chat-updated', handleLocalChatUpdated);
+    eventSource.onerror = () => {
+      void refreshConversationState(selectedId);
+    };
 
     return () => {
       eventSource.removeEventListener('chat-conversation-update', handleDashboardUpdate);
       eventSource.removeEventListener('admin-dashboard-update', handleDashboardUpdate);
+      window.removeEventListener('fabriq-chat-updated', handleLocalChatUpdated);
       eventSource.close();
     };
-  }, [selectedId, token]);
+  }, [selectedId, token, refreshConversationState]);
 
   useEffect(() => {
     if (!selectedId || !token) return;
@@ -153,6 +176,7 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
       setConversations((prev) => prev.map((c) => c.conversationId === selectedId
         ? { ...c, lastMessageText: reply.text, lastMessageAt: reply.createdAt }
         : c));
+      void refreshConversationState(selectedId);
     } catch (err) {
       console.error('[AdminMessages] handleSendReply', err);
     }
