@@ -17,6 +17,7 @@ import realtimeRoutes from './routes/realtime.js';
 import chatMessageRoutes from './routes/chatMessages.js';
 import skinAnalysisRoutes from './routes/skinAnalysis.js';
 import bodyMeasurementRoutes from './routes/bodyMeasurement.js';
+import gownDesignerRoutes from './routes/gownDesigner.js';
 
 loadEnvironment();
 
@@ -84,6 +85,7 @@ app.use('/api/realtime', realtimeRoutes);
 app.use('/api/chat-messages', chatMessageRoutes);
 app.use('/api/skin-analysis', skinAnalysisRoutes);
 app.use('/api/body-measurement', bodyMeasurementRoutes);
+app.use('/api/gown-designer', gownDesignerRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {
