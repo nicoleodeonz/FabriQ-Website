@@ -408,6 +408,51 @@ export const updateCustomOrderStatus = async (req, res) => {
     order.rejectionReason = nextStatus === 'rejected' ? reason : null;
     order.updatedAt = new Date();
     await order.save();
+
+    if (nextStatus === 'completed' && !order.isArchived) {
+      order.isArchived = true;
+      order.archivedAt = new Date();
+      await order.save();
+
+      try {
+        await sendNotificationAcrossChannels({
+          email: order.email || '',
+          phoneNumber: order.contactNumber || '',
+          payload: {
+            type: 'bespoke',
+            recordId: String(order._id || ''),
+            customerId: String(order.customerId || ''),
+            status: 'completed',
+            name: order.customerName || '',
+            itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
+            date: new Date().toISOString().slice(0, 10),
+            dateType: 'Time Sent',
+            time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+            location: String(order.branch || '').trim(),
+          },
+        });
+      } catch (notificationError) {
+        console.error('custom order auto-archive completion notification error:', notificationError);
+      }
+
+      await logAdminAction(req, {
+        action: 'custom_order_archived',
+        targetUserId: String(order.customerId || order.email || ''),
+        targetRole: 'Customer',
+        details: {
+          customOrderId: String(order._id),
+          customOrderReferenceId: order.referenceId || buildFallbackCustomOrderReferenceId(order._id),
+          customerName: order.customerName || '',
+          email: order.email || '',
+          orderType: order.orderType || '',
+          branch: order.branch || '',
+          eventDate: order.eventDate || '',
+          status: 'completed',
+          archivedAt: order.archivedAt,
+        },
+      });
+    }
+
     emitAdminDashboardUpdate({ entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
     emitCustomerActivityUpdate(order.customerId, { entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
 

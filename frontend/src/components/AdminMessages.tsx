@@ -53,6 +53,12 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
     try {
       const list = await chatAPI.getAdminConversations(token);
       setConversations(list);
+      setSelectedId((current) => {
+        const normalizedCurrent = String(current || '').trim();
+        if (!normalizedCurrent) return current;
+        const stillExists = list.some((item) => String(item.conversationId || '').trim() === normalizedCurrent);
+        return stillExists ? normalizedCurrent : current;
+      });
     } catch (err) {
       console.error('[AdminMessages] loadConversations', err);
     } finally {
@@ -61,12 +67,15 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
   }
 
   async function loadMessages(conversationId: string) {
+    const normalizedId = String(conversationId || '').trim();
+    if (!normalizedId) return;
+
     setLoadingMessages(true);
     try {
-      const list = await chatAPI.getAdminConversationMessages(token, conversationId);
+      const list = await chatAPI.getAdminConversationMessages(token, normalizedId);
       setMessages(list);
-      setSelectedId(conversationId);
-      setConversations((prev) => prev.map((c) => (c.conversationId === conversationId ? { ...c, unreadCount: 0 } : c)));
+      setSelectedId(normalizedId);
+      setConversations((prev) => prev.map((c) => (String(c.conversationId || '').trim() === normalizedId ? { ...c, unreadCount: 0 } : c)));
     } catch (err) {
       console.error('[AdminMessages] loadMessages', err);
     } finally {
@@ -189,7 +198,8 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
     }
   }
 
-  const selected = conversations.find((c) => c.conversationId === selectedId) || null;
+  const normalizedSelectedId = String(selectedId || '').trim();
+  const selected = conversations.find((c) => String(c.conversationId || '').trim() === normalizedSelectedId) || null;
 
   return (
     <div className="min-h-screen w-full flex flex-col bg-[#FAF7F0] px-6 py-8">
@@ -236,15 +246,15 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
             )}
             <ul>
               {conversations.map((conv) => {
-                const isActive = conv.conversationId === selectedId;
+                const isActive = String(conv.conversationId || '').trim() === normalizedSelectedId;
                 const hasUnread = conv.unreadCount > 0;
                 return (
                   <li key={conv.conversationId}>
                     <button
                       onClick={() => void loadMessages(conv.conversationId)}
-                      className={`w-full text-left pl-7 pr-7 py-4 border-b border-[#F0E6D2] transition-colors ${
+                      className={`w-full text-left pl-7 pr-7 py-4 border-b border-[#F0E6D2] transition-all ${
                         isActive
-                          ? 'bg-[#F9F4E8]'
+                          ? 'bg-[#F9F4E8] border-l-4 border-l-[#D4AF37] shadow-[inset_0_0_0_1px_rgba(212,175,55,0.25)]'
                           : hasUnread
                             ? 'bg-[#FFF8EC] hover:bg-[#FDF1DD]'
                             : 'hover:bg-[#FDFAF4]'

@@ -149,7 +149,7 @@ const ADMIN_HISTORY_PAGE_SIZE = 8;
 const USER_PAGE_SIZE = 5;
 const ADMIN_DASHBOARD_REFRESH_INTERVAL_MS = 15000;
 const CUSTOM_ORDER_STATUS_OPTIONS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
-const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed'];
+const CUSTOM_ORDER_FILTER_TABS: AdminCustomOrderStatus[] = ['inquiry', 'design-approval', 'in-progress', 'fitting'];
 const CUSTOM_ORDER_EXPORT_FILTER_OPTIONS = ['archive', ...CUSTOM_ORDER_FILTER_TABS] as const satisfies readonly CustomOrderExportSelectableFilter[];
 const ADMIN_TABS: AdminTab[] = ['overview', 'inventory', 'rentals', 'appointments', 'bespoke', 'users', 'history'];
 const DEFAULT_INVENTORY_CATEGORIES = ['Evening Gown', 'Wedding Dress', 'Ball Gown', 'Cocktail Dress'];
@@ -1044,16 +1044,25 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     setAdminCustomOrdersError(null);
     try {
       const updated = await adminCustomOrderAPI.updateCustomOrderStatus(token, id, status, reason);
+      const finalUpdated = status === 'completed'
+        ? await adminCustomOrderAPI.archiveCustomOrder(token, id)
+        : updated;
+
       setAdminCustomOrders((prev) => prev.map((order) => {
         const orderId = String(order.id || order._id || '');
-        return orderId === id ? updated : order;
+        return orderId === id ? finalUpdated : order;
       }));
+
+      if (status === 'completed') {
+        setCustomOrderManagementView('archive');
+      }
+
       const refreshTasks = [loadAdminCustomOrders()];
       if (canViewAdminHistory) {
         refreshTasks.push(loadAdminHistory());
       }
       await Promise.all(refreshTasks);
-      return updated;
+      return finalUpdated;
     } catch (err) {
       setAdminCustomOrdersError(err instanceof Error ? err.message : 'Failed to update custom order status');
       return null;
