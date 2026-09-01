@@ -372,6 +372,14 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
   const [rentalsLoading, setRentalsLoading] = useState(true);
   const [rentalsError, setRentalsError] = useState('');
   const [submitError, setSubmitError] = useState('');
+
+  const dedupeRentals = useCallback((items: Rental[]) => {
+    const nextMap = new Map<string, Rental>();
+    items.forEach((item) => {
+      nextMap.set(String(item.id), item);
+    });
+    return Array.from(nextMap.values());
+  }, []);
   const [touchedFields, setTouchedFields] = useState<Partial<Record<RentalField, boolean>>>({});
   const [isPrefillLoading, setIsPrefillLoading] = useState(true);
   const [prefillError, setPrefillError] = useState('');
@@ -414,6 +422,9 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
   const [pickupScheduleTime, setPickupScheduleTime] = useState('08:00');
   const [pickupScheduleError, setPickupScheduleError] = useState('');
   const [isSubmittingPickupSchedule, setIsSubmittingPickupSchedule] = useState(false);
+  const [selectedCancelRental, setSelectedCancelRental] = useState<Rental | null>(null);
+  const [isCancelRentalModalOpen, setIsCancelRentalModalOpen] = useState(false);
+  const [isCancellingRental, setIsCancellingRental] = useState(false);
   const isAnyRentalModalOpen =
     isSubmitConfirmOpen ||
     isMissingPhoneModalOpen ||
@@ -423,7 +434,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     isSubmitReviewConfirmOpen ||
     isPayNowConfirmOpen ||
     isSchedulePickupModalOpen ||
-    isSchedulePickupConfirmOpen;
+    isSchedulePickupConfirmOpen ||
+    isCancelRentalModalOpen;
   const touchedFieldsRef = useRef<Partial<Record<RentalField, boolean>>>({});
   const cancelSubmitButtonRef = useRef<HTMLButtonElement>(null);
   const confirmSubmitButtonRef = useRef<HTMLButtonElement>(null);
@@ -484,35 +496,35 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
 
     try {
       const myRentals = await rentalAPI.getMyRentals(token);
-      setRentals(
-        myRentals.map((rental) => ({
-          id: rental.id,
-          referenceId: rental.referenceId ?? rental.id,
-          gownName: rental.gownName,
-          gownImage: rental.gownImage,
-          sku: rental.sku,
-          startDate: rental.startDate,
-          endDate: rental.endDate,
-          status: rental.status,
-          totalPrice: rental.totalPrice,
-          downpayment: rental.downpayment,
-          branch: rental.branch,
-          eventType: rental.eventType,
-          paymentSubmittedAt: rental.paymentSubmittedAt,
-          paymentAmountPaid: rental.paymentAmountPaid,
-          paymentReferenceNumber: rental.paymentReferenceNumber,
-          paymentReceiptUrl: rental.paymentReceiptUrl,
-          paymentReceiptFilename: rental.paymentReceiptFilename,
-          rejectionReason: rental.rejectionReason,
-          rejectedAt: rental.rejectedAt,
-          pickupScheduleDate: rental.pickupScheduleDate,
-          pickupScheduleTime: rental.pickupScheduleTime,
-          hasReview: rental.hasReview,
-          reviewSubmittedAt: rental.reviewSubmittedAt,
-          reviewScore: rental.reviewScore,
-          reviewComment: rental.reviewComment,
-        }))
-      );
+      const normalizedRentals = myRentals.map((rental) => ({
+        id: rental.id,
+        referenceId: rental.referenceId ?? rental.id,
+        gownName: rental.gownName,
+        gownImage: rental.gownImage,
+        sku: rental.sku,
+        startDate: rental.startDate,
+        endDate: rental.endDate,
+        status: rental.status,
+        totalPrice: rental.totalPrice,
+        downpayment: rental.downpayment,
+        branch: rental.branch,
+        eventType: rental.eventType,
+        paymentSubmittedAt: rental.paymentSubmittedAt,
+        paymentAmountPaid: rental.paymentAmountPaid,
+        paymentReferenceNumber: rental.paymentReferenceNumber,
+        paymentReceiptUrl: rental.paymentReceiptUrl,
+        paymentReceiptFilename: rental.paymentReceiptFilename,
+        rejectionReason: rental.rejectionReason,
+        rejectedAt: rental.rejectedAt,
+        pickupScheduleDate: rental.pickupScheduleDate,
+        pickupScheduleTime: rental.pickupScheduleTime,
+        hasReview: rental.hasReview,
+        reviewSubmittedAt: rental.reviewSubmittedAt,
+        reviewScore: rental.reviewScore,
+        reviewComment: rental.reviewComment,
+      }));
+
+      setRentals(dedupeRentals(normalizedRentals));
     } catch (error) {
       setRentalsError(error instanceof Error ? error.message : 'Failed to load your rentals.');
     } finally {
@@ -559,8 +571,10 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
         hasVerified = true;
 
         if (result.success && result.rental) {
-          setRentals((prev) => prev.map((item) =>
-            String(item.id) === String(rentalId) ? { ...item, ...result.rental } : item
+          setRentals((prev) => dedupeRentals(
+            prev.map((item) =>
+              String(item.id) === String(rentalId) ? { ...item, ...result.rental } : item
+            )
           ));
           localStorage.removeItem('pendingPaymongoPayment');
           // Clean up the URL param after processing
@@ -1058,6 +1072,41 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
     setIsSubmitConfirmOpen(true);
   };
 
+  const handleCancelPendingRental = useCallback((rental: Rental) => {
+    setSelectedCancelRental(rental);
+    setIsCancelRentalModalOpen(true);
+  }, []);
+
+  const handleConfirmCancelPendingRental = useCallback(async () => {
+    if (!selectedCancelRental) return;
+
+    setIsCancellingRental(true);
+    try {
+      const updated = await rentalAPI.updateRentalStatus(token, selectedCancelRental.id, 'cancelled', 'Customer cancelled this rental request.');
+      setRentals((prev) => prev.map((item) => String(item.id) === String(selectedCancelRental.id) ? {
+        ...item,
+        status: updated.status,
+        rejectionReason: updated.rejectionReason ?? item.rejectionReason,
+        rejectedAt: updated.rejectedAt ?? item.rejectedAt,
+      } : item));
+
+      if (selectedRentalDetails && String(selectedRentalDetails.id) === String(selectedCancelRental.id)) {
+        setSelectedRentalDetails((prev) => prev ? {
+          ...prev,
+          status: updated.status,
+          rejectionReason: updated.rejectionReason ?? prev.rejectionReason,
+          rejectedAt: updated.rejectedAt ?? prev.rejectedAt,
+        } : prev);
+      }
+      setIsCancelRentalModalOpen(false);
+      setSelectedCancelRental(null);
+    } catch (error) {
+      setRentalsError(error instanceof Error ? error.message : 'Failed to cancel rental request.');
+    } finally {
+      setIsCancellingRental(false);
+    }
+  }, [selectedCancelRental, selectedRentalDetails, token]);
+
   const handleConfirmSubmit = async () => {
     setIsSubmittingRequest(true);
     setSubmitError('');
@@ -1085,7 +1134,12 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
         eventType: created.eventType,
       };
 
-      setRentals((prev) => [submittedRental, ...prev]);
+      setRentals((prev) => {
+        const nextItems = prev.some((item) => String(item.id) === String(submittedRental.id))
+          ? prev
+          : [submittedRental, ...prev];
+        return dedupeRentals(nextItems);
+      });
       setLatestSubmittedRental(submittedRental);
       setIsSubmitConfirmOpen(false);
       setIsSubmitSuccessOpen(true);
@@ -1735,6 +1789,18 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                     <div className="text-sm text-[#6B5D4F]">
                       Paid: ₱{rental.downpayment.toLocaleString()}
                     </div>
+                    {rental.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCancelPendingRental(rental);
+                        }}
+                        className="px-4 py-2 rounded-full border border-red-300 text-red-600 hover:border-red-600 hover:bg-red-50 transition-colors text-sm font-medium"
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3014,6 +3080,53 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
               >
                 OK
               </button>
+            </div>
+          </div>
+        )}
+
+        {isCancelRentalModalOpen && selectedCancelRental && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm rental cancellation"
+            onClick={() => {
+              if (!isCancellingRental) {
+                setIsCancelRentalModalOpen(false);
+                setSelectedCancelRental(null);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Cancellation</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Cancel this rental request for {selectedCancelRental.gownName}? This action cannot be undone.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={isCancellingRental}
+                  onClick={() => {
+                    setIsCancelRentalModalOpen(false);
+                    setSelectedCancelRental(null);
+                  }}
+                  className="flex-1 px-4 py-3 border border-[#E8DCC8] rounded-full hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isCancellingRental}
+                  onClick={handleConfirmCancelPendingRental}
+                  className="flex-1 px-4 py-3 text-white font-medium rounded-full border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isCancellingRental ? 'Cancelling...' : 'OK'}
+                </button>
+              </div>
             </div>
           </div>
         )}

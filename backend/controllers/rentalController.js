@@ -878,23 +878,48 @@ export async function submitRentalReview(req, res) {
 
 export async function updateRentalStatus(req, res) {
   try {
-    if (!isElevatedRole(req.user.role)) {
-      return res.status(403).json({ message: 'Admin access required.' });
-    }
-
     const { id } = req.params;
     const { status } = req.body;
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
-
-    const allowed = ['for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'cancelled', 'completed', 'item_lost'];
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ message: 'Invalid status value.' });
-    }
 
     const rental = await RentalDetail.findById(id);
 
     if (!rental) {
       return res.status(404).json({ message: 'Rental not found.' });
+    }
+
+    if (req.user.role === 'customer') {
+      const isOwner = String(rental.customerId || '') === String(req.user.id || '');
+      if (!isOwner) {
+        return res.status(403).json({ message: 'You can only cancel your own rental request.' });
+      }
+
+      if (status !== 'cancelled') {
+        return res.status(400).json({ message: 'Customers can only cancel a pending rental request.' });
+      }
+
+      if (rental.status !== 'pending') {
+        return res.status(400).json({ message: 'Only pending rental requests can be cancelled.' });
+      }
+
+      rental.status = 'cancelled';
+      rental.rejectionReason = reason || 'Customer cancelled this rental request.';
+      rental.rejectedAt = new Date();
+      await rental.save();
+      await syncProductAvailabilityByCapacity(rental.productId);
+      emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
+      emitAdminDashboardUpdate({ entity: 'rental', action: 'status-updated', id: String(rental._id || '') });
+
+      return res.json({ rental: await mapRentalWithProductImage(req, rental.toJSON()) });
+    }
+
+    if (!isElevatedRole(req.user.role)) {
+      return res.status(403).json({ message: 'Admin access required.' });
+    }
+
+    const allowed = ['for_payment', 'paid_for_confirmation', 'for_pickup', 'active', 'cancelled', 'completed', 'item_lost'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status value.' });
     }
 
     const allowedTransitions = {

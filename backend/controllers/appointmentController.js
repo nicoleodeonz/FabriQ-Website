@@ -373,22 +373,46 @@ export async function getAdminAppointments(req, res) {
 
 export async function updateAppointmentStatus(req, res) {
   try {
+    const { id } = req.params;
+    const nextStatus = String(req.body?.status || '').trim().toLowerCase();
+    const reason = String(req.body?.reason || '').trim();
+    const appointment = await AppointmentDetail.findById(id);
+
+    if (!appointment) {
+      return res.status(404).json({ message: 'Appointment not found.' });
+    }
+
+    const isCustomerRequest = String(req.user?.role || '').toLowerCase() === 'customer';
+    if (isCustomerRequest) {
+      const isOwner = String(appointment.customerId || '') === String(req.user?.id || '');
+      if (!isOwner) {
+        return res.status(403).json({ message: 'You can only cancel your own appointment.' });
+      }
+
+      if (nextStatus !== 'cancelled') {
+        return res.status(400).json({ message: 'Customers can only cancel a pending appointment.' });
+      }
+
+      if (String(appointment.status || '').trim().toLowerCase() !== 'pending') {
+        return res.status(400).json({ message: 'Only pending appointments can be cancelled.' });
+      }
+
+      appointment.status = 'cancelled';
+      appointment.cancellationReason = reason || 'Customer cancelled this appointment.';
+      await appointment.save();
+      emitAdminDashboardUpdate({ entity: 'appointment', action: 'status-updated', id: String(appointment._id || '') });
+      emitCustomerActivityUpdate(appointment.customerId, { entity: 'appointment', action: 'status-updated', id: String(appointment._id || '') });
+      return res.json({ appointment: mapAppointment(appointment.toJSON()) });
+    }
+
     if (!isElevatedRole(req.user.role)) {
       return res.status(403).json({ message: 'Admin access required.' });
     }
 
-    const { id } = req.params;
-    const nextStatus = String(req.body?.status || '').trim().toLowerCase();
-    const reason = String(req.body?.reason || '').trim();
     const allowed = ['scheduled', 'completed', 'cancelled'];
 
     if (!allowed.includes(nextStatus)) {
       return res.status(400).json({ message: 'Invalid appointment status.' });
-    }
-
-    const appointment = await AppointmentDetail.findById(id);
-    if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found.' });
     }
 
     const transitions = {

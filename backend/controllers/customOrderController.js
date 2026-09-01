@@ -6,7 +6,7 @@ import { storeUploadedImage } from '../services/mediaStorageService.js';
 import { sendNotificationAcrossChannels } from '../services/messageDeliveryService.js';
 import { isElevatedRole } from '../utils/roles.js';
 
-const CUSTOM_ORDER_STATUSES = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'];
+const CUSTOM_ORDER_STATUSES = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'cancelled', 'rejected'];
 const CUSTOM_ORDER_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
 
 function buildAdminName(email) {
@@ -307,13 +307,42 @@ export const updateCustomOrderFittingSchedule = async (req, res) => {
 
 export const updateCustomOrderStatus = async (req, res) => {
   try {
-    if (!req.user || !isElevatedRole(String(req.user.role || '').toLowerCase())) {
-      return res.status(403).json({ message: 'Forbidden: Admin or staff only.' });
-    }
-
     const { id } = req.params;
     const nextStatus = String(req.body?.status || '').trim().toLowerCase();
     const reason = String(req.body?.reason || '').trim();
+
+    const order = await CustomOrder.findById(id);
+    if (!order) {
+      return res.status(404).json({ message: 'Custom order not found.' });
+    }
+
+    if (String(req.user?.role || '').toLowerCase() === 'customer') {
+      const isOwner = String(order.customerId || '') === String(req.user?.id || '');
+      if (!isOwner) {
+        return res.status(403).json({ message: 'You can only cancel your own custom order.' });
+      }
+
+      if (nextStatus !== 'cancelled') {
+        return res.status(400).json({ message: 'Customers can only cancel a pending custom order.' });
+      }
+
+      const pendingStatuses = ['inquiry', 'design-approval'];
+      if (!pendingStatuses.includes(String(order.status || '').trim().toLowerCase())) {
+        return res.status(400).json({ message: 'Only pending custom orders can be cancelled.' });
+      }
+
+      order.status = 'cancelled';
+      order.rejectionReason = reason || 'Customer cancelled this custom order request.';
+      order.updatedAt = new Date();
+      await order.save();
+      emitAdminDashboardUpdate({ entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
+      emitCustomerActivityUpdate(order.customerId, { entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
+      return res.json({ order: mapCustomOrder(order) });
+    }
+
+    if (!req.user || !isElevatedRole(String(req.user.role || '').toLowerCase())) {
+      return res.status(403).json({ message: 'Forbidden: Admin or staff only.' });
+    }
 
     if (!CUSTOM_ORDER_STATUSES.includes(nextStatus)) {
       return res.status(400).json({ message: 'Invalid custom order status.' });
@@ -321,11 +350,6 @@ export const updateCustomOrderStatus = async (req, res) => {
 
     if (nextStatus === 'rejected' && !reason) {
       return res.status(400).json({ message: 'Rejection reason is required.' });
-    }
-
-    const order = await CustomOrder.findById(id);
-    if (!order) {
-      return res.status(404).json({ message: 'Custom order not found.' });
     }
 
     const previousStatus = String(order.status || '').trim().toLowerCase();

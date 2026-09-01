@@ -58,7 +58,7 @@ const CustomOrderSchema = new mongoose.Schema({
     sparse: true,
     index: true,
   },
-  status: { type: String, enum: ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'rejected'], default: 'inquiry' },
+  status: { type: String, enum: ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'cancelled', 'rejected'], default: 'inquiry' },
   isArchived: {
     type: Boolean,
     default: false,

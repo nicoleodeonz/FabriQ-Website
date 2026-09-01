@@ -119,7 +119,10 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     branch: '',
     reason: '',
   });
-  const isAnyAppointmentModalOpen = isMissingPhoneModalOpen || isRescheduleModalOpen || isAppointmentDetailsOpen;
+  const [selectedCancelAppointment, setSelectedCancelAppointment] = useState<Appointment | null>(null);
+  const [isCancelAppointmentModalOpen, setIsCancelAppointmentModalOpen] = useState(false);
+  const [isCancellingAppointment, setIsCancellingAppointment] = useState(false);
+  const isAnyAppointmentModalOpen = isMissingPhoneModalOpen || isRescheduleModalOpen || isAppointmentDetailsOpen || isCancelAppointmentModalOpen;
   const selectedGownDetails = useMemo(
     () => availableGowns.find((gown) => gown.id === formData.selectedGown) || null,
     [availableGowns, formData.selectedGown]
@@ -553,6 +556,35 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
     }
   };
 
+  const handleCancelAppointment = useCallback((appointment: Appointment) => {
+    setSelectedCancelAppointment(appointment);
+    setIsCancelAppointmentModalOpen(true);
+  }, []);
+
+  const handleConfirmCancelAppointment = useCallback(async () => {
+    if (!selectedCancelAppointment) return;
+
+    setIsCancellingAppointment(true);
+    try {
+      const updated = await appointmentAPI.updateAppointmentStatus(
+        token,
+        selectedCancelAppointment.id,
+        'cancelled',
+        'Customer cancelled this appointment.'
+      );
+      setAppointments((prev) => prev.map((item) => (item.id === selectedCancelAppointment.id ? updated : item)));
+      if (selectedAppointmentDetails && selectedAppointmentDetails.id === selectedCancelAppointment.id) {
+        setSelectedAppointmentDetails(updated);
+      }
+      setIsCancelAppointmentModalOpen(false);
+      setSelectedCancelAppointment(null);
+    } catch (error) {
+      setAppointmentsError(error instanceof Error ? error.message : 'Failed to cancel appointment.');
+    } finally {
+      setIsCancellingAppointment(false);
+    }
+  }, [selectedAppointmentDetails, selectedCancelAppointment, token]);
+
   return (
     <div className="min-h-screen py-8 px-4 bg-[#FAF7F0]">
       <div className="max-w-5xl mx-auto">
@@ -875,15 +907,23 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                     )}
                   </div>
 
-                  {appointment.status === 'scheduled' && (
+                  {(appointment.status === 'pending' || appointment.status === 'scheduled') && (
                     <div className="flex gap-2">
+                      {appointment.status === 'scheduled' && (
+                        <button
+                          onClick={() => openRescheduleModal(appointment)}
+                          className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors text-sm"
+                        >
+                          Reschedule
+                        </button>
+                      )}
                       <button
-                        onClick={() => openRescheduleModal(appointment)}
-                        className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors text-sm"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCancelAppointment(appointment);
+                        }}
+                        className="px-4 py-2 border border-red-300 text-red-600 rounded-full hover:border-red-600 transition-colors text-sm"
                       >
-                        Reschedule
-                      </button>
-                      <button className="px-4 py-2 border border-red-300 text-red-600 rounded-full hover:border-red-600 transition-colors text-sm">
                         Cancel
                       </button>
                     </div>
@@ -905,6 +945,53 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {isCancelAppointmentModalOpen && selectedCancelAppointment && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm appointment cancellation"
+            onClick={() => {
+              if (!isCancellingAppointment) {
+                setIsCancelAppointmentModalOpen(false);
+                setSelectedCancelAppointment(null);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Cancellation</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Cancel this {getAppointmentTypeLabel(selectedCancelAppointment.type).toLowerCase()} request? This action cannot be undone.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={isCancellingAppointment}
+                  onClick={() => {
+                    setIsCancelAppointmentModalOpen(false);
+                    setSelectedCancelAppointment(null);
+                  }}
+                  className="flex-1 px-4 py-3 border border-[#E8DCC8] rounded-full hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isCancellingAppointment}
+                  onClick={handleConfirmCancelAppointment}
+                  className="flex-1 px-4 py-3 text-white font-medium rounded-full border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isCancellingAppointment ? 'Cancelling...' : 'OK'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

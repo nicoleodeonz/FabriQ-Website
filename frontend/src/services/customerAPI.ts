@@ -259,6 +259,33 @@ export const customerAPI = {
     return response.json();
   },
 
+  updateCustomOrderStatus: async (
+    token: string,
+    id: string,
+    status: 'cancelled',
+    reason?: string
+  ) => {
+    const response = await fetch(`${API_BASE_URL}/custom-orders/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ status, reason })
+    });
+
+    if (!response.ok) {
+      let message = 'Failed to update custom order status';
+      try {
+        const body = await response.json();
+        if (body?.message) message = body.message;
+      } catch {}
+      throw new Error(message);
+    }
+
+    return response.json();
+  },
+
   // Get all custom orders for the authenticated customer
   getMyCustomOrders: async (token: string) => {
     const response = await fetch(`${API_BASE_URL}/custom-orders/my-orders`, {

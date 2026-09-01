@@ -126,13 +126,17 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
   const [fittingRescheduleReason, setFittingRescheduleReason] = useState('');
   const [fittingScheduleError, setFittingScheduleError] = useState<string | null>(null);
   const [isSavingFittingSchedule, setIsSavingFittingSchedule] = useState(false);
+  const [selectedCancelOrder, setSelectedCancelOrder] = useState<CustomOrder | null>(null);
+  const [isCancelOrderModalOpen, setIsCancelOrderModalOpen] = useState(false);
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
   const isAnyCustomOrderModalOpen =
     isMissingPhoneModalOpen ||
     isOrderDetailsOpen ||
     isScheduleConsultationModalOpen ||
     isConfirmScheduleConsultationOpen ||
     isScheduleFittingModalOpen ||
-    isConfirmScheduleFittingOpen;
+    isConfirmScheduleFittingOpen ||
+    isCancelOrderModalOpen;
 
   useModalInteractionLock(isAnyCustomOrderModalOpen, modalRef);
 
@@ -662,6 +666,42 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
     }
   };
 
+  const handleCancelPendingOrder = useCallback((order: CustomOrder) => {
+    setSelectedCancelOrder(order);
+    setIsCancelOrderModalOpen(true);
+  }, []);
+
+  const handleConfirmCancelPendingOrder = useCallback(async () => {
+    if (!selectedCancelOrder) return;
+
+    const orderId = selectedCancelOrder.id || selectedCancelOrder._id;
+    if (!orderId) {
+      toast.error('Unable to find this custom order.');
+      return;
+    }
+
+    setIsCancellingOrder(true);
+    try {
+      const response = await customerAPI.updateCustomOrderStatus(token, orderId, 'cancelled', 'Customer cancelled this custom order request.');
+      const updatedOrder = response?.order as CustomOrder | undefined;
+      if (updatedOrder) {
+        setOrders((prev) => prev.map((item) => ((item.id || item._id) === orderId ? updatedOrder : item)));
+        if (selectedOrderDetails && (selectedOrderDetails.id || selectedOrderDetails._id) === orderId) {
+          setSelectedOrderDetails(updatedOrder);
+        }
+        toast.success('Custom order cancelled.');
+      } else {
+        await fetchOrders();
+      }
+    } catch (error: any) {
+      toast.error(error?.message || 'Failed to cancel custom order.');
+    } finally {
+      setIsCancellingOrder(false);
+      setIsCancelOrderModalOpen(false);
+      setSelectedCancelOrder(null);
+    }
+  }, [fetchOrders, selectedCancelOrder, selectedOrderDetails, token]);
+
   return (
     <div className="min-h-screen py-8 px-4 bg-[#FAF7F0]">
       <div className="max-w-5xl mx-auto">
@@ -945,6 +985,7 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                   const currentStatusIndex = getStatusIndex(order.status);
                   const canScheduleConsultation = order.status === 'design-approval';
                   const canScheduleFitting = order.status === 'fitting';
+                  const canCancelOrder = ['inquiry', 'design-approval'].includes(order.status);
                   const consultationSummary = order.consultationDate && order.consultationTime
                     ? `${order.consultationDate} at ${order.consultationTime}`
                     : null;
@@ -996,41 +1037,57 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                             </p>
                           )}
                         </div>
-                        {canScheduleConsultation && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openScheduleConsultationModal(order);
-                            }}
-                            className={
-                              `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
-                              (consultationSummary
-                                ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
-                                : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
-                            }
-                            style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
-                          >
-                            {consultationSummary ? 'Reschedule Consultation' : 'Set Consultation'}
-                          </button>
-                        )}
-                        {canScheduleFitting && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              openScheduleFittingModal(order);
-                            }}
-                            className={
-                              `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
-                              (fittingSummary
-                                ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
-                                : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
-                            }
-                            style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
-                          >
-                            {fittingSummary ? 'Reschedule Fitting Appointment' : 'Schedule Fitting Appointment'}
-                          </button>
+                        {(canScheduleConsultation || canScheduleFitting || canCancelOrder) && (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {canScheduleConsultation && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openScheduleConsultationModal(order);
+                                }}
+                                className={
+                                  `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
+                                  (consultationSummary
+                                    ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
+                                    : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
+                                }
+                                style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
+                              >
+                                {consultationSummary ? 'Reschedule Consultation' : 'Set Consultation'}
+                              </button>
+                            )}
+                            {canScheduleFitting && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openScheduleFittingModal(order);
+                                }}
+                                className={
+                                  `self-start shrink-0 rounded-full px-4 py-2 text-sm font-bold border-2 transition-colors focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:ring-offset-2 ` +
+                                  (fittingSummary
+                                    ? 'bg-[#FFFBEA] border-[#D4AF37] text-[#B89C2C] shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse'
+                                    : 'bg-[#D4AF37] border-[#D4AF37] text-white shadow-[0_0_0_3px_#D4AF3740,0_2px_8px_#D4AF3720] animate-pulse')
+                                }
+                                style={{ boxShadow: '0 0 0 3px #D4AF3740, 0 2px 8px #D4AF3720' }}
+                              >
+                                {fittingSummary ? 'Reschedule Fitting Appointment' : 'Schedule Fitting Appointment'}
+                              </button>
+                            )}
+                            {canCancelOrder && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleCancelPendingOrder(order);
+                                }}
+                                className="self-start shrink-0 rounded-full px-4 py-2 text-sm font-medium border border-red-300 text-red-600 hover:border-red-600 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                       {/* Progress Steps */}
@@ -1081,6 +1138,53 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
                     </button>
                   </div>
                 )}
+          </div>
+        )}
+
+        {isCancelOrderModalOpen && selectedCancelOrder && (
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm custom order cancellation"
+            onClick={() => {
+              if (!isCancellingOrder) {
+                setIsCancelOrderModalOpen(false);
+                setSelectedCancelOrder(null);
+              }
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl p-8 max-w-md w-full mx-4 max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xl sm:text-2xl font-light mb-2">Confirm Cancellation</h3>
+              <p className="text-sm text-[#6B5D4F] mb-6">
+                Cancel this custom order request for {selectedCancelOrder.orderType}? This action cannot be undone.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={isCancellingOrder}
+                  onClick={() => {
+                    setIsCancelOrderModalOpen(false);
+                    setSelectedCancelOrder(null);
+                  }}
+                  className="flex-1 px-4 py-3 border border-[#E8DCC8] rounded-full hover:border-[#1a1a1a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isCancellingOrder}
+                  onClick={handleConfirmCancelPendingOrder}
+                  className="flex-1 px-4 py-3 text-white font-medium rounded-full border border-[#1a1a1a] bg-[#1a1a1a] hover:bg-[#D4AF37] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isCancellingOrder ? 'Cancelling...' : 'OK'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
