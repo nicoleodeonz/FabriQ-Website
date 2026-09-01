@@ -5852,11 +5852,50 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       .some((value) => String(value).toLowerCase().includes(rentalQuery));
   };
 
+  const isUrgentScheduledPickup = (rental: Pick<AdminRentalDetail, 'status' | 'pickupScheduleDate'>) =>
+    rental.status === 'for_pickup' && Boolean(rental.pickupScheduleDate) && String(rental.pickupScheduleDate).trim() <= toLocalDateKey(new Date());
+
   const filteredPendingRentalCards = pendingRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredActiveRentalCards = displayedActiveRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
   const filteredForPaymentRentals = forPaymentRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
-  const filteredForPickupRentals = forPickupRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
-  const filteredAllActiveStatusRentals = allActiveStatusRentals.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
+  const filteredForPickupRentals = forPickupRentals
+    .filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental))
+    .sort((left, right) => {
+      const leftUrgent = isUrgentScheduledPickup(left);
+      const rightUrgent = isUrgentScheduledPickup(right);
+
+      if (leftUrgent !== rightUrgent) {
+        return Number(rightUrgent) - Number(leftUrgent);
+      }
+
+      const leftDate = String(left.pickupScheduleDate || '').trim();
+      const rightDate = String(right.pickupScheduleDate || '').trim();
+
+      if (leftDate && rightDate && leftDate !== rightDate) {
+        return leftDate.localeCompare(rightDate);
+      }
+
+      return String(left.customerName || '').localeCompare(String(right.customerName || ''));
+    });
+  const filteredAllActiveStatusRentals = allActiveStatusRentals
+    .filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental))
+    .sort((left, right) => {
+      const leftUrgent = isUrgentScheduledPickup(left);
+      const rightUrgent = isUrgentScheduledPickup(right);
+
+      if (leftUrgent !== rightUrgent) {
+        return Number(rightUrgent) - Number(leftUrgent);
+      }
+
+      const leftDate = String(left.pickupScheduleDate || '').trim();
+      const rightDate = String(right.pickupScheduleDate || '').trim();
+
+      if (leftDate && rightDate && leftDate !== rightDate) {
+        return leftDate.localeCompare(rightDate);
+      }
+
+      return String(left.customerName || '').localeCompare(String(right.customerName || ''));
+    });
   const filteredArchivedRentalCards = archivedRentalCards.filter((rental) => matchesSelectedBranch(rental.branch, selectedBranch) && matchesRentalSearch(rental));
 
   const pendingReturns: PendingReturn[] = activeRentalCards
@@ -6399,6 +6438,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   };
 
   const customOrderQuery = customOrderSearchQuery.trim().toLowerCase();
+  const todayKey = toLocalDateKey(new Date());
   const filteredAdminCustomOrders = adminCustomOrders.filter((order) => {
     const isArchivedOrder = Boolean(order.isArchived);
     if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
@@ -6425,9 +6465,49 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(customOrderQuery));
   });
-  const customOrderTotalPages = Math.max(1, Math.ceil(filteredAdminCustomOrders.length / CUSTOM_ORDER_PAGE_SIZE));
+  const sortedAdminCustomOrders = [...filteredAdminCustomOrders].sort((left, right) => {
+    const getPriorityDate = (order: AdminCustomOrderRecord) => {
+      const scheduledDates = [
+        String(order.consultationDate || '').trim(),
+        String(order.fittingDate || '').trim(),
+      ].filter(Boolean);
+
+      if (scheduledDates.length === 0) return null;
+
+      const sortedDates = [...scheduledDates].sort((a, b) => a.localeCompare(b));
+      return sortedDates[0] || null;
+    };
+
+    const getUrgentStatus = (order: AdminCustomOrderRecord) => {
+      const scheduledDates = [
+        String(order.consultationDate || '').trim(),
+        String(order.fittingDate || '').trim(),
+      ].filter(Boolean);
+
+      if (scheduledDates.length === 0) return false;
+
+      return scheduledDates.some((date) => date <= todayKey);
+    };
+
+    const leftIsUrgent = getUrgentStatus(left);
+    const rightIsUrgent = getUrgentStatus(right);
+
+    if (leftIsUrgent !== rightIsUrgent) {
+      return Number(rightIsUrgent) - Number(leftIsUrgent);
+    }
+
+    const leftPriorityDate = getPriorityDate(left);
+    const rightPriorityDate = getPriorityDate(right);
+
+    if (leftPriorityDate && rightPriorityDate && leftPriorityDate !== rightPriorityDate) {
+      return leftPriorityDate.localeCompare(rightPriorityDate);
+    }
+
+    return String(left.customerName || '').localeCompare(String(right.customerName || ''));
+  });
+  const customOrderTotalPages = Math.max(1, Math.ceil(sortedAdminCustomOrders.length / CUSTOM_ORDER_PAGE_SIZE));
   const safeCustomOrderPage = Math.min(customOrderPage, customOrderTotalPages);
-  const paginatedAdminCustomOrders = filteredAdminCustomOrders.slice(
+  const paginatedAdminCustomOrders = sortedAdminCustomOrders.slice(
     (safeCustomOrderPage - 1) * CUSTOM_ORDER_PAGE_SIZE,
     safeCustomOrderPage * CUSTOM_ORDER_PAGE_SIZE,
   );
@@ -8023,11 +8103,16 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                     const canFollowUpForActive = rental.status === 'active' && isWithinReturnFollowUpWindow(rental.endDate);
                     const canFollowUpForPayment = rental.status === 'for_payment';
                     const canFollowUpForPickup = rental.status === 'for_pickup' || rental.status === 'paid_for_confirmation';
+                    const isUrgentPickup = isUrgentScheduledPickup(rental);
 
                     return (
                       <div
                         key={rental.id}
-                        className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                        className={`p-4 rounded-lg border transition-colors ${
+                          isUrgentPickup
+                            ? 'border-[#D4AF37] bg-[#FFFDF8] shadow-[0_0_0_1px_rgba(212,175,55,0.3)]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
                       >
                         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                           <div className="flex-1 min-w-0">
@@ -8268,10 +8353,17 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
 
               {!adminRentalsLoading && rentalManagementView === 'active' && rentalViewFilter === 'for-pickup' && (
                 <div className="space-y-3">
-                  {paginatedForPickupRentals.map((rental) => (
+                  {paginatedForPickupRentals.map((rental) => {
+                    const isUrgentPickup = isUrgentScheduledPickup(rental);
+
+                    return (
                     <div
                       key={rental.id}
-                      className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors"
+                      className={`p-4 rounded-lg border transition-colors ${
+                        isUrgentPickup
+                          ? 'border-[#D4AF37] bg-[#FFFDF8] shadow-[0_0_0_1px_rgba(212,175,55,0.3)]'
+                          : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                      }`}
                     >
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex-1">
@@ -8338,7 +8430,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   {filteredForPickupRentals.length === 0 && (
                     <p className="text-center py-8 text-[#6B5D4F]">{rentalQuery ? 'No rentals for pick up match your search' : 'No rentals for pick up'}</p>
                   )}
@@ -9540,9 +9633,20 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                   {paginatedAdminCustomOrders.map((order) => {
                     const orderId = String(order.id || order._id || '');
                     const orderReferenceId = String(order.referenceId || orderId || '').trim();
+                    const isSameDayPriorityOrder =
+                      [String(order.consultationDate || '').trim(), String(order.fittingDate || '').trim()]
+                        .filter(Boolean)
+                        .some((date) => date <= todayKey);
 
                     return (
-                      <div key={orderId} className="p-4 rounded-lg border border-[#E8DCC8] hover:border-[#D4AF37] transition-colors">
+                      <div
+                        key={orderId}
+                        className={`p-4 rounded-lg border transition-colors ${
+                          isSameDayPriorityOrder
+                            ? 'border-[#D4AF37] bg-[#FFFDF8] shadow-[0_0_0_1px_rgba(212,175,55,0.3)]'
+                            : 'border-[#E8DCC8] hover:border-[#D4AF37]'
+                        }`}
+                      >
                         <div className="flex items-center justify-between gap-4">
                           <div className="flex-1">
                             <div className="flex items-center gap-3 mb-2 flex-wrap">
