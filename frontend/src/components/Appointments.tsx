@@ -911,7 +911,10 @@ export function Appointments({ user, token, selectedGownId, selectedAppointmentT
                     <div className="flex gap-2">
                       {appointment.status === 'scheduled' && (
                         <button
-                          onClick={() => openRescheduleModal(appointment)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openRescheduleModal(appointment);
+                          }}
                           className="px-4 py-2 border border-[#E8DCC8] rounded-full hover:border-[#D4AF37] transition-colors text-sm"
                         >
                           Reschedule
