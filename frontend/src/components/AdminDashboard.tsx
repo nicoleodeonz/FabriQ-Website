@@ -2813,7 +2813,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
           title: isReturnActivity ? 'Return' : 'Pick Up',
           customerName: rental.customerName || 'Unknown customer',
           detail: rental.referenceId || rental.id || 'N/A',
-          branch: getShortBranchLabel(rental.branch),
+          branch: normalizeBranchName(rental.branch),
           timeLabel: formatOverviewScheduleTime(rental.pickupScheduleTime),
           sortValue: getOverviewTimeSortValue(rental.pickupScheduleTime),
         };
@@ -2835,7 +2835,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
               : 'Pickup / Return',
         customerName: appointment.customerName || 'Unknown customer',
         detail: appointment.referenceId || appointment.id || 'N/A',
-        branch: getShortBranchLabel(appointment.branch),
+        branch: normalizeBranchName(appointment.branch),
         timeLabel: formatOverviewScheduleTime(appointment.time),
         sortValue: getOverviewTimeSortValue(appointment.time),
       })),
@@ -2854,7 +2854,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
             title: 'Design Consultation',
             customerName: order.customerName || 'Unknown customer',
             detail: order.referenceId || orderId || 'N/A',
-            branch: getShortBranchLabel(order.branch),
+            branch: normalizeBranchName(order.branch),
             timeLabel: formatOverviewScheduleTime(order.consultationTime),
             sortValue: getOverviewTimeSortValue(order.consultationTime),
           });
@@ -2867,7 +2867,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
             title: 'Fitting Appointment',
             customerName: order.customerName || 'Unknown customer',
             detail: order.referenceId || orderId || 'N/A',
-            branch: getShortBranchLabel(order.branch),
+            branch: normalizeBranchName(order.branch),
             timeLabel: formatOverviewScheduleTime(order.fittingTime),
             sortValue: getOverviewTimeSortValue(order.fittingTime),
           });
@@ -2911,7 +2911,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   const openOverviewExportModal = () => {
     if (!canExportPdfs) return;
 
-    setOverviewExportBranchFilter(selectedBranch === 'All Branches' ? 'All Branches' : getShortBranchLabel(selectedBranch));
+    setOverviewExportBranchFilter(selectedBranch === 'All Branches' ? 'All Branches' : normalizeBranchName(selectedBranch));
     setOverviewExportTypeFilter([...OVERVIEW_EXPORT_TYPE_OPTIONS]);
     setOverviewExportFormat('pdf');
     setShowOverviewExportModal(true);
@@ -7275,7 +7275,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                               <td className="px-6 py-4 text-sm font-medium text-[#1A1A1A] leading-6">{activity.title}</td>
                               <td className="px-6 py-4 text-sm text-[#3D2B1F] leading-6">{activity.customerName}</td>
                               <td className="px-6 py-4 text-sm text-[#6B5D4F] leading-6">{activity.detail}</td>
-                              <td className="px-6 py-4 text-sm text-[#6B5D4F] whitespace-nowrap">{activity.branch}</td>
+                              <td className="px-6 py-4 text-sm text-[#6B5D4F] whitespace-nowrap">{getShortBranchLabel(activity.branch)}</td>
                             </tr>
                           );
                         })}
