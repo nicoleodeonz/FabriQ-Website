@@ -7,6 +7,7 @@ import { sendNotificationAcrossChannels } from '../services/messageDeliveryServi
 import { isElevatedRole } from '../utils/roles.js';
 
 const CUSTOM_ORDER_STATUSES = ['inquiry', 'design-approval', 'in-progress', 'fitting', 'completed', 'cancelled', 'rejected'];
+const ARCHIVED_CUSTOM_ORDER_STATUSES = ['completed', 'cancelled'];
 const CUSTOM_ORDER_REFERENCE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
 
 function buildAdminName(email) {
@@ -204,7 +205,8 @@ export const createCustomOrder = async (req, res) => {
       specialRequests,
       budget,
       branch,
-      designImageUrl
+      designImageUrl,
+      model3dUrl
     } = req.body;
 
     const customer = await CustomerAccount.findById(user.id);
@@ -233,7 +235,8 @@ export const createCustomOrder = async (req, res) => {
       budget,
       branch,
       referenceId: await generateCustomOrderReferenceId(),
-      designImageUrl
+      designImageUrl,
+      model3dUrl
     });
 
     await customOrder.save();
@@ -333,6 +336,8 @@ export const updateCustomOrderStatus = async (req, res) => {
 
       order.status = 'cancelled';
       order.rejectionReason = reason || 'Customer cancelled this custom order request.';
+      order.isArchived = true;
+      order.archivedAt = new Date();
       order.updatedAt = new Date();
       await order.save();
       emitAdminDashboardUpdate({ entity: 'custom-order', action: 'status-updated', id: String(order._id || '') });
@@ -409,7 +414,7 @@ export const updateCustomOrderStatus = async (req, res) => {
     order.updatedAt = new Date();
     await order.save();
 
-    if (nextStatus === 'completed' && !order.isArchived) {
+    if (ARCHIVED_CUSTOM_ORDER_STATUSES.includes(nextStatus) && !order.isArchived) {
       order.isArchived = true;
       order.archivedAt = new Date();
       await order.save();
@@ -422,7 +427,7 @@ export const updateCustomOrderStatus = async (req, res) => {
             type: 'bespoke',
             recordId: String(order._id || ''),
             customerId: String(order.customerId || ''),
-            status: 'completed',
+            status: nextStatus,
             name: order.customerName || '',
             itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
             date: new Date().toISOString().slice(0, 10),
@@ -447,7 +452,7 @@ export const updateCustomOrderStatus = async (req, res) => {
           orderType: order.orderType || '',
           branch: order.branch || '',
           eventDate: order.eventDate || '',
-          status: 'completed',
+          status: nextStatus,
           archivedAt: order.archivedAt,
         },
       });
@@ -588,8 +593,8 @@ export const archiveCustomOrder = async (req, res) => {
     }
 
     const normalizedStatus = String(order.status || '').trim().toLowerCase();
-    if (normalizedStatus !== 'completed') {
-      return res.status(400).json({ message: 'Only completed custom orders can be archived.' });
+    if (!ARCHIVED_CUSTOM_ORDER_STATUSES.includes(normalizedStatus)) {
+      return res.status(400).json({ message: 'Only completed or cancelled custom orders can be archived.' });
     }
 
     if (order.isArchived) {
@@ -610,7 +615,7 @@ export const archiveCustomOrder = async (req, res) => {
           type: 'bespoke',
           recordId: String(order._id || ''),
           customerId: String(order.customerId || ''),
-          status: 'completed',
+          status: normalizedStatus,
           name: order.customerName || '',
           itemOrServiceOrDesign: order.orderType || 'Custom Gown Order',
           date: now.toISOString().slice(0, 10),

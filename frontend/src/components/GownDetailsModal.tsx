@@ -57,6 +57,7 @@ export function GownDetailsModal({
   }, []);
 
   const modalRef = useRef<HTMLDivElement>(null);
+  const modelViewerRef = useRef<any>(null);
   const [isRatingsPanelOpen, setIsRatingsPanelOpen] = useState(false);
   const galleryImages = useMemo(() => {
     const normalized = [
@@ -78,6 +79,43 @@ export function GownDetailsModal({
   const [resolvedModel3dUrl, setResolvedModel3dUrl] = useState(() => String(gown.model3dUrl || '').trim());
   const [isResolvingModel3dUrl, setIsResolvingModel3dUrl] = useState(false);
   const model3dUrl = String(resolvedModel3dUrl || gown.model3dUrl || '').trim();
+
+  const applyModelColor = () => {
+    const model = modelViewerRef.current?.model;
+    if (!model || typeof document === 'undefined') {
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.fillStyle = '#000000';
+    context.fillStyle = gown.color || '#FFFFFF';
+    const normalizedColor = context.fillStyle;
+    const hex = normalizedColor.replace('#', '');
+    const hexRgb = hex.length === 6
+      ? [
+          Number.parseInt(hex.slice(0, 2), 16),
+          Number.parseInt(hex.slice(2, 4), 16),
+          Number.parseInt(hex.slice(4, 6), 16),
+        ]
+      : null;
+    const rgb = hexRgb || normalizedColor.match(/\d+/g)?.map(Number);
+    const factor = rgb && rgb.length >= 3
+      ? [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, 1]
+      : [1, 1, 1, 1];
+
+    model.materials.forEach((material: any) => {
+      material.pbrMetallicRoughness?.setBaseColorFactor(factor);
+    });
+  };
+
+  useEffect(() => {
+    applyModelColor();
+  }, [gown.color, isShowing3D, model3dUrl]);
 
   const displayRatings = useMemo(() => {
     return Array.isArray(gown.ratings)
@@ -329,12 +367,12 @@ export function GownDetailsModal({
                 <div className={`relative overflow-hidden bg-[#F5F1E8] ${isShowing3D ? 'h-full min-h-[32rem] rounded-[28px]' : 'aspect-[3/4]'}`}>
                   {isShowing3D && model3dUrl ? (
                     <model-viewer
+                      ref={modelViewerRef}
                       src={model3dUrl}
                       alt={`${gown.name} 3D view`}
                       loading="eager"
                       camera-controls
                       camera-orbit="90deg 90deg auto"
-                      disable-pan
                       min-camera-orbit="auto 90deg auto"
                       max-camera-orbit="auto 90deg auto"
                       interaction-prompt="none"
@@ -351,6 +389,7 @@ export function GownDetailsModal({
                         background: 'radial-gradient(circle at center, #7a7a7a 0%, #575757 38%, #343434 68%, #1f1f1f 100%)',
                         display: 'block',
                       }}
+                      onLoad={applyModelColor}
                     />
                   ) : (
                     <ImageWithFallback

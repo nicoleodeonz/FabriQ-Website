@@ -1,6 +1,6 @@
 import { API_BASE_URL } from './apiConfig';
 
-export type AdminCustomOrderStatus = 'inquiry' | 'design-approval' | 'in-progress' | 'fitting' | 'completed' | 'rejected';
+export type AdminCustomOrderStatus = 'inquiry' | 'design-approval' | 'in-progress' | 'fitting' | 'completed' | 'cancelled' | 'rejected';
 
 export interface AdminCustomOrderRecord {
   _id?: string;
@@ -28,6 +28,7 @@ export interface AdminCustomOrderRecord {
   isArchived?: boolean;
   archivedAt?: string | null;
   designImageUrl?: string;
+  model3dUrl?: string;
   createdAt?: string;
   updatedAt?: string;
 }

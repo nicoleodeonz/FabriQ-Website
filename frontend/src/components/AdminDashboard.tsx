@@ -31,8 +31,84 @@ import type { ColorAnalysisEntry, ColorAnalysisSummary } from '../services/color
 import { getGeneralAnalytics, getBusinessActivityAnalytics } from '../services/generalAnalyticsAPI';
 import type { GeneralAnalyticsResponse, BusinessActivityResponse } from '../services/generalAnalyticsAPI';
 import { Doughnut, Line } from 'react-chartjs-2';
+import '@google/model-viewer/dist/model-viewer.min.js';
+import { createPortal } from 'react-dom';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, LineElement, PointElement, ChartTooltip, Legend);
+
+interface CustomOrder3DPreviewProps {
+  src: string;
+  color?: string;
+  alt: string;
+}
+
+function CustomOrder3DPreview({ src, color, alt }: CustomOrder3DPreviewProps) {
+  const viewerRef = useRef<any>(null);
+
+  const applyColor = () => {
+    const model = viewerRef.current?.model;
+    if (!model || typeof document === 'undefined') {
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    context.fillStyle = '#FFFFFF';
+    context.fillStyle = color?.trim() || '#FFFFFF';
+    const normalizedColor = context.fillStyle;
+    const hex = normalizedColor.replace('#', '');
+    const hexRgb = hex.length === 6
+      ? [
+          Number.parseInt(hex.slice(0, 2), 16),
+          Number.parseInt(hex.slice(2, 4), 16),
+          Number.parseInt(hex.slice(4, 6), 16),
+        ]
+      : null;
+    const rgb = hexRgb || normalizedColor.match(/\d+/g)?.map(Number);
+    const factor = rgb && rgb.length >= 3
+      ? [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, 1]
+      : [1, 1, 1, 1];
+
+    model.materials.forEach((material: any) => {
+      material.pbrMetallicRoughness?.setBaseColorFactor(factor);
+    });
+  };
+
+  useEffect(() => {
+    applyColor();
+  }, [color, src]);
+
+  return (
+    <model-viewer
+      ref={viewerRef}
+      src={src}
+      alt={alt}
+      loading="eager"
+      camera-controls
+      camera-orbit="0deg 90deg auto"
+      min-camera-orbit="auto 90deg auto"
+      max-camera-orbit="auto 90deg auto"
+      interaction-prompt="none"
+      touch-action="pan-y"
+      environment-image="neutral"
+      tone-mapping="neutral"
+      shadow-intensity="1"
+      exposure="1"
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'block',
+        cursor: 'grab',
+        background: 'radial-gradient(circle at center, #7a7a7a 0%, #575757 38%, #343434 68%, #1f1f1f 100%)',
+      }}
+      onLoad={applyColor}
+    />
+  );
+}
 
 export type { InventoryItem };
 
@@ -633,6 +709,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   const [adjustCustomOrderError, setAdjustCustomOrderError] = useState<string | null>(null);
   const [rejectCustomOrderReason, setRejectCustomOrderReason] = useState('');
   const [rejectCustomOrderError, setRejectCustomOrderError] = useState<string | null>(null);
+
   const [rentalViewFilter, setRentalViewFilter] = useState<'all' | 'pending' | 'for-payment' | 'for-pickup' | 'active' | 'returns'>('all');
   const [showRentalExportModal, setShowRentalExportModal] = useState(false);
   const [selectedRentalExportFilters, setSelectedRentalExportFilters] = useState<RentalExportSelectableFilter[]>(['pending', 'active', 'for-payment', 'for-pickup', 'returns']);
@@ -6456,7 +6533,9 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
   const customOrderQuery = customOrderSearchQuery.trim().toLowerCase();
   const todayKey = toLocalDateKey(new Date());
   const filteredAdminCustomOrders = adminCustomOrders.filter((order) => {
-    const isArchivedOrder = Boolean(order.isArchived);
+    const isArchivedOrder = Boolean(order.isArchived)
+      || order.status === 'completed'
+      || order.status === 'cancelled';
     if (!matchesSelectedBranch(order.branch, selectedBranch)) return false;
     const matchesStatus = customOrderManagementView === 'archive'
       ? isArchivedOrder || order.status === 'rejected'
@@ -9511,7 +9590,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
               </div>
             )}
 
-            {showCustomOrderExportModal && (
+            {showCustomOrderExportModal && createPortal((
               <div
                 className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                 role="dialog"
@@ -9614,7 +9693,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                   </div>
                 </div>
               </div>
-            )}
+            ), document.body)}
 
             {customOrderManagementView === 'archive' && (
               <p className="text-sm text-[#6B5D4F]">Showing archived custom orders.</p>
@@ -12401,7 +12480,15 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                         </div>
                       </div>
 
-                      {selectedCustomOrder.designImageUrl ? (
+                      {selectedCustomOrder.model3dUrl ? (
+                        <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
+                          <CustomOrder3DPreview
+                            src={selectedCustomOrder.model3dUrl}
+                            color={selectedCustomOrder.preferredColors}
+                            alt={`${selectedCustomOrder.orderType} 3D preview`}
+                          />
+                        </div>
+                      ) : selectedCustomOrder.designImageUrl ? (
                         <div className="w-full">
                           <div className="w-full rounded-2xl border-2 border-[#FAF7F0] shadow-lg overflow-hidden bg-white aspect-[3/4]">
                             <ImageWithFallback

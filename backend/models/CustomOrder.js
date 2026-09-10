@@ -68,6 +68,7 @@ const CustomOrderSchema = new mongoose.Schema({
     default: null,
   },
   designImageUrl: { type: String },
+  model3dUrl: { type: String },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

@@ -33,7 +33,8 @@ interface CustomOrder {
   contactNumber?: string;
   email?: string;
   orderType: string;
-  status: 'inquiry' | 'design-approval' | 'in-progress' | 'fitting' | 'completed' | 'rejected';
+  status: 'inquiry' | 'design-approval' | 'in-progress' | 'fitting' | 'completed' | 'cancelled' | 'rejected';
+  isArchived?: boolean;
   eventDate?: string;
   preferredColors?: string;
   fabricPreference?: string;
@@ -208,7 +209,10 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
       return;
     }
 
-    const isHistorical = matchedOrder.status === 'completed' || matchedOrder.status === 'rejected';
+    const isHistorical = Boolean(matchedOrder.isArchived)
+      || matchedOrder.status === 'completed'
+      || matchedOrder.status === 'cancelled'
+      || matchedOrder.status === 'rejected';
     setActiveTab(isHistorical ? 'history' : 'existing');
     setSelectedOrderDetails(matchedOrder);
     setIsOrderDetailsOpen(true);
@@ -239,7 +243,10 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
       return;
     }
 
-    const isHistorical = matchedOrder.status === 'completed' || matchedOrder.status === 'rejected';
+    const isHistorical = Boolean(matchedOrder.isArchived)
+      || matchedOrder.status === 'completed'
+      || matchedOrder.status === 'cancelled'
+      || matchedOrder.status === 'rejected';
     setActiveTab(isHistorical ? 'history' : 'existing');
     setSelectedOrderDetails(matchedOrder);
     setIsOrderDetailsOpen(true);
@@ -383,12 +390,18 @@ export function CustomOrders({ user, token, selectedOrderId, selectedOrderNotifi
   };
 
   const currentOrders = useMemo(
-    () => orders.filter((order) => order.status !== 'completed' && order.status !== 'rejected'),
+    () => orders.filter((order) => !order.isArchived
+      && order.status !== 'completed'
+      && order.status !== 'cancelled'
+      && order.status !== 'rejected'),
     [orders]
   );
 
   const orderHistory = useMemo(
-    () => orders.filter((order) => order.status === 'completed' || order.status === 'rejected'),
+    () => orders.filter((order) => Boolean(order.isArchived)
+      || order.status === 'completed'
+      || order.status === 'cancelled'
+      || order.status === 'rejected'),
     [orders]
   );
 
