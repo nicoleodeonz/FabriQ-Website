@@ -81,8 +81,9 @@ export function EditProfileModal({
   const customerPhoneNumber = customerData.phoneNumber || '';
   const customerAddress = customerData.address || '';
   const customerPreferredBranch = customerData.preferredBranch || '';
-  const isStaffAccount = String(role || '').trim().toLowerCase() === 'staff';
-  const shouldHideBranchField = isStaffAccount;
+  const normalizedRole = String(role || '').trim().toLowerCase();
+  const isStaffAccount = normalizedRole === 'staff';
+  const shouldHideBranchField = isStaffAccount || normalizedRole === 'admin';
 
   const [formData, setFormData] = useState(customerData);
   const [error, setError] = useState('');
