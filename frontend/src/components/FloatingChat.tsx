@@ -68,6 +68,31 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
     return `${message.sender}|${String(message.text || '').trim().toLowerCase()}|${Math.floor(message.timestamp.getTime() / 5000)}`;
   };
 
+  const mergeMessage = (incoming: ChatMessage) => {
+    setMessages((prev) => {
+      const existingById = prev.findIndex((message) => message.id === incoming.id);
+      if (existingById >= 0) {
+        const next = [...prev];
+        next[existingById] = incoming;
+        return next;
+      }
+
+      const temporaryMatch = prev.findIndex((message) => (
+        message.id.startsWith('msg-')
+        && message.sender === incoming.sender
+        && message.text.trim() === incoming.text.trim()
+        && Math.abs(message.timestamp.getTime() - incoming.timestamp.getTime()) < 60_000
+      ));
+      if (temporaryMatch >= 0) {
+        const next = [...prev];
+        next[temporaryMatch] = incoming;
+        return next;
+      }
+
+      return [...prev, incoming];
+    });
+  };
+
   const resolvedGuestToken = guestToken || (customerId ? '' : ensureGuestToken());
 
   useEffect(() => {
@@ -133,22 +158,9 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
           timestamp: new Date(message.createdAt),
         }));
 
-        setMessages((prev) => {
-          const existingSignatures = new Set(prev.map((message) => makeMessageSignature(message)));
-          const newEntries = mappedMessages.filter((message) => {
-            const signature = makeMessageSignature({
-              sender: message.sender,
-              text: message.text,
-              timestamp: message.timestamp,
-            });
-            return !existingSignatures.has(signature);
-          });
-
-          if (!newEntries.length) return prev;
-          const newestTimestamp = Math.max(...newEntries.map((message) => message.timestamp.getTime()));
-          lastSeenMessageTimeRef.current = newestTimestamp;
-          return [...prev, ...newEntries];
-        });
+        mappedMessages.forEach(mergeMessage);
+        const newestTimestamp = Math.max(...mappedMessages.map((message) => message.timestamp.getTime()));
+        lastSeenMessageTimeRef.current = newestTimestamp;
       } catch (err) {
         console.error('[FloatingChat] pollForNewMessages failed', err);
       }
@@ -209,6 +221,14 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
 
     try {
       const result = await chatAPI.postChatMessage(payload);
+      if (result.message) {
+        mergeMessage({
+          id: result.message._id,
+          sender: 'user',
+          text: result.message.text || result.message.chat || text,
+          timestamp: new Date(result.message.createdAt),
+        });
+      }
       const nextConversationId = result?.conversationId || conversationId;
       if (nextConversationId) {
         setConversationId(nextConversationId);
@@ -229,15 +249,12 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
         aiDisabledRef.current = true;
         const botReply = await chatAPI.postChatbotReply(botPayload);
         const staffReplyText = botReply?.message?.text || 'Please wait while I connect you to a Staff. It might take a few minutes.';
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `msg-${Date.now()}-staff-handoff`,
-            sender: 'admin',
-            text: staffReplyText,
-            timestamp: new Date(),
-          },
-        ]);
+        mergeMessage({
+          id: botReply.message?._id || `msg-${Date.now()}-staff-handoff`,
+          sender: 'admin',
+          text: staffReplyText,
+          timestamp: botReply.message?.createdAt ? new Date(botReply.message.createdAt) : new Date(),
+        });
         window.dispatchEvent(new CustomEvent('fabriq-chat-updated', {
           detail: { conversationId: botReply.conversationId },
         }));
@@ -250,15 +267,12 @@ export function FloatingChat({ showTooltip = true, customerId, guestToken, onOpe
 
       const botReply = await chatAPI.postChatbotReply(botPayload);
       if (!botReply.skipped && botReply.message) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `msg-${Date.now()}-reply`,
-            sender: 'admin',
-            text: botReply.message.text,
-            timestamp: new Date(),
-          },
-        ]);
+        mergeMessage({
+          id: botReply.message._id,
+          sender: 'admin',
+          text: botReply.message.text,
+          timestamp: new Date(botReply.message.createdAt),
+        });
         window.dispatchEvent(new CustomEvent('fabriq-chat-updated', {
           detail: { conversationId: botReply.conversationId },
         }));
