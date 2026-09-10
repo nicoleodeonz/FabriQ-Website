@@ -810,22 +810,24 @@ export function CustomerProfile({ onLogout, onRequestLogout, onForceReauth, onUs
             disabled={true}
             isPhone={true}
           />
-          <div>
-            <label className="block text-sm text-[#6B5D4F] mb-2">
-              {normalizedUserRole === 'staff' ? 'Assigned Branch' : 'Preferred Branch'}
-            </label>
-            <select
-              key="preferredBranch"
-              defaultValue={displayedProfile.preferredBranch}
-              disabled={true}
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed"
-            >
-              <option value="Taguig Main - Cadena de Amor">Taguig Main - Cadena de Amor</option>
-              <option value="BGC Branch">BGC Branch</option>
-              <option value="Makati Branch">Makati Branch</option>
-              <option value="Quezon City">Quezon City</option>
-            </select>
-          </div>
+          {normalizedUserRole !== 'admin' && (
+            <div>
+              <label className="block text-sm text-[#6B5D4F] mb-2">
+                {normalizedUserRole === 'staff' ? 'Assigned Branch' : 'Preferred Branch'}
+              </label>
+              <select
+                key="preferredBranch"
+                defaultValue={displayedProfile.preferredBranch}
+                disabled={true}
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 bg-gray-100 text-gray-500 cursor-not-allowed"
+              >
+                <option value="Taguig Main - Cadena de Amor">Taguig Main - Cadena de Amor</option>
+                <option value="BGC Branch">BGC Branch</option>
+                <option value="Makati Branch">Makati Branch</option>
+                <option value="Quezon City">Quezon City</option>
+              </select>
+            </div>
+          )}
         </div>
         {normalizedUserRole !== 'staff' && (
           <div>
