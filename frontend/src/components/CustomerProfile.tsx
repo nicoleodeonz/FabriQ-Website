@@ -1695,7 +1695,7 @@ export function CustomerProfile({ onLogout, onRequestLogout, onForceReauth, onUs
         )}
 
         {pendingFavoriteRemoval && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
             <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-8 shadow-2xl">
               <h3 className="mb-3 text-2xl font-light text-black">Unfavorite this gown?</h3>
               <p className="mb-6 text-sm leading-6 text-[#6B5D4F]">

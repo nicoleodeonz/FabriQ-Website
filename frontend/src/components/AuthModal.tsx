@@ -644,7 +644,7 @@ export function AuthModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
 
       {!isReadOnlyPreviewMode && (
         <div
@@ -947,7 +947,7 @@ export function AuthModal({
 
       {(isTermsOpen || isReadOnlyPreviewMode) && !isVerifyingSignUp && (
         <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
           <div
             className="relative z-10 w-full overflow-hidden border-2 border-[#3A342E] shadow-[8px_8px_0_rgba(58,52,46,0.35)]"
             style={{ maxWidth: '720px', height: '500px', backgroundColor: '#F7F3EC' }}
@@ -1086,7 +1086,7 @@ export function AuthModal({
 
       {isPhoneVerificationModalOpen && (
         <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => !isSendingPhoneVerificationCode && !isVerifyingPhoneVerificationCode && setIsPhoneVerificationModalOpen(false)} />
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !isSendingPhoneVerificationCode && !isVerifyingPhoneVerificationCode && setIsPhoneVerificationModalOpen(false)} />
           <div ref={phoneVerificationModalRef} tabIndex={-1} className="relative z-10 w-full max-w-md rounded-lg bg-[#FAF7F0] p-6 shadow-2xl">
             <button
               type="button"
