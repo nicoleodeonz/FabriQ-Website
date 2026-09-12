@@ -246,20 +246,36 @@ export function AdminMessages({ token, currentUser, onBack }: AdminMessagesPageP
             )}
             <ul>
               {conversations.map((conv) => {
-                const isActive = String(conv.conversationId || '').trim() === normalizedSelectedId;
+                const conversationId = String(conv.conversationId || '').trim();
+                const isActive = conversationId !== ''
+                  && conversationId === String(selected?.conversationId || normalizedSelectedId).trim();
                 const hasUnread = conv.unreadCount > 0;
                 return (
-                  <li key={conv.conversationId}>
+                  <li key={conversationId}>
                     <button
-                      onClick={() => void loadMessages(conv.conversationId)}
+                      onClick={() => {
+                        const nextId = String(conv.conversationId || '').trim();
+                        if (!nextId) return;
+                        setSelectedId(nextId);
+                        void loadMessages(nextId);
+                      }}
+                      aria-current={isActive ? 'true' : undefined}
+                      data-selected={isActive ? 'true' : 'false'}
                       className={`w-full text-left pl-7 pr-7 py-4 border-b border-[#F0E6D2] transition-all ${
                         isActive
-                          ? 'bg-[#F9F4E8] border-l-4 border-l-[#D4AF37] shadow-[inset_0_0_0_1px_rgba(212,175,55,0.25)]'
+                          ? 'border-l-4 border-l-[#D4AF37] font-medium'
                           : hasUnread
                             ? 'bg-[#FFF8EC] hover:bg-[#FDF1DD]'
                             : 'hover:bg-[#FDFAF4]'
                       }`}
-                      style={hasUnread && !isActive ? { boxShadow: 'inset 3px 0 0 #D4AF37' } : undefined}
+                      style={isActive
+                        ? {
+                            backgroundColor: '#FFF0C2',
+                            boxShadow: 'inset 0 0 0 2px rgba(212, 175, 55, 0.55), 0 2px 8px rgba(128, 102, 77, 0.14)',
+                          }
+                        : hasUnread
+                          ? { boxShadow: 'inset 3px 0 0 #D4AF37' }
+                          : undefined}
                     >
                       <div className="flex items-stretch justify-between gap-4">
                         <div className="flex min-w-0 flex-1 items-center gap-3">

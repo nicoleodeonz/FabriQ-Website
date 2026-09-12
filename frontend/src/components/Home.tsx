@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, Calendar, ChevronLeft, ChevronRight, Heart, Ruler, Sparkles } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowRight, Calendar, ChevronLeft, ChevronRight, Heart, Ruler, Sparkles, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { GownDetailsModal, type GownDetails } from './GownDetailsModal';
@@ -836,7 +837,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
 
       {showLiveViewModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={() => setShowLiveViewModal(false)}
           role="dialog"
           aria-modal="true"
@@ -861,147 +862,150 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
         </div>
       )}
 
-      {showFeaturedSelector && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => !selectorSaving && setShowFeaturedSelector(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Select featured gowns"
-        >
+      {showFeaturedSelector &&
+        createPortal(
           <div
-            className="modal-gradient-surface flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden p-4 md:p-6"
-            onClick={(event) => event.stopPropagation()}
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+            onClick={() => !selectorSaving && setShowFeaturedSelector(false)}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Select featured gowns"
           >
-            <div className="mb-6 flex flex-col gap-3">
-              <div>
-                <h3 className="font-serif text-3xl font-light text-[#1a1a1a]">Select Gowns</h3>
-                <div className="mt-2 flex flex-wrap items-center gap-y-1 text-sm text-[#6B5D4F]">
-                  <span>{selectedFeaturedIds.length} / {MAX_FEATURED_GOWNS} selected</span>
-                  <span className="px-3">|</span>
-                  <p>Choose up to {MAX_FEATURED_GOWNS} gowns from the database to replace the current Featured Gowns section.</p>
+            <div
+              className="modal-gradient-surface flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col overflow-hidden p-4 md:p-6"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-6 flex flex-col gap-3">
+                <div>
+                  <h3 className="font-serif text-3xl font-light text-[#1a1a1a]">Select Gowns</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-y-1 text-sm text-[#6B5D4F]">
+                    <span>{selectedFeaturedIds.length} / {MAX_FEATURED_GOWNS} selected</span>
+                    <span className="px-3">|</span>
+                    <p>Choose up to {MAX_FEATURED_GOWNS} gowns from the database to replace the current Featured Gowns section.</p>
+                  </div>
+                </div>
+                <div className="max-w-sm">
+                  <input
+                    type="search"
+                    value={selectorSearch}
+                    onChange={(event) => setSelectorSearch(event.target.value)}
+                    placeholder="Search by ID, name, category, branch, or status"
+                    className="w-full rounded-lg border border-[#E8DCC8] px-4 py-3 text-sm text-[#1a1a1a] outline-none transition-colors placeholder:text-[#9B8B79] focus:border-[#D4AF37]"
+                    aria-label="Search gowns"
+                  />
                 </div>
               </div>
-              <div className="max-w-sm">
-                <input
-                  type="search"
-                  value={selectorSearch}
-                  onChange={(event) => setSelectorSearch(event.target.value)}
-                  placeholder="Search by ID, name, category, branch, or status"
-                  className="w-full rounded-lg border border-[#E8DCC8] px-4 py-3 text-sm text-[#1a1a1a] outline-none transition-colors placeholder:text-[#9B8B79] focus:border-[#D4AF37]"
-                  aria-label="Search gowns"
-                />
-              </div>
-            </div>
 
-            {selectorError && (
-              <div className="mb-4 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {selectorError}
-              </div>
-            )}
-
-            <div className="min-h-0 flex-1 overflow-y-auto border border-[#E8DCC8]">
-              {selectorLoading ? (
-                <div className="px-4 py-6 text-sm text-[#6B5D4F]">Loading gowns...</div>
-              ) : inventoryOptions.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns found.</div>
-              ) : filteredInventoryOptions.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns match your search.</div>
-              ) : (
-                <table className="w-full min-w-[720px]">
-                  <thead className="bg-[#FAF7F0] sticky top-0">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Select</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">ID</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Name</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Category</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Price</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Branch</th>
-                      <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#E8DCC8]">
-                    {paginatedInventoryOptions.map((item) => {
-                      const isSelected = selectedFeaturedIds.includes(item.id);
-
-                      return (
-                        <tr
-                          key={item.id}
-                          className="cursor-pointer transition-colors hover:bg-[#FAF7F0]"
-                          onClick={() => toggleFeaturedSelection(item.id)}
-                        >
-                          <td className="px-4 py-3">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleFeaturedSelection(item.id)}
-                              onClick={(event) => event.stopPropagation()}
-                              className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
-                            />
-                          </td>
-                          <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.sku ?? item.id}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-[#1a1a1a]">{item.name}</td>
-                          <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.category}</td>
-                          <td className="px-4 py-3 text-sm text-[#1a1a1a]">{formatPriceLabel(Number(item.price || 0))}</td>
-                          <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.branch}</td>
-                          <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              {selectorError && (
+                <div className="mb-4 border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {selectorError}
+                </div>
               )}
-            </div>
 
-            {!selectorLoading && filteredInventoryOptions.length > FEATURED_SELECTOR_PAGE_SIZE && (
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <div className="text-sm leading-none text-[#6B5D4F]">
-                  Showing {(safeSelectorPage - 1) * FEATURED_SELECTOR_PAGE_SIZE + 1}-
-                  {Math.min(safeSelectorPage * FEATURED_SELECTOR_PAGE_SIZE, filteredInventoryOptions.length)} of {filteredInventoryOptions.length}
-                </div>
-                <div className="ml-auto flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setSelectorPage((page) => Math.max(1, page - 1))}
-                    disabled={safeSelectorPage === 1}
-                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
-                  >
-                    Previous
-                  </button>
-                  <div className="text-sm text-[#6B5D4F]">Page {safeSelectorPage} of {featuredSelectorPageCount}</div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectorPage((page) => Math.min(featuredSelectorPageCount, page + 1))}
-                    disabled={safeSelectorPage === featuredSelectorPageCount}
-                    className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
-                  >
-                    Next
-                  </button>
-                </div>
+              <div className="min-h-0 flex-1 overflow-y-auto border border-[#E8DCC8]">
+                {selectorLoading ? (
+                  <div className="px-4 py-6 text-sm text-[#6B5D4F]">Loading gowns...</div>
+                ) : inventoryOptions.length === 0 ? (
+                  <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns found.</div>
+                ) : filteredInventoryOptions.length === 0 ? (
+                  <div className="px-4 py-6 text-sm text-[#6B5D4F]">No gowns match your search.</div>
+                ) : (
+                  <table className="w-full min-w-[720px]">
+                    <thead className="bg-[#FAF7F0] sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Select</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">ID</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Name</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Category</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Price</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Branch</th>
+                        <th className="px-4 py-3 text-left text-sm text-[#6B5D4F]">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8DCC8]">
+                      {paginatedInventoryOptions.map((item) => {
+                        const isSelected = selectedFeaturedIds.includes(item.id);
+
+                        return (
+                          <tr
+                            key={item.id}
+                            className="cursor-pointer transition-colors hover:bg-[#FAF7F0]"
+                            onClick={() => toggleFeaturedSelection(item.id)}
+                          >
+                            <td className="px-4 py-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleFeaturedSelection(item.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                className="h-4 w-4 border-[#CBBBA5] text-[#1a1a1a] focus:ring-[#D4AF37]"
+                              />
+                            </td>
+                            <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.sku ?? item.id}</td>
+                            <td className="px-4 py-3 text-sm font-medium text-[#1a1a1a]">{item.name}</td>
+                            <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.category}</td>
+                            <td className="px-4 py-3 text-sm text-[#1a1a1a]">{formatPriceLabel(Number(item.price || 0))}</td>
+                            <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.branch}</td>
+                            <td className="px-4 py-3 text-sm text-[#6B5D4F]">{item.status.charAt(0).toUpperCase() + item.status.slice(1)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
-            )}
 
-            <div className="mt-6 flex flex-col justify-center gap-3 md:flex-row md:justify-center">
-              <button
-                type="button"
-                onClick={() => setShowFeaturedSelector(false)}
-                disabled={selectorSaving}
-                className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveFeaturedGowns()}
-                disabled={selectorSaving || selectorLoading}
-                className="px-6 py-3 rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] text-white font-medium hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors disabled:opacity-50"
-              >
-                {selectorSaving ? 'Saving...' : 'Save Featured Gowns'}
-              </button>
+              {!selectorLoading && filteredInventoryOptions.length > FEATURED_SELECTOR_PAGE_SIZE && (
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <div className="text-sm leading-none text-[#6B5D4F]">
+                    Showing {(safeSelectorPage - 1) * FEATURED_SELECTOR_PAGE_SIZE + 1}-
+                    {Math.min(safeSelectorPage * FEATURED_SELECTOR_PAGE_SIZE, filteredInventoryOptions.length)} of {filteredInventoryOptions.length}
+                  </div>
+                  <div className="ml-auto flex items-center justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectorPage((page) => Math.max(1, page - 1))}
+                      disabled={safeSelectorPage === 1}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <div className="text-sm text-[#6B5D4F]">Page {safeSelectorPage} of {featuredSelectorPageCount}</div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectorPage((page) => Math.min(featuredSelectorPageCount, page + 1))}
+                      disabled={safeSelectorPage === featuredSelectorPageCount}
+                      className="px-4 py-2 border border-[#E8DCC8] rounded-full text-sm transition-colors hover:border-[#D4AF37] disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-6 flex flex-col justify-center gap-3 md:flex-row md:justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowFeaturedSelector(false)}
+                  disabled={selectorSaving}
+                  className="px-6 py-3 rounded-lg border border-[#E8DCC8] text-[#6B5D4F] hover:border-[#D4AF37] hover:text-black transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveFeaturedGowns()}
+                  disabled={selectorSaving || selectorLoading}
+                  className="px-6 py-3 rounded-lg border border-[#1a1a1a] bg-[#1a1a1a] text-white font-medium hover:bg-[#D4AF37] hover:border-[#D4AF37] transition-colors disabled:opacity-50"
+                >
+                  {selectorSaving ? 'Saving...' : 'Save Featured Gowns'}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )
+      }
 
       {selectedFeaturedGown && (
         <GownDetailsModal

@@ -27,9 +27,9 @@ const accountTermsSections = [
   {
     title: '2. Account Registration',
     body: [
-      'Users must provide valid and truthful information, including a working email address.',
-      'You are responsible for maintaining the confidentiality of your account credentials.',
-      'You agree to notify us immediately of any unauthorized use of your account.',
+      'Users must provide valid and truthful information, including a working email address and other information required to create an account.',
+      'You are responsible for maintaining the confidentiality of your account credentials and for all activities performed through your account.',
+      'You agree to notify Hannah Vanessa Boutique immediately of any unauthorized use of your account.',
     ],
   },
   {
@@ -37,71 +37,83 @@ const accountTermsSections = [
     body: [
       'By using this website, you agree:',
       'Not to engage in fraudulent, illegal, or harmful activities.',
-      'Not to upload or transmit viruses, malicious code, or spam.',
-      'To use the website only for lawful purposes related to browsing and purchasing products.',
-      'To respect other users and avoid abusive or inappropriate behavior.',
+      'Not to upload or transmit viruses, malicious code, spam, or other harmful content.',
+      'To use our services only for lawful purposes related to browsing rental items, making rental reservations, booking appointments, and placing bespoke or custom tailoring orders.',
+      'To provide accurate information when making reservations, appointments, or orders.',
+      'To respect other users, staff, and administrators and avoid abusive, threatening, or inappropriate behavior.',
     ],
   },
   {
-    title: '4. Orders and Payments',
+    title: '4. Rentals, Appointments, and Custom Orders',
     body: [
-      'All orders are subject to availability and confirmation.',
-      'Prices and product descriptions may change without prior notice.',
-      'You agree to provide accurate payment and billing information.',
-      'Hannah Vanessa Boutique reserves the right to cancel or refuse any order if fraud or unauthorized activity is suspected.',
+      'All rental reservations, appointments, and bespoke/custom orders are subject to availability and confirmation by Hannah Vanessa Boutique.',
+      'Rental availability, prices, product descriptions, and service details may change without prior notice.',
+      'Customers are responsible for providing accurate information required for rental reservations, appointments, measurements, and custom orders.',
+      'Submitting a reservation or order does not guarantee acceptance. Hannah Vanessa Boutique reserves the right to decline or cancel a reservation, appointment, or order when necessary, including in cases of suspected fraud, unauthorized activity, inaccurate information, or unavailability.',
     ],
   },
   {
-    title: '5. Privacy and Data Protection',
+    title: '5. Payments',
     body: [
-      'Your personal data will be handled in accordance with the Data Privacy Act of 2012 (Republic Act No. 10173).',
-      'By creating an account, you consent to the collection, use, and storage of your personal information for order processing and service improvement.',
-      'We implement reasonable security measures to protect your data, but absolute security cannot be guaranteed.',
+      'Submitting a rental reservation, appointment, or bespoke/custom order through the website or application does not require immediate payment.',
+      'All reservations and orders are subject to review and acceptance by Hannah Vanessa Boutique. Payment instructions and any applicable rental fees, deposits, service charges, or other charges will only be provided after the boutique accepts and confirms the reservation or order.',
+      'Customers are responsible for providing accurate information when completing a reservation or order.',
+      'Hannah Vanessa Boutique reserves the right to decline or cancel a reservation or order when necessary, including in cases of suspected fraud, unauthorized activity, inaccurate information, or unavailability.',
     ],
   },
   {
-    title: '6. Account Suspension or Termination',
+    title: '6. Privacy and Data Protection',
+    body: [
+      'Your personal data will be handled in accordance with the Data Privacy Act of 2012 (Republic Act No. 10173) and our Privacy Policy.',
+      'By creating an account and using our services, you acknowledge that certain personal information may be collected and processed to provide our services, manage accounts, process rental reservations and custom orders, provide appointments, communicate with customers, and improve our services.',
+      'Information generated through certain features, including analytics and AI-powered features, may also be processed for service improvement and analytics purposes.',
+      'We implement reasonable technical and organizational measures to protect personal information. However, no method of electronic storage or transmission can guarantee absolute security.',
+      'For more information about how your personal information is collected, used, stored, and protected, please refer to our Privacy Policy.',
+    ],
+  },
+  {
+    title: '7. Account Suspension or Termination',
     body: [
       'We reserve the right to:',
       'Suspend or terminate accounts that violate these Terms and Conditions.',
-      'Remove or restrict access to content that is unlawful or harmful.',
-      'Deny service at our discretion, with or without prior notice.',
+      'Remove or restrict access to content that is unlawful, harmful, or inappropriate.',
+      'Restrict or deny access to our services when necessary to protect the business, its customers, or its systems.',
     ],
   },
   {
-    title: '7. Intellectual Property',
+    title: '8. Intellectual Property',
     body: [
-      'All content on this website, including logos, images, text, and designs, are the property of Hannah Vanessa Boutique.',
-      'You may not reproduce, distribute, or exploit any content without prior written permission.',
+      'All content on our website and application, including logos, images, text, designs, graphics, software, and other materials, is owned by or licensed to Hannah Vanessa Boutique unless otherwise stated.',
+      'You may not reproduce, distribute, modify, or commercially exploit any content without prior written permission from Hannah Vanessa Boutique.',
     ],
   },
   {
-    title: '8. Limitation of Liability',
+    title: '9. Limitation of Liability',
     body: [
-      'Hannah Vanessa Boutique shall not be liable for any direct, indirect, or incidental damages arising from the use of the website.',
-      'All services are provided on an "as is" and "as available" basis.',
+      'Hannah Vanessa Boutique shall not be liable for any direct, indirect, incidental, or consequential damages arising from the use of our website, application, or services, to the extent permitted by applicable law.',
+      'Our services are provided on an "as is" and "as available" basis.',
     ],
   },
   {
-    title: '9. Changes to Terms',
+    title: '10. Changes to These Terms',
     body: [
-      'We reserve the right to update or modify these Terms at any time.',
-      'Continued use of the website after changes constitutes your acceptance of the updated Terms.',
+      'We reserve the right to update or modify these Terms and Conditions at any time.',
+      'Updated Terms will be made available through our website or application. Continued use of our services after changes are posted constitutes acceptance of the updated Terms.',
     ],
   },
   {
-    title: '10. Governing Law',
+    title: '11. Governing Law',
     body: [
       'These Terms and Conditions shall be governed by and interpreted in accordance with the laws of the Republic of the Philippines.',
     ],
   },
   {
-    title: '11. Contact Information',
+    title: '12. Contact Information',
     body: [
-      'For questions or concerns regarding these Terms, you may contact us at:',
+      'For questions, concerns, or requests regarding these Terms and Conditions, you may contact us at:',
       'Email: hannahvanessaexclusive@gmail.com',
       'Phone: 0917 593 1093',
-      'Address: Blk 185 Lot 09 Cadena de Amor St, corner Kampupot, Taguig, 1218',
+      'Address: Blk 185 Lot 09 Cadena de Amor St., corner Kampupot, Taguig, 1218',
     ],
   },
 ];
@@ -950,7 +962,7 @@ export function AuthModal({
           <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => !isSubmitting && setIsTermsOpen(false)} />
           <div
             className="relative z-10 w-full overflow-hidden border-2 border-[#3A342E] shadow-[8px_8px_0_rgba(58,52,46,0.35)]"
-            style={{ maxWidth: '720px', height: '500px', backgroundColor: '#F7F3EC' }}
+            style={{ maxWidth: '760px', height: 'min(720px, calc(100vh - 2rem))', backgroundColor: '#F7F3EC' }}
             role="dialog"
             aria-modal="true"
             aria-label="Terms, Conditions, and Policies"
@@ -966,7 +978,7 @@ export function AuthModal({
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="text-left">
-                  <h3 className="font-serif text-[2rem] font-semibold leading-none text-[#1A1A1A]">Terms, Conditions, and Policies</h3>
+                  <h3 className="font-serif text-2xl font-bold leading-tight text-[#1A1A1A] md:text-3xl">Terms and Conditions</h3>
                   <p className="mt-3 text-sm leading-6 text-[#6B5D4F]">Please read and accept these terms before continuing with account creation.</p>
                 </div>
                 <button
@@ -996,20 +1008,36 @@ export function AuthModal({
                   }}
                   onScroll={handleTermsScroll}
                 >
-                  <p className="text-sm font-semibold uppercase tracking-[0.04em] text-[#1A1A1A]">Terms and Conditions for Account Creation and Use</p>
-                  <p className="mt-2 text-lg font-semibold text-[#1A1A1A]">Hannah Vanessa Dress Shop</p>
-                  <p className="mt-1 text-sm text-[#6B5D4F]">Last Updated: May 4, 2026</p>
-                  <p className="mt-6 text-sm leading-7 text-[#3D2B1F]">
-                    Welcome to Hannah Vanessa Boutique. By creating an account and using our website, you agree to comply with and be bound by the following Terms and Conditions. Please read them carefully before registering.
+                  <p className="text-base font-bold leading-snug text-[#1A1A1A] md:text-lg">Terms and Conditions for Account Creation and Use</p>
+                  <p className="mt-2 text-xl font-semibold leading-tight text-[#1A1A1A]">Hannah Vanessa Boutique</p>
+                  <p className="mt-1 text-sm leading-6 text-[#6B5D4F]">Last Updated: May 4, 2026</p>
+                  <p className="mt-6 text-[0.9375rem] leading-7 text-[#3D2B1F]">
+                    Welcome to Hannah Vanessa Boutique. By creating an account and using our website or mobile application, including FabriQ, you agree to comply with and be bound by these Terms and Conditions. Please read them carefully before registering or using our services.
                   </p>
 
-                  <div className="mt-7 space-y-8 text-left">
-                    {accountTermsSections.map((section) => (
-                      <section key={section.title} className="pr-2">
-                        <h4 className="text-base font-semibold uppercase tracking-[0.02em] text-[#1A1A1A]">{section.title}</h4>
-                        <div className="mt-3 space-y-2 text-sm leading-7 text-[#3D2B1F]">
+                  <div className="mt-8 space-y-9 text-left">
+                    {accountTermsSections.map((section, sectionIndex) => (
+                      <section
+                        key={section.title}
+                        className="pr-2"
+                        style={{ marginBottom: sectionIndex < accountTermsSections.length - 1 ? '32px' : 0 }}
+                      >
+                        <h4 className="text-base font-bold leading-snug text-[#1A1A1A] md:text-lg">{section.title}</h4>
+                        <div className="mt-3 space-y-2 text-[0.9375rem] leading-7 text-[#3D2B1F]">
                           {section.body.map((line) => (
-                            <p key={line}>{line}</p>
+                            <p
+                              key={line}
+                              className={
+                                line.includes('Data Privacy Act of 2012') ||
+                                line.includes('Republic Act No. 10173') ||
+                                line.includes('Philippine law') ||
+                                line.includes('laws of the Republic of the Philippines')
+                                  ? 'font-semibold'
+                                  : undefined
+                              }
+                            >
+                              {line}
+                            </p>
                           ))}
                         </div>
                       </section>
