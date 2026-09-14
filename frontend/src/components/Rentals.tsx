@@ -83,6 +83,8 @@ interface RentalInventoryItem {
   color: string;
   image?: string;
   description?: string;
+  rating?: number;
+  ratings?: InventoryItem['ratings'];
 }
 
 const RENTAL_COLLECTION_PAGE_SIZE = 9;
@@ -713,6 +715,8 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
             color: item.color,
             image: item.image,
             description: item.description,
+            rating: typeof item.rating === 'number' ? item.rating : 0,
+            ratings: Array.isArray(item.ratings) ? item.ratings : [],
           }));
 
         setInventoryItems(rentableItems);
@@ -1357,7 +1361,9 @@ export function Rentals({ user, token, selectedGownId, selectedRentalId, selecte
                           <div className="flex items-center gap-2 mb-2">
                             <div className="flex items-center">
                               <Star className="w-4 h-4 fill-[#D4AF37] text-[#D4AF37]" />
-                              <span className="text-sm text-[#6B5D4F] ml-1">4.8</span>
+                              <span className="text-sm text-[#6B5D4F] ml-1">
+                                {(typeof item.rating === 'number' ? item.rating : 0).toFixed(1)}
+                              </span>
                             </div>
                             <span className="text-xs text-[#6B5D4F]">•</span>
                             <span className="text-xs text-[#6B5D4F] uppercase tracking-wider">
