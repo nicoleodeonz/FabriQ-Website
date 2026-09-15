@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 const SkinAnalysisSchema = new mongoose.Schema({
   customerId: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.Types.Mixed,
     ref: 'CustomerAccount',
     required: true,
   },

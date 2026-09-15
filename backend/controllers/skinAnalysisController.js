@@ -211,9 +211,22 @@ export const saveSkinAnalysis = async (req, res) => {
       databaseName: mongoose.connection.name,
       databaseHost: mongoose.connection.host,
       modelUsesApplicationConnection: CustomerAccount.db === mongoose.connection,
+      schemaIdType: CustomerAccount.schema.path('_id')?.instance,
+      requestIdType: typeof authenticatedId,
+      requestIdConstructor: authenticatedId?.constructor?.name,
     });
 
-    const customer = await CustomerAccount.findById(authenticatedId).lean();
+    const rawCustomerCollection = CustomerAccount.collection;
+    let customer = await rawCustomerCollection.findOne({
+      _id: String(authenticatedId),
+    });
+
+    if (!customer && mongoose.isValidObjectId(authenticatedId)) {
+      customer = await rawCustomerCollection.findOne({
+        _id: new mongoose.Types.ObjectId(authenticatedId),
+      });
+    }
+
     console.log('[AI SAVE] customer lookup:', {
       lookupId: authenticatedId,
       customerFound: Boolean(customer),
