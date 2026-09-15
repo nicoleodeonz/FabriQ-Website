@@ -18,6 +18,11 @@ const SkinAnalysisSchema = new mongoose.Schema({
     enum: ['warm', 'cool', 'neutral'],
     required: true,
   },
+  gender: {
+    type: String,
+    enum: ['women', 'men'],
+    required: true,
+  },
   skinHex: { type: String, required: true },
   skinRgb: {
     r: { type: Number },

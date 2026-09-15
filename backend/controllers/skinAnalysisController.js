@@ -56,9 +56,14 @@ function hexToRgb(hex) {
   };
 }
 
-function buildSkinAnalysisPrompt() {
+function buildSkinAnalysisPrompt(gender) {
+  const garmentWord = gender === 'men' ? 'suit/blazer' : 'dress';
+  const styleContext = gender === 'men'
+    ? 'a formal menswear styling app (suits, blazers, barongs)'
+    : 'a bridal/formal-wear styling app';
+
   return `You are analyzing a single photo for skin tone and color-matching
-analysis for a bridal/formal-wear styling app.
+analysis for ${styleContext}.
 
 STAGE 1: Validate the photo.
 Rules for a usable photo: a clear, well-lit face or visible skin area, not
@@ -71,7 +76,7 @@ classify:
 - undertone: exactly one of ${JSON.stringify(UNDERTONE_VALUES)}
 - skinHex: a hex color code approximating the person's actual skin tone
 
-Then recommend 5 to 7 dress colors that would flatter this specific person,
+Then recommend 5 to 7 ${garmentWord} colors that would flatter this specific person,
 chosen ONLY from this exact list (use the exact spelling/casing given):
 ${ALLOWED_COLOR_NAMES.join(', ')}
 
@@ -87,7 +92,7 @@ If imageSuitable is false, omit skinTone/undertone/skinHex/recommendedColors/ins
 or set them to null.`;
 }
 
-async function callGeminiForSkinAnalysis({ image, mimeType }) {
+async function callGeminiForSkinAnalysis({ image, mimeType, gender }) {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY is not configured.');
 
@@ -103,7 +108,7 @@ async function callGeminiForSkinAnalysis({ image, mimeType }) {
     contents: [{
       role: 'user',
       parts: [
-        { text: buildSkinAnalysisPrompt() },
+        { text: buildSkinAnalysisPrompt(gender) },
         { inlineData: { mimeType: detectionMimeType, data: cleanedBase64 } },
       ],
     }],
@@ -120,8 +125,9 @@ async function callGeminiForSkinAnalysis({ image, mimeType }) {
 
 export const analyzeSkinTone = async (req, res) => {
   try {
-    const { image, mimeType } = req.body || {};
-    const geminiResult = await callGeminiForSkinAnalysis({ image, mimeType });
+    const { image, mimeType, gender } = req.body || {};
+    const normalizedGender = gender === 'men' ? 'men' : 'women';
+    const geminiResult = await callGeminiForSkinAnalysis({ image, mimeType, gender: normalizedGender });
     const imageSuitable = Boolean(geminiResult?.imageSuitable);
 
     if (!imageSuitable) {
@@ -173,6 +179,7 @@ export const saveSkinAnalysis = async (req, res) => {
     const {
       skinTone,
       undertone,
+      gender,
       skinHex,
       skinRgb,
       recommendedColors,
@@ -187,6 +194,7 @@ export const saveSkinAnalysis = async (req, res) => {
       email: customer.email,
       skinTone,
       undertone,
+      gender: gender === 'men' ? 'men' : 'women',
       skinHex: skinHex || '#000000',
       skinRgb: skinRgb || {},
       recommendedColors: recommendedColors || [],
