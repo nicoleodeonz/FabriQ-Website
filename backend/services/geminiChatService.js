@@ -2,6 +2,7 @@ import AppointmentDetail from '../models/AppointmentDetail.js';
 import CustomOrder from '../models/CustomOrder.js';
 import ProductDetail from '../models/ProductDetail.js';
 import RentalDetail from '../models/RentalDetail.js';
+import { callGroq, isProviderLimitError } from './groqService.js';
 
 const SENSITIVE_REQUEST_PATTERN = /\b(email|e-mail|phone|contact number|mobile number|address|password|passcode|otp|verification code|payment reference|reference number|receipt|card number|bank account|gcash|maya)\b/i;
 const OTHER_CUSTOMER_PATTERN = /\b(other customer|another customer|someone else|other people's|everyone else's|all customers)\b/i;
@@ -851,14 +852,16 @@ export async function generateGeminiChatReply({ customerId, preferredBranch, con
   try {
     return await callGemini(prompt);
   } catch (error) {
-    const message = String(error instanceof Error ? error.message : error || '').toLowerCase();
-    if (
-      message.includes('quota') ||
-      message.includes('rate limit') ||
-      message.includes('billing') ||
-      message.includes('not configured')
-    ) {
-      return 'I can still help with Hannah Vanessa appointments, rentals, bespoke orders, and contact details, but I cannot answer general questions right now. Please try again shortly.';
+    if (isProviderLimitError(error)) {
+      try {
+        return normalizeGeminiReply(await callGroq({ prompt }));
+      } catch (fallbackError) {
+        const fallbackMessage = String(fallbackError instanceof Error ? fallbackError.message : fallbackError || '').toLowerCase();
+        if (fallbackMessage.includes('not configured') || isProviderLimitError(fallbackError)) {
+          return 'I can still help with Hannah Vanessa appointments, rentals, bespoke orders, and contact details, but I cannot answer general questions right now. Please try again shortly.';
+        }
+        throw fallbackError;
+      }
     }
     throw error;
   }

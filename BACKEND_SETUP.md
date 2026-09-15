@@ -123,7 +123,16 @@ PORT=5000
 MONGODB_URI=mongodb://localhost:27017/fabriQ
 NODE_ENV=development
 CORS_ORIGIN=http://localhost:5173
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+GROQ_API_KEY=your-groq-api-key
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
+
+Gemini is used as the primary text AI provider. When Gemini reports a quota,
+rate-limit, billing, or temporary provider failure, chatbot replies and
+analytics narratives automatically retry through Groq. Keep both API keys
+configured in production so the fallback is available.
 
 ## Troubleshooting
 

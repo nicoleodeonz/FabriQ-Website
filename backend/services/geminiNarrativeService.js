@@ -1,3 +1,5 @@
+import { callGroq, isProviderLimitError } from './groqService.js';
+
 function sanitizeJsonResponse(text) {
   const rawText = String(text || '').trim();
   if (!rawText) {
@@ -112,8 +114,25 @@ async function callGeminiForNarrative(prompt) {
   return normalizeNarrativePayload(parsed);
 }
 
+async function callNarrativeProvider(prompt) {
+  try {
+    return await callGeminiForNarrative(prompt);
+  } catch (error) {
+    if (!isProviderLimitError(error)) {
+      throw error;
+    }
+
+    const groqText = await callGroq({
+      prompt,
+      temperature: 0.3,
+      responseFormat: { type: 'json_object' },
+    });
+    return normalizeNarrativePayload(JSON.parse(sanitizeJsonResponse(groqText)));
+  }
+}
+
 export async function generateAnalyticsNarrative(input) {
-  return callGeminiForNarrative(buildAnalyticsNarrativePrompt(input));
+  return callNarrativeProvider(buildAnalyticsNarrativePrompt(input));
 }
 
 export async function generateStoreOverviewNarrative(input) {
