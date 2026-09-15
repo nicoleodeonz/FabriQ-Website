@@ -9,6 +9,26 @@ import { isElevatedRole } from '../utils/roles.js';
 import { storeUploadedAsset, storeUploadedImage } from '../services/mediaStorageService.js';
 
 const LOW_STOCK_THRESHOLD = 2;
+const TARGET_GENDER_VALUES = ['men', 'women', 'unisex'];
+
+function normalizeTargetGender(value) {
+  if (value === undefined) return undefined;
+  if (value === null || String(value).trim() === '') return null;
+  return TARGET_GENDER_VALUES.includes(value) ? value : undefined;
+}
+
+function getTargetGenderFilter(req) {
+  const requestedGender = req.query?.targetGender || req.query?.gender;
+  if (requestedGender === undefined || requestedGender === '') {
+    return { value: undefined };
+  }
+
+  if (!['men', 'women'].includes(requestedGender)) {
+    return { error: 'targetGender must be men or women.' };
+  }
+
+  return { value: requestedGender };
+}
 
 function normalizeRatingsInput(ratings) {
   if (!Array.isArray(ratings)) {
@@ -328,7 +348,17 @@ export async function getInventory(req, res) {
 
     await releaseStaleReservedProducts();
 
-    const items = await ProductDetail.find({ status: { $ne: 'archived' } })
+    const targetGenderFilter = getTargetGenderFilter(req);
+    if (targetGenderFilter.error) {
+      return res.status(400).json({ message: targetGenderFilter.error });
+    }
+
+    const query = { status: { $ne: 'archived' } };
+    if (targetGenderFilter.value) {
+      query.targetGender = { $in: [targetGenderFilter.value, 'unisex'] };
+    }
+
+    const items = await ProductDetail.find(query)
       .sort({ createdAt: -1 })
       .lean();
     const mapped = items.map((item) => normalizeProductResponse(req, item));
@@ -344,7 +374,17 @@ export async function getPublicInventory(req, res) {
   try {
     await releaseStaleReservedProducts();
 
-    const items = await ProductDetail.find({ status: { $ne: 'archived' } })
+    const targetGenderFilter = getTargetGenderFilter(req);
+    if (targetGenderFilter.error) {
+      return res.status(400).json({ message: targetGenderFilter.error });
+    }
+
+    const query = { status: { $ne: 'archived' } };
+    if (targetGenderFilter.value) {
+      query.targetGender = { $in: [targetGenderFilter.value, 'unisex'] };
+    }
+
+    const items = await ProductDetail.find(query)
       .sort({ createdAt: -1 })
       .lean();
     const mapped = items.map((item) => normalizePublicProductResponse(req, item));
@@ -456,12 +496,17 @@ export async function createProduct(req, res) {
       return res.status(403).json({ message: 'Access denied' });
     }
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, images, model3dUrl, featuredHome, rating, ratings, stock } = req.body;
+          description, image, images, model3dUrl, featuredHome, rating, ratings, stock, targetGender } = req.body;
 
     const trimmedName = String(name || '').trim();
 
     if (!trimmedName) {
       return res.status(400).json({ message: 'Missing required field: name' });
+    }
+
+    const normalizedTargetGender = normalizeTargetGender(targetGender);
+    if (targetGender !== undefined && normalizedTargetGender === undefined) {
+      return res.status(400).json({ message: 'targetGender must be men, women, or unisex.' });
     }
 
     const requestedStock = typeof stock === 'number' && Number.isFinite(stock) ? Math.max(1, Number(stock)) : 1;
@@ -477,6 +522,9 @@ export async function createProduct(req, res) {
       const nextStock = Math.max(0, Number(existingProduct.stock || 0)) + requestedStock;
       if (nextStock > 99) {
         return res.status(400).json({ message: 'Stock cannot exceed 99.' });
+      }
+      if (normalizedTargetGender !== undefined) {
+        existingProduct.targetGender = normalizedTargetGender;
       }
       existingProduct.stock = nextStock;
       existingProduct.updatedAt = new Date();
@@ -530,6 +578,7 @@ export async function createProduct(req, res) {
       rating: computeAverageRating(normalizedRatings, typeof rating === 'number' ? rating : 0),
       ratings: normalizedRatings,
       stock: requestedStock,
+      targetGender: normalizedTargetGender,
       deletedAt: null
     });
     await product.save();
@@ -567,10 +616,15 @@ export async function updateProduct(req, res) {
     }
     const { id } = req.params;
         const { name, category, color, size, price, branch, status, lastRented,
-          description, image, images, model3dUrl, featuredHome, rating, ratings, stock } = req.body;
+          description, image, images, model3dUrl, featuredHome, rating, ratings, stock, targetGender } = req.body;
 
     if (price !== undefined && (typeof price !== 'number' || price < 0)) {
       return res.status(400).json({ message: 'Price must be a non-negative number' });
+    }
+
+    const normalizedTargetGender = normalizeTargetGender(targetGender);
+    if (targetGender !== undefined && normalizedTargetGender === undefined) {
+      return res.status(400).json({ message: 'targetGender must be men, women, or unisex.' });
     }
 
     const normalizedRatings = ratings !== undefined ? normalizeRatingsInput(ratings) : null;
@@ -609,6 +663,7 @@ export async function updateProduct(req, res) {
       }
       updates.stock = stock;
     }
+    if (targetGender !== undefined) updates.targetGender = normalizedTargetGender;
     updates.updatedAt = new Date();
 
     const product = await ProductDetail.findOneAndUpdate({

@@ -15,6 +15,7 @@ export interface InventoryItem {
   sku: string;
   name: string;
   category: string;
+  targetGender?: 'men' | 'women' | 'unisex' | null;
   color: string;
   size: string[];
   price: number;
@@ -116,13 +117,15 @@ async function requestPublic<T>(url: string, options: RequestInit = {}): Promise
   return data as T;
 }
 
-export async function getInventory(token: string): Promise<InventoryItem[]> {
-  const data = await request<{ items: InventoryItem[] }>(API_BASE, token);
+export async function getInventory(token: string, targetGender?: 'men' | 'women'): Promise<InventoryItem[]> {
+  const query = targetGender ? `?targetGender=${encodeURIComponent(targetGender)}` : '';
+  const data = await request<{ items: InventoryItem[] }>(`${API_BASE}${query}`, token);
   return data.items;
 }
 
-export async function getPublicInventory(): Promise<InventoryItem[]> {
-  const data = await requestPublic<{ items: InventoryItem[] }>(`${API_BASE}/public`);
+export async function getPublicInventory(targetGender?: 'men' | 'women'): Promise<InventoryItem[]> {
+  const query = targetGender ? `?targetGender=${encodeURIComponent(targetGender)}` : '';
+  const data = await requestPublic<{ items: InventoryItem[] }>(`${API_BASE}/public${query}`);
   return data.items;
 }
 

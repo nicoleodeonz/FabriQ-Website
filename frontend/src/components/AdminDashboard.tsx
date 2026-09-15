@@ -5258,6 +5258,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       const result = await inventoryAPI.createProduct(token, {
         name: newItem.name!,
         category: newItem.category!,
+        targetGender: newItem.targetGender || null,
         color: newItem.color!,
         size: newItem.size || [],
         price: newItem.price!,
@@ -5278,7 +5279,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       setIsCustomCategoryInputVisible(false);
       setCustomCategoryDraft('');
       setIsConfirmCustomCategoryOpen(false);
-      setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', images: [], model3dUrl: '', stock: 1 });
+      setNewItem({ name: '', category: DEFAULT_INVENTORY_CATEGORY, targetGender: null, color: '', size: [], price: 0, branch: 'Taguig Main', status: 'available', description: '', image: '', images: [], model3dUrl: '', stock: 1 });
       resetImageModal();
       window.dispatchEvent(new Event(INVENTORY_UPDATED_EVENT));
       if (result.mergedExisting || existingItem) {
@@ -5307,6 +5308,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       const updated = await inventoryAPI.updateProduct(token, editingItem.id, {
         name: editingItem.name,
         category: editingItem.category,
+        targetGender: editingItem.targetGender || null,
         color: editingItem.color,
         size: editingItem.size,
         price: editingItem.price,
@@ -10518,6 +10520,23 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                       placeholder="e.g., Navy Blue"
                     />
                     {!editingItem && addItemErrors.color && <p id="add-item-color-error" className="text-sm text-red-600 mt-1">{addItemErrors.color}</p>}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Clothing Category</label>
+                    <select
+                      value={editingItem?.targetGender || newItem.targetGender || ''}
+                      onChange={(e) => editingItem
+                        ? setEditingItem({ ...editingItem, targetGender: (e.target.value || null) as InventoryItem['targetGender'] })
+                        : setNewItem({ ...newItem, targetGender: (e.target.value || null) as InventoryItem['targetGender'] })
+                      }
+                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] bg-white focus:outline-none focus:border-[#D4AF37]"
+                    >
+                      <option value="">Unclassified</option>
+                      <option value="men">Menswear</option>
+                      <option value="women">Womenswear</option>
+                      <option value="unisex">Unisex</option>
+                    </select>
                   </div>
 
                   <div>

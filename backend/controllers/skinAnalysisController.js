@@ -4,6 +4,7 @@ import { GoogleGenAI } from '@google/genai';
 
 const SKIN_TONE_VALUES = ['fair', 'light', 'medium', 'tan', 'deep'];
 const UNDERTONE_VALUES = ['warm', 'cool', 'neutral'];
+const ANALYSIS_GENDER_VALUES = ['men', 'women'];
 const ALLOWED_COLOR_NAMES = [
   'Peach', 'Champagne', 'Coral', 'Warm Gold', 'Ivory', 'Blush', 'Rose Gold',
   'Lavender', 'Ice Blue', 'Soft Pink', 'Mint', 'Pearl', 'Lilac', 'Baby Blue',
@@ -36,6 +37,10 @@ function parseJsonSafely(rawText) {
     }
     return null;
   }
+}
+
+function validateAnalysisGender(gender) {
+  return ANALYSIS_GENDER_VALUES.includes(gender) ? gender : null;
 }
 
 function extractGeminiText(response) {
@@ -126,14 +131,25 @@ async function callGeminiForSkinAnalysis({ image, mimeType, gender }) {
 export const analyzeSkinTone = async (req, res) => {
   try {
     const { image, mimeType, gender } = req.body || {};
-    const normalizedGender = gender === 'men' ? 'men' : 'women';
-    const geminiResult = await callGeminiForSkinAnalysis({ image, mimeType, gender: normalizedGender });
+    const validatedGender = validateAnalysisGender(gender);
+    if (!validatedGender) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gender selection is required. Choose men or women.',
+      });
+    }
+
+    const geminiResult = await callGeminiForSkinAnalysis({ image, mimeType, gender: validatedGender });
     const imageSuitable = Boolean(geminiResult?.imageSuitable);
 
     if (!imageSuitable) {
       return res.json({
         success: true,
-        analysis: { imageSuitable: false, reason: geminiResult?.reason || 'Photo not suitable for analysis.' },
+        analysis: {
+          imageSuitable: false,
+          gender: validatedGender,
+          reason: geminiResult?.reason || 'Photo not suitable for analysis.',
+        },
       });
     }
 
@@ -149,6 +165,7 @@ export const analyzeSkinTone = async (req, res) => {
       success: true,
       analysis: {
         imageSuitable: true,
+        gender: validatedGender,
         skinTone,
         undertone,
         skinHex,
@@ -166,20 +183,41 @@ export const analyzeSkinTone = async (req, res) => {
 
 export const saveSkinAnalysis = async (req, res) => {
   try {
-    const customerId = req.user?.id || req.user?._id;
-    if (!customerId) {
+    const { gender } = req.body || {};
+    const validatedGender = validateAnalysisGender(gender);
+    if (!validatedGender) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gender selection is required. Choose men or women.',
+      });
+    }
+
+    // authMiddleware resolves restored accounts to the canonical account id.
+    const authenticatedId = req.user?.id;
+    if (!authenticatedId) {
       return res.status(401).json({ message: 'Not authenticated.' });
     }
 
-    const customer = await CustomerAccount.findById(customerId);
+    const customer = await CustomerAccount.findById(authenticatedId).lean();
+    console.log('[saveSkinAnalysis] authenticated user:', {
+      id: req.user?.id,
+      email: req.user?.email,
+      role: req.user?.role,
+      gender: validatedGender,
+      customerFound: Boolean(customer),
+    });
+
     if (!customer) {
+      console.error('[saveSkinAnalysis] Customer account not found', {
+        authenticatedId,
+        authenticatedEmail: req.user?.email,
+      });
       return res.status(404).json({ message: 'Customer not found.' });
     }
 
     const {
       skinTone,
       undertone,
-      gender,
       skinHex,
       skinRgb,
       recommendedColors,
@@ -189,12 +227,12 @@ export const saveSkinAnalysis = async (req, res) => {
     } = req.body;
 
     const analysis = new SkinAnalysis({
-      customerId,
+      customerId: customer._id,
       customerName: `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || customer.name || customer.email,
       email: customer.email,
       skinTone,
       undertone,
-      gender: gender === 'men' ? 'men' : 'women',
+      gender: validatedGender,
       skinHex: skinHex || '#000000',
       skinRgb: skinRgb || {},
       recommendedColors: recommendedColors || [],

@@ -9,6 +9,7 @@
     "dev": "nodemon server.js",
     "seed": "node seed.js",
     "seed:inventory": "node seedInventory.js",
+    "migrate:product-target-genders": "node migrate_product_target_genders.js",
     "reset": "node reset.js",
     "migrate:image-urls": "node migrate_image_urls.js",
     "migrate:cloudinary-product-images": "node migrate_product_images_to_cloudinary.js",

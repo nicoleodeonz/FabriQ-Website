@@ -43,8 +43,7 @@ const ProductDetailSchema = new mongoose.Schema({
   },
   targetGender: {
     type: String,
-    enum: ['women', 'men', 'unisex'],
-    default: 'women'
+    enum: ['women', 'men', 'unisex']
   },
   color: {
     type: String,
