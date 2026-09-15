@@ -25,15 +25,22 @@ export const authenticate = async (req, res, next) => {
     const { id, email, role, tokenVersion } = decoded;
 
     let user;
-    if (role === 'admin') {
-      user = await AdminAccount.findById(id);
-      if (user) user = user.toObject();
-    } else if (role === 'staff') {
-      user = await StaffAccount.findById(id);
-      if (user) user = user.toObject();
-    } else {
-      user = await CustomerAccount.findById(id);
-      if (user) user = user.toObject();
+    const AccountModel = role === 'admin'
+      ? AdminAccount
+      : role === 'staff'
+        ? StaffAccount
+        : CustomerAccount;
+
+    try {
+      user = await AccountModel.findById(id).lean();
+    } catch (lookupError) {
+      console.warn('Auth id lookup failed; trying email lookup:', lookupError.message);
+    }
+
+    // Restored MongoDB backups can contain new document ids. Recover the
+    // account by the signed email so a valid session survives that restore.
+    if (!user && email) {
+      user = await AccountModel.findOne({ email }).lean();
     }
 
     if (!user) {
@@ -50,9 +57,9 @@ export const authenticate = async (req, res, next) => {
       return res.status(401).json({ message: 'Session expired. Please log in again.' });
     }
 
-    // Ensure basic auth info is present
-    user.id = id;
-    user.email = email;
+    // Ensure basic auth info is present and use the restored document id.
+    user.id = String(user._id);
+    user.email = String(user.email || email).trim().toLowerCase();
     user.role = isElevatedRole(role) ? role : 'customer';
 
     req.user = user;
