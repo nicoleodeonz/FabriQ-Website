@@ -505,7 +505,7 @@ export async function createProduct(req, res) {
     }
 
     const normalizedTargetGender = normalizeTargetGender(targetGender);
-    if (targetGender !== undefined && normalizedTargetGender === undefined) {
+    if (!normalizedTargetGender) {
       return res.status(400).json({ message: 'targetGender must be men, women, or unisex.' });
     }
 
@@ -623,7 +623,7 @@ export async function updateProduct(req, res) {
     }
 
     const normalizedTargetGender = normalizeTargetGender(targetGender);
-    if (targetGender !== undefined && normalizedTargetGender === undefined) {
+    if (!normalizedTargetGender) {
       return res.status(400).json({ message: 'targetGender must be men, women, or unisex.' });
     }
 

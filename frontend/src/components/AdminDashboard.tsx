@@ -192,6 +192,7 @@ const MAX_INVENTORY_STOCK = 99;
 type AddItemField =
   | 'name'
   | 'category'
+  | 'targetGender'
   | 'color'
   | 'price'
   | 'branch'
@@ -2669,6 +2670,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     ));
 
     if (!newItem.name?.trim()) errors.name = 'This field is required';
+    if (!newItem.targetGender) errors.targetGender = 'Select men, women, or unisex';
     if (newItem.stock === undefined || Number.isNaN(Number(newItem.stock)) || Number(newItem.stock) <= 0) {
       errors.stock = 'This field is required';
     } else if (Number(newItem.stock) > MAX_INVENTORY_STOCK) {
@@ -10523,20 +10525,24 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
                   </div>
 
                   <div>
-                    <label className="block text-sm text-[#6B5D4F] mb-2">Clothing Category</label>
+                    <label className="block text-sm text-[#6B5D4F] mb-2">Clothing Category *</label>
                     <select
+                      required={!editingItem}
+                      aria-invalid={!editingItem && Boolean(addItemErrors.targetGender)}
+                      aria-describedby={!editingItem && addItemErrors.targetGender ? 'add-item-target-gender-error' : undefined}
                       value={editingItem?.targetGender || newItem.targetGender || ''}
                       onChange={(e) => editingItem
-                        ? setEditingItem({ ...editingItem, targetGender: (e.target.value || null) as InventoryItem['targetGender'] })
-                        : setNewItem({ ...newItem, targetGender: (e.target.value || null) as InventoryItem['targetGender'] })
+                        ? setEditingItem({ ...editingItem, targetGender: e.target.value as InventoryItem['targetGender'] })
+                        : (setNewItem({ ...newItem, targetGender: e.target.value as InventoryItem['targetGender'] }), setAddItemErrors(prev => ({ ...prev, targetGender: '' })))
                       }
-                      className="w-full px-4 py-3 rounded-lg border border-[#E8DCC8] bg-white focus:outline-none focus:border-[#D4AF37]"
+                      className={`w-full px-4 py-3 rounded-lg border bg-white focus:outline-none focus:border-[#D4AF37] ${!editingItem && addItemErrors.targetGender ? 'border-red-400' : 'border-[#E8DCC8]'}`}
                     >
-                      <option value="">Unclassified</option>
+                      <option value="">Select classification</option>
                       <option value="men">Menswear</option>
                       <option value="women">Womenswear</option>
                       <option value="unisex">Unisex</option>
                     </select>
+                    {!editingItem && addItemErrors.targetGender && <p id="add-item-target-gender-error" className="text-sm text-red-600 mt-1">{addItemErrors.targetGender}</p>}
                   </div>
 
                   <div>
