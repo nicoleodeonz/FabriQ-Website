@@ -198,19 +198,25 @@ export const saveSkinAnalysis = async (req, res) => {
       return res.status(401).json({ message: 'Not authenticated.' });
     }
 
+    console.log('[AI SAVE] authenticated identity:', {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      userRole: req.user?.role,
+      requestedGender: validatedGender,
+    });
+
     const customer = await CustomerAccount.findById(authenticatedId).lean();
-    console.log('[saveSkinAnalysis] authenticated user:', {
-      id: req.user?.id,
-      email: req.user?.email,
-      role: req.user?.role,
-      gender: validatedGender,
+    console.log('[AI SAVE] customer lookup:', {
+      lookupId: authenticatedId,
       customerFound: Boolean(customer),
     });
 
     if (!customer) {
-      console.error('[saveSkinAnalysis] Customer account not found', {
-        authenticatedId,
-        authenticatedEmail: req.user?.email,
+      console.error('[AI SAVE] customer not found:', {
+        lookupId: authenticatedId,
+        userEmail: req.user?.email,
+        userRole: req.user?.role,
+        requestedGender: validatedGender,
       });
       return res.status(404).json({ message: 'Customer not found.' });
     }
