@@ -1,6 +1,7 @@
 import SkinAnalysis from '../models/SkinAnalysis.js';
 import CustomerAccount from '../models/Customer.js';
 import { GoogleGenAI } from '@google/genai';
+import mongoose from 'mongoose';
 
 const SKIN_TONE_VALUES = ['fair', 'light', 'medium', 'tan', 'deep'];
 const UNDERTONE_VALUES = ['warm', 'cool', 'neutral'];
@@ -203,6 +204,13 @@ export const saveSkinAnalysis = async (req, res) => {
       userEmail: req.user?.email,
       userRole: req.user?.role,
       requestedGender: validatedGender,
+    });
+
+    console.log('[AI SAVE] customer model context:', {
+      collectionName: CustomerAccount.collection.name,
+      databaseName: mongoose.connection.name,
+      databaseHost: mongoose.connection.host,
+      modelUsesApplicationConnection: CustomerAccount.db === mongoose.connection,
     });
 
     const customer = await CustomerAccount.findById(authenticatedId).lean();
