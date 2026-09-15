@@ -625,32 +625,58 @@ export async function verifyPaymongoPayment(req, res) {
     }
 
     const paymentAmount = Math.max(0, Number(rental.totalPrice || 0) - Number(rental.downpayment || 0));
-    rental.paymentSubmittedAt = new Date();
-    rental.paymentAmountPaid = paymentAmount;
-    rental.paymentReferenceNumber = (successfulPayment?.id || sessionResult.checkoutSession.attributes?.payment_intent?.id || paymentLinkId);
-    rental.paymentReceiptFilename = `Paymongo_${(successfulPayment?.id || sessionResult.checkoutSession.attributes?.payment_intent?.id || paymentLinkId)}`;
-    rental.paymentReceiptUrl = null;
-    rental.status = 'for_pickup';
+    const paymentReference = (successfulPayment?.id || sessionResult.checkoutSession.attributes?.payment_intent?.id || paymentLinkId);
 
-    await rental.save();
-    console.log('Rental updated, new status:', rental.status);
-    
-    emitAdminDashboardUpdate({ entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
-    emitCustomerActivityUpdate(rental.customerId, { entity: 'rental', action: 'payment-submitted', id: String(rental._id || '') });
+    // Atomic, status-guarded update: only the request that actually flips this
+    // rental from "for_payment" to "for_pickup" wins the race and is allowed to
+    // send a customer notification. This prevents duplicate/spam notifications
+    // when the mobile app calls this endpoint more than once for the same
+    // payment (e.g. multiple AppState "active" events).
+    const updatedRental = await RentalDetail.findOneAndUpdate(
+      { _id: id, customerId: req.user.id, status: 'for_payment' },
+      {
+        $set: {
+          paymentSubmittedAt: new Date(),
+          paymentAmountPaid: paymentAmount,
+          paymentReferenceNumber: paymentReference,
+          paymentReceiptFilename: `Paymongo_${paymentReference}`,
+          paymentReceiptUrl: null,
+          status: 'for_pickup',
+        },
+      },
+      { new: true }
+    );
+
+    if (!updatedRental) {
+      // Another request already verified this payment first. Treat this as a
+      // successful (idempotent) duplicate call: return the current rental
+      // without sending a second notification.
+      const alreadyVerifiedRental = await RentalDetail.findOne({ _id: id, customerId: req.user.id });
+      console.log('Payment already verified by a concurrent request, skipping duplicate notification.');
+      return res.json({
+        success: true,
+        rental: await mapRentalWithProductImage(req, (alreadyVerifiedRental || rental).toJSON()),
+      });
+    }
+
+    console.log('Rental updated, new status:', updatedRental.status);
+
+    emitAdminDashboardUpdate({ entity: 'rental', action: 'payment-submitted', id: String(updatedRental._id || '') });
+    emitCustomerActivityUpdate(updatedRental.customerId, { entity: 'rental', action: 'payment-submitted', id: String(updatedRental._id || '') });
 
     try {
       const deliveryResult = await sendNotificationAcrossChannels({
-        email: rental.customerEmail || rental.email || '',
-        phoneNumber: rental.contactNumber || '',
+        email: updatedRental.customerEmail || updatedRental.email || '',
+        phoneNumber: updatedRental.contactNumber || '',
         payload: {
           type: 'rental',
-          recordId: String(rental._id || ''),
-          customerId: String(rental.customerId || ''),
-          status: rental.status,
-          name: rental.customerName || '',
-          itemOrServiceOrDesign: rental.gownName || 'Rental Item',
+          recordId: String(updatedRental._id || ''),
+          customerId: String(updatedRental.customerId || ''),
+          status: updatedRental.status,
+          name: updatedRental.customerName || '',
+          itemOrServiceOrDesign: updatedRental.gownName || 'Rental Item',
           dateType: 'Time Sent',
-          location: rental.branch || '',
+          location: updatedRental.branch || '',
         },
       });
 
@@ -663,7 +689,7 @@ export async function verifyPaymongoPayment(req, res) {
 
     return res.json({
       success: true,
-      rental: await mapRentalWithProductImage(req, rental.toJSON()),
+      rental: await mapRentalWithProductImage(req, updatedRental.toJSON()),
     });
   } catch (error) {
     console.error('verifyPaymongoPayment error:', error);
