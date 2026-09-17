@@ -83,7 +83,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 8000,
     status: 'available',
     branch: 'Makati Branch',
-    image: 'https://images.unsplash.com/photo-1767050400384-3e2c733e5dba?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1767050400384-3e2c733e5dba?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.8,
     ratings: [],
     priceLabel: 'P8,000',
@@ -99,7 +99,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 5500,
     status: 'available',
     branch: 'BGC Branch',
-    image: 'https://images.unsplash.com/photo-1764998112680-2f617dc9be40?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1764998112680-2f617dc9be40?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.7,
     ratings: [],
     priceLabel: 'P5,500',
@@ -115,7 +115,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 6200,
     status: 'available',
     branch: 'Quezon City',
-    image: 'https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.9,
     ratings: [],
     priceLabel: 'P6,200',
@@ -131,7 +131,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 3800,
     status: 'available',
     branch: 'Makati Branch',
-    image: 'https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.6,
     ratings: [],
     priceLabel: 'P3,800',
@@ -147,7 +147,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 7500,
     status: 'available',
     branch: 'BGC Branch',
-    image: 'https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.8,
     ratings: [],
     priceLabel: 'P7,500',
@@ -163,7 +163,7 @@ const defaultTopGowns: FeaturedGownCard[] = [
     price: 4800,
     status: 'available',
     branch: 'Quezon City',
-    image: 'https://images.unsplash.com/photo-1765229280659-d35a2467b976?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1765229280659-d35a2467b976?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     rating: 4.7,
     ratings: [],
     priceLabel: 'P4,800',
@@ -194,6 +194,34 @@ function formatPriceLabel(price: number) {
   return `P${Math.round(price).toLocaleString('en-PH')}`;
 }
 
+function optimizeImageUrl(value: string, width = 640) {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return rawValue;
+
+  try {
+    const url = new URL(rawValue);
+    if (url.hostname.includes('images.unsplash.com')) {
+      url.searchParams.set('fm', 'webp');
+      url.searchParams.set('q', '70');
+      url.searchParams.set('w', String(width));
+      return url.toString();
+    }
+
+    if (url.hostname.includes('res.cloudinary.com')) {
+      const uploadMarker = '/upload/';
+      const uploadIndex = url.pathname.indexOf(uploadMarker);
+      if (uploadIndex >= 0 && !url.pathname.slice(uploadIndex + uploadMarker.length).startsWith('f_')) {
+        url.pathname = `${url.pathname.slice(0, uploadIndex + uploadMarker.length)}f_auto,q_auto,w_${width}/${url.pathname.slice(uploadIndex + uploadMarker.length)}`;
+      }
+      return url.toString();
+    }
+  } catch {
+    return rawValue;
+  }
+
+  return rawValue;
+}
+
 function getFeaturedImagePresentation(item: Pick<InventoryItem, 'name' | 'sku'>) {
   if (item.sku === 'G009' || item.name === 'Yellow Shine') {
     return {
@@ -222,7 +250,7 @@ function toFeaturedGownCard(item: InventoryItem): FeaturedGownCard {
       ? item.status
       : 'available',
     branch: item.branch || 'Not specified',
-    image: item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=800',
+    image: optimizeImageUrl(item.image?.trim() || 'https://images.unsplash.com/photo-1763336016192-c7b62602e993?w=640'),
     images: Array.isArray(item.images) ? item.images.map((entry) => String(entry || '').trim()).filter(Boolean) : [],
     model3dUrl: String(item.model3dUrl || '').trim(),
     rating: typeof item.rating === 'number' ? item.rating : 0,
