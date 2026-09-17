@@ -276,6 +276,15 @@ export function Navigation({
 
   const renderButton = (view: View, label: string, type?: 'profile' | 'admin' | 'notifications' | 'messages', style?: CSSProperties) => {
     const isIconOnlyDesktop = type === 'profile' || type === 'admin' || type === 'notifications' || type === 'messages';
+    const accessibleLabel = type === 'profile'
+      ? 'Open profile'
+      : type === 'admin'
+        ? 'Open admin dashboard'
+        : type === 'notifications'
+          ? 'Open notifications'
+          : type === 'messages'
+            ? 'Open messages'
+            : label;
     const hasUnreadNotifications = type === 'notifications' && unreadNotificationCount > 0;
     const hasUnreadChats = type === 'messages' && adminUnreadChatCount > 0;
     const hasUnreadAdminOrders = type === 'admin' && hasNewAdminOrder;
@@ -311,6 +320,7 @@ export function Navigation({
         className={`flex items-center gap-2 px-4 py-2 text-xs uppercase tracking-[0.15em] transition-colors ${
           currentView === view ? 'text-[#1a1a1a]' : 'text-[#6B5D4F] hover:text-[#1a1a1a]'
         } ${isIconOnlyDesktop ? 'relative justify-center w-10 h-10 rounded-full overflow-visible' : ''}`}
+        aria-label={accessibleLabel}
         style={style}
       >
         {Icon && (

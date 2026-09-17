@@ -116,6 +116,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
             <button
               type="submit"
               disabled={isSubmitting || isAdmin}
+              aria-label="Subscribe to newsletter"
               className="px-6 py-3 bg-white text-[#6B5D4F] hover:bg-[#D4AF37] hover:text-white transition-colors flex items-center gap-2 disabled:opacity-50"
             >
               <ArrowRight className="w-4 h-4" />
@@ -192,6 +193,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
                   href="https://www.instagram.com/officialhvd/"
                   target="_blank"
                   rel="noreferrer"
+                  aria-label="Follow Hannah Vanessa Boutique on Instagram"
                   className="hover:text-[#D4AF37] transition-colors"
                 >
                   <Instagram className="w-5 h-5" />
@@ -201,12 +203,14 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
                   target="_blank"
                   rel="noreferrer"
                   {...getDisabledLinkProps}
+                  aria-label="Follow Hannah Vanessa Boutique on Facebook"
                   className={`hover:text-[#D4AF37] transition-colors ${isAdmin ? 'opacity-60' : ''}`}
                 >
                   <Facebook className="w-5 h-5" />
                 </a>
                 <a
                   href="mailto:hannahvanessaexclusive@gmail.com"
+                  aria-label="Email Hannah Vanessa Boutique"
                   className="hover:text-[#D4AF37] transition-colors"
                 >
                   <Mail className="w-5 h-5" />
