@@ -867,7 +867,7 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
             <button
               type="button"
               onClick={() => handleProtectedNavigation('appointments')}
-              className="rounded-sm bg-[#D4AF37] px-6 py-3 text-sm uppercase tracking-wider text-white shadow-lg transition-all hover:bg-[#1a1a1a] hover:shadow-xl md:px-8 md:py-4 lg:px-10 lg:py-5"
+              className="rounded-sm bg-[#1a1a1a] px-6 py-3 text-sm uppercase tracking-wider text-white shadow-lg transition-all hover:bg-[#D4AF37] hover:shadow-xl md:px-8 md:py-4 lg:px-10 lg:py-5"
             >
               Book Consultation
             </button>
