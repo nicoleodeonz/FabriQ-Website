@@ -28,7 +28,7 @@ const heroCollections = [
     title: 'Bridal',
     category: 'Wedding Dress',
     subtitle: 'Eternal Elegance',
-    image: 'https://images.unsplash.com/photo-1767050400384-3e2c733e5dba?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1767050400384-3e2c733e5dba?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Timeless wedding gowns for your special day',
   },
   {
@@ -36,7 +36,7 @@ const heroCollections = [
     title: 'Evening',
     category: 'Evening Gown',
     subtitle: 'Sophisticated Grace',
-    image: 'https://images.unsplash.com/photo-1764998112680-2f617dc9be40?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1764998112680-2f617dc9be40?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Elegant evening wear for formal occasions',
   },
   {
@@ -44,7 +44,7 @@ const heroCollections = [
     title: 'Ball Gown',
     category: 'Ball Gown',
     subtitle: 'Royal Grandeur',
-    image: 'https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Dramatic silhouettes for grand celebrations',
   },
   {
@@ -52,7 +52,7 @@ const heroCollections = [
     title: 'Cocktail',
     category: 'Cocktail Dress',
     subtitle: 'Modern Charm',
-    image: 'https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Chic designs for cocktail parties',
   },
   {
@@ -60,7 +60,7 @@ const heroCollections = [
     title: 'Debut',
     category: 'Ball Gown',
     subtitle: 'Coming of Age',
-    image: 'https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Perfect gowns for your 18th birthday',
   },
   {
@@ -68,7 +68,7 @@ const heroCollections = [
     title: 'Couture',
     category: 'Evening Gown',
     subtitle: 'Haute Luxury',
-    image: 'https://images.unsplash.com/photo-1765229280659-d35a2467b976?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080',
+    image: 'https://images.unsplash.com/photo-1765229280659-d35a2467b976?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640',
     description: 'Exclusive designer pieces',
   },
 ];
@@ -509,6 +509,10 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
               <ImageWithFallback
                 src={collection.image}
                 alt={collection.title}
+                loading={index === 0 ? 'eager' : 'lazy'}
+                fetchPriority={index === 0 ? 'high' : 'auto'}
+                decoding="async"
+                sizes="(min-width: 768px) 50vw, 100vw"
                 className="h-full w-full object-cover transition-all duration-1000 ease-out group-hover:scale-110"
               />
             </div>
@@ -637,6 +641,9 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
                     <ImageWithFallback
                       src={gown.image}
                       alt={gown.name}
+                      loading="lazy"
+                      decoding="async"
+                      sizes="(min-width: 768px) 33vw, 100vw"
                       className="absolute inset-0 block h-full w-full object-cover transition-transform duration-700"
                       style={{
                         objectPosition: gown.imagePosition,
@@ -713,15 +720,21 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
               <div className="space-y-3 md:space-y-4">
                 <div className="aspect-[3/4] overflow-hidden">
                   <ImageWithFallback
-                    src="https://images.unsplash.com/photo-1698582468284-fd9161f4176b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+                    src="https://images.unsplash.com/photo-1698582468284-fd9161f4176b?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640"
                     alt="Boutique"
+                    loading="lazy"
+                    decoding="async"
+                    sizes="(min-width: 1024px) 160px, 50vw"
                     className="h-full w-full object-cover transition-transform duration-700 hover:scale-110"
                   />
                 </div>
                 <div className="aspect-square overflow-hidden">
                   <ImageWithFallback
-                    src="https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+                    src="https://images.unsplash.com/photo-1647791770645-509119fe2b8a?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640"
                     alt="Details"
+                    loading="lazy"
+                    decoding="async"
+                    sizes="(min-width: 1024px) 160px, 50vw"
                     className="h-full w-full object-cover transition-transform duration-700 hover:scale-110"
                   />
                 </div>
@@ -729,15 +742,21 @@ export function Home({ setCurrentView, authToken, isLoggedIn, isAdmin, onOpenAut
               <div className="space-y-3 pt-8 md:space-y-4 md:pt-12">
                 <div className="aspect-square overflow-hidden">
                   <ImageWithFallback
-                    src="https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+                    src="https://images.unsplash.com/photo-1735712954543-67a25a6998c8?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640"
                     alt="Interior"
+                    loading="lazy"
+                    decoding="async"
+                    sizes="(min-width: 1024px) 160px, 50vw"
                     className="h-full w-full object-cover transition-transform duration-700 hover:scale-110"
                   />
                 </div>
                 <div className="aspect-[3/4] overflow-hidden">
                   <ImageWithFallback
-                    src="https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080"
+                    src="https://images.unsplash.com/photo-1761164920960-2d776a18998c?crop=entropy&cs=tinysrgb&fit=max&fm=webp&q=70&w=640"
                     alt="Model"
+                    loading="lazy"
+                    decoding="async"
+                    sizes="(min-width: 1024px) 160px, 50vw"
                     className="h-full w-full object-cover transition-transform duration-700 hover:scale-110"
                   />
                 </div>
