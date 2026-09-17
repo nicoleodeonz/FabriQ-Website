@@ -829,26 +829,46 @@ export const requestPasswordReset = async (req, res) => {
     }
 
     const normalizedEmail = normalizeEmail(email);
-    const { account } = await findAccountByEmail(normalizedEmail);
+    const { account, role } = await findAccountByEmail(normalizedEmail);
 
     if (account && account.status !== 'archived') {
       const resetCode = generateCode();
-      account.resetPasswordCodeHash = hashCode(resetCode);
-      account.resetPasswordCodeExpiresAt = new Date(Date.now() + RESET_CODE_TTL_MS);
-      account.resetPasswordVerifiedAt = null;
-      account.resetPasswordSentAt = new Date();
-      await account.save();
+      const AccountModel = role === 'admin'
+        ? AdminAccount
+        : role === 'staff'
+          ? StaffAccount
+          : CustomerAccount;
+      const updatedAccount = await AccountModel.findOneAndUpdate(
+        { _id: account._id },
+        {
+          $set: {
+            resetPasswordCodeHash: hashCode(resetCode),
+            resetPasswordCodeExpiresAt: new Date(Date.now() + RESET_CODE_TTL_MS),
+            resetPasswordVerifiedAt: null,
+            resetPasswordSentAt: new Date(),
+          },
+        },
+        { new: true, runValidators: false }
+      );
+
+      if (!updatedAccount) {
+        return res.json({
+          message: 'If an account exists for that email, a reset code has been sent.',
+          email: normalizedEmail,
+          expiresInMinutes: 15,
+        });
+      }
 
       const codeDeliveryResult = await sendVerificationCodeEmail({
         email: normalizedEmail,
-        name: `${account.firstName || ''} ${account.lastName || ''}`,
+        name: `${updatedAccount.firstName || ''} ${updatedAccount.lastName || ''}`,
         code: resetCode,
         purpose: 'password_reset',
         expiresInMinutes: 15,
       });
 
       const smsDeliveryResult = await sendVerificationAcrossChannels({
-        phoneNumber: account.phoneNumber || '',
+        phoneNumber: updatedAccount.phoneNumber || '',
         code: resetCode,
         purpose: 'password_reset',
         expiresInMinutes: 15,
@@ -900,7 +920,7 @@ export const verifyPasswordResetCode = async (req, res) => {
 
     if (account.resetPasswordCodeExpiresAt.getTime() < Date.now()) {
       clearResetFields(account);
-      await account.save();
+      await account.save({ validateModifiedOnly: true });
       return res.status(400).json({ message: 'The reset code has expired. Please request a new one.' });
     }
 
@@ -909,7 +929,7 @@ export const verifyPasswordResetCode = async (req, res) => {
     }
 
     account.resetPasswordVerifiedAt = new Date();
-    await account.save();
+    await account.save({ validateModifiedOnly: true });
 
     return res.json({
       message: 'Reset code verified successfully.',
@@ -938,7 +958,7 @@ export const resetPassword = async (req, res) => {
 
     if (account.resetPasswordCodeExpiresAt.getTime() < Date.now()) {
       clearResetFields(account);
-      await account.save();
+      await account.save({ validateModifiedOnly: true });
       return res.status(400).json({ message: 'The reset code has expired. Please request a new one.' });
     }
 
@@ -962,7 +982,7 @@ export const resetPassword = async (req, res) => {
     account.password = newPassword;
     account.tokenVersion = Number(account.tokenVersion || 0) + 1;
     clearResetFields(account);
-    await account.save();
+    await account.save({ validateModifiedOnly: true });
 
     return res.json({
       message: 'Password reset successfully. Please log in with your new password.',
