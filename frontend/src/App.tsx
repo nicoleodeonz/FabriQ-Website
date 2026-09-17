@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react';
+import { Home } from './components/Home';
 import { Navigation } from './components/Navigation';
 import { Footer } from './components/Footer';
 import { AuthModal } from './components/AuthModal';
@@ -15,7 +16,6 @@ import type { InventoryRating } from './services/inventoryAPI';
 import type { CustomerNotificationEntry } from './services/notificationAPI';
 import { Instagram, Facebook, Mail, Phone, MapPin, X } from 'lucide-react';
 
-const Home = lazy(() => import('./components/Home').then(({ Home: component }) => ({ default: component })));
 const Catalog = lazy(() => import('./components/Catalog').then(({ Catalog: component }) => ({ default: component })));
 const Rentals = lazy(() => import('./components/Rentals').then(({ Rentals: component }) => ({ default: component })));
 const CustomOrders = lazy(() => import('./components/CustomOrders').then(({ CustomOrders: component }) => ({ default: component })));
