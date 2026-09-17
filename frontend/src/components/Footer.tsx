@@ -163,7 +163,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
           </div>
 
           <div>
-            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium text-white">Company</h4>
+            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium text-[#6B5D4F]">Company</h4>
             <div className="h-32" aria-hidden="true" />
           </div>
 
