@@ -1291,7 +1291,7 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       firstName: user.firstName || '',
       lastName: user.lastName || '',
       email: user.email || '',
-      phone: user.phoneNumber || 'N/A',
+      phone: String(user.phoneNumber ?? '').trim() || 'N/A',
       branch: normalizedPreferredBranch,
       preferredBranch: String(user.preferredBranch || '').trim(),
       role: user.role,
@@ -5501,8 +5501,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
     const query = searchQuery.toLowerCase();
     const matchesSearch =
       fullName.includes(query) ||
-      user.email.toLowerCase().includes(query) ||
-      user.phone.toLowerCase().includes(query);
+      String(user.email || '').toLowerCase().includes(query) ||
+      String(user.phone || '').toLowerCase().includes(query);
 
     const matchesRole =
       userFilter === 'all' ||
@@ -5542,8 +5542,8 @@ export default function AdminDashboard({ token, currentUserRole, currentUser, on
       const matchesSearch =
         !includeSearchQuery ||
         fullName.includes(query) ||
-        user.email.toLowerCase().includes(query) ||
-        user.phone.toLowerCase().includes(query);
+        String(user.email || '').toLowerCase().includes(query) ||
+        String(user.phone || '').toLowerCase().includes(query);
 
       const matchesExportFilter =
         filter === 'all' ||
