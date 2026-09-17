@@ -1,12 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
-import { Home } from './components/Home';
-import { Catalog } from './components/Catalog';
-import { Rentals } from './components/Rentals';
-import { CustomOrders } from './components/CustomOrders';
-import { Appointments } from './components/Appointments';
-import { CustomerProfile } from './components/CustomerProfile';
-import AdminDashboard from './components/AdminDashboard';
-import AdminMessages from './components/AdminMessages';
+import { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { Navigation } from './components/Navigation';
 import { Footer } from './components/Footer';
 import { LandingPage } from './components/LandingPage';
@@ -23,6 +15,15 @@ import { FloatingChat } from './components/FloatingChat';
 import type { InventoryRating } from './services/inventoryAPI';
 import type { CustomerNotificationEntry } from './services/notificationAPI';
 import { Instagram, Facebook, Mail, Phone, MapPin, X } from 'lucide-react';
+
+const Home = lazy(() => import('./components/Home').then(({ Home: component }) => ({ default: component })));
+const Catalog = lazy(() => import('./components/Catalog').then(({ Catalog: component }) => ({ default: component })));
+const Rentals = lazy(() => import('./components/Rentals').then(({ Rentals: component }) => ({ default: component })));
+const CustomOrders = lazy(() => import('./components/CustomOrders').then(({ CustomOrders: component }) => ({ default: component })));
+const Appointments = lazy(() => import('./components/Appointments').then(({ Appointments: component }) => ({ default: component })));
+const CustomerProfile = lazy(() => import('./components/CustomerProfile').then(({ CustomerProfile: component }) => ({ default: component })));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
+const AdminMessages = lazy(() => import('./components/AdminMessages').then(({ AdminMessages: component }) => ({ default: component })));
 
 export type View = 'home' | 'catalog' | 'rentals' | 'custom-orders' | 'appointments' | 'profile' | 'admin' | 'messages';
 
@@ -839,6 +840,7 @@ export default function App() {
         navigateProtected={navigateProtectedFromHeader}
       />
       <main className={`relative z-0 pt-20 ${showLogoutConfirmModal ? 'blur-[2px]' : ''}`}>
+        <Suspense fallback={<div className="min-h-[60vh] bg-[#FAF7F0]" aria-label="Loading page" />}>
         {currentView === 'home' && (
           <Home
             setCurrentView={setAppView}
@@ -925,6 +927,7 @@ export default function App() {
             onBack={() => setAppView('admin')}
           />
         )}
+        </Suspense>
       </main>
       {currentView !== 'admin' && currentView !== 'messages' && (
         <div className={showLogoutConfirmModal ? 'blur-[2px]' : ''}>
