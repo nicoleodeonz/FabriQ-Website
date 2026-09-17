@@ -1,7 +1,6 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import { Navigation } from './components/Navigation';
 import { Footer } from './components/Footer';
-import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal.tsx';
@@ -205,7 +204,6 @@ export default function App() {
   const storedAuth = readStoredAuth();
   const [currentView, setCurrentView] = useState<View>(() => parseHashRoute(window.location.hash).view);
   const [isAdmin, setIsAdmin] = useState(() => hasAdminAccess(storedAuth.user?.role));
-  const [showLanding, setShowLanding] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(() => Boolean(storedAuth.token && storedAuth.user));
   const [authToken, setAuthToken] = useState<string | null>(storedAuth.token);
   const [selectedCatalogCategory, setSelectedCatalogCategory] = useState<string | null>(() => parseHashRoute(window.location.hash).catalogCategory);
@@ -313,10 +311,6 @@ export default function App() {
   }, [favoriteGowns]);
 
   useEffect(() => {
-    if (sessionStorage.getItem('hasSeenLanding')) setShowLanding(false);
-  }, []);
-
-  useEffect(() => {
     if (!authToken || !currentUser) {
       return;
     }
@@ -398,11 +392,6 @@ export default function App() {
       window.cancelAnimationFrame(frameId);
     };
   }, [currentView]);
-
-  const handleLandingComplete = () => {
-    setShowLanding(false);
-    sessionStorage.setItem('hasSeenLanding', 'true');
-  };
 
   const navigateProtected = (view: View) => {
     if ((view === 'admin' || view === 'messages') && !isAdmin) {
@@ -726,103 +715,6 @@ export default function App() {
     setSelectedNotificationCustomOrderTab(isHistoricalBespokeNotification ? 'history' : 'existing');
     setAppView('custom-orders', { selectedGownId: null, selectedAppointmentType: null });
   };
-
-  if (showLanding) return (
-    <>
-      <LandingPage onComplete={handleLandingComplete} />
-      {!isAdmin && <FloatingChat showTooltip={true} customerId={currentUser?.id} user={currentUser} onOpenContactModal={() => setShowContactModal(true)} />}
-      {showContactModal && (
-        <div
-          data-shared-contact-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Contact platforms"
-          onClick={() => setShowContactModal(false)}
-        >
-          <div
-            className="modal-gradient-surface w-full max-w-lg rounded-2xl p-8 text-[#3D2B1F] shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-6 flex items-start justify-between gap-4">
-              <div>
-                <h3 className="font-serif text-2xl">Contact Us</h3>
-                <p className="mt-2 text-sm leading-6 text-[#6B5D4F]">
-                  Reach <span className="font-serif text-base text-[#3D2B1F]">Hannah Vanessa</span> through any of these platforms.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowContactModal(false)}
-                aria-label="Close contact modal"
-                className="rounded-full border border-[#E8DCC8] p-2 text-[#6B5D4F] transition-colors hover:border-[#D4AF37] hover:text-[#1a1a1a]"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <a
-                href="mailto:hannahvanessaexclusive@gmail.com"
-                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-              >
-                <Mail className="h-5 w-5 text-[#6B5D4F]" />
-                <span className="text-sm text-[#6B5D4F]">
-                  <span className="font-medium text-[#3D2B1F]">Email:</span> hannahvanessaexclusive@gmail.com
-                </span>
-              </a>
-
-              <a
-                href="tel:09175931093"
-                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-              >
-                <Phone className="h-5 w-5 text-[#6B5D4F]" />
-                <span className="text-sm text-[#6B5D4F]">
-                  <span className="font-medium text-[#3D2B1F]">Phone:</span> 0917 593 1093
-                </span>
-              </a>
-
-              <a
-                href="https://maps.app.goo.gl/G2H4ovryYRgzUyfQ7"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-              >
-                <MapPin className="h-5 w-5 text-[#6B5D4F]" />
-                <span className="text-sm text-[#6B5D4F]">
-                  <span className="font-medium text-[#3D2B1F]">Address:</span> Cadena de Amor, Taguig City, Philippines
-                </span>
-              </a>
-
-              <a
-                href="https://www.instagram.com/officialhvd/"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-              >
-                <Instagram className="h-5 w-5 text-[#6B5D4F]" />
-                <span className="text-sm text-[#6B5D4F]">
-                  <span className="font-medium text-[#3D2B1F]">Instagram:</span> @officialhvd
-                </span>
-              </a>
-
-              <a
-                href="https://www.facebook.com/HannahVanessaExclusive/"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-3 rounded-xl border border-[#E8DCC8] px-4 py-4 transition-colors hover:border-[#D4AF37] hover:bg-[#FAF7F0]"
-              >
-                <Facebook className="h-5 w-5 text-[#6B5D4F]" />
-                <span className="text-sm text-[#6B5D4F]">
-                  <span className="font-medium text-[#3D2B1F]">Facebook:</span> Hannah Vanessa Exclusive
-                </span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
 
   return (
     <div className="min-h-screen bg-[#FAF7F0]">
