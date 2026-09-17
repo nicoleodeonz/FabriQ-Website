@@ -100,7 +100,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
         {/* Newsletter Section */}
         <div className="mb-16 max-w-2xl">
           <h3 className="font-serif text-2xl md:text-3xl mb-3">Join the List</h3>
-          <p className="text-sm text-white/80 mb-6">
+          <p className="text-sm text-white mb-6">
             Sign up to be the first to know about new gown collections, exclusive offers, and more!
           </p>
           <form onSubmit={handleNewsletterSubmit} className="flex gap-2">
@@ -110,7 +110,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Your Email"
               disabled={isAdmin}
-              className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-none focus:outline-none focus:border-[#D4AF37] transition-colors text-white placeholder:text-white/50"
+              className="flex-1 px-4 py-3 bg-white/10 border border-white/20 rounded-none focus:outline-none focus:border-[#D4AF37] transition-colors text-white placeholder:text-white"
               required
             />
             <button
@@ -163,7 +163,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
           </div>
 
           <div>
-            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium text-[#6B5D4F]">Company</h4>
+            <h4 className="text-xs uppercase tracking-widest mb-4 font-medium text-white">Company</h4>
             <div className="h-32" aria-hidden="true" />
           </div>
 
@@ -186,8 +186,8 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
                   Contact
                 </a>
               </li>
-              <li className="text-white/80">Cadena de Amor, Taguig City</li>
-              <li className="text-white/80">Philippines</li>
+              <li className="text-white">Cadena de Amor, Taguig City</li>
+              <li className="text-white">Philippines</li>
               <li className="flex gap-4 mt-4">
                 <a
                   href="https://www.instagram.com/officialhvd/"
@@ -248,7 +248,7 @@ export function Footer({ isAdmin, onSelectCatalogCategory, onSelectService, onOp
         )}
 
         {/* Bottom Bar */}
-        <div className="pt-8 border-t border-white/20 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-white/60">
+        <div className="pt-8 border-t border-white/20 flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-white">
           <p>© 2026 Hannah Vanessa Boutique. All rights reserved.</p>
           <div className="flex gap-6">
             <a
