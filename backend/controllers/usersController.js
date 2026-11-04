@@ -121,7 +121,12 @@ export async function createUser(req, res) {
       return res.status(400).json({ message: 'Email is required' });
     }
 
-    const resolvedPassword = String(password || generateTemporaryPassword());
+    const defaultPassword = normalizedRole === 'admin'
+      ? 'Admin123!'
+      : normalizedRole === 'staff'
+        ? 'Staff123!'
+        : generateTemporaryPassword();
+    const resolvedPassword = String(password || defaultPassword);
 
     if (resolvedPassword.length < 8) {
       return res.status(400).json({ message: 'Password must be at least 8 characters long' });
